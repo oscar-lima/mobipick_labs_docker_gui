@@ -1,5 +1,3 @@
-version: '3'
-
 services:
   mobipick:
     hostname: mobipick
@@ -50,8 +48,7 @@ services:
       - /run/user:/run/user:ro  # for Gazebo GUI
     privileged: true  # for Gazebo GUI
 
-
 networks:
   default:
-    external:
-      name: mobipick
+    name: mobipick
+    external: true
