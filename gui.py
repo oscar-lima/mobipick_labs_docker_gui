@@ -357,11 +357,6 @@ class MainWindow(QMainWindow):
         self.poll_timer.timeout.connect(self._poll)
         self.poll_timer.start(1200)
 
-        try:
-            signal.signal(signal.SIGINT, signal.SIG_IGN)
-        except Exception:
-            pass
-
         self.load_yaml(DEFAULT_YAML_PATH)
         self._update_buttons()
         self.update_sim_status_from_poll()
@@ -963,4 +958,10 @@ if __name__ == '__main__':
     app = QApplication(sys.argv)
     w = MainWindow()
     w.show()
+
+    def _handle_sigint(_sig, _frame):
+        app.quit()
+
+    signal.signal(signal.SIGINT, _handle_sigint)
+
     sys.exit(app.exec_())
