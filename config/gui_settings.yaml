@@ -45,6 +45,9 @@ images:
   related_container_keywords: ["mobipick", "mobipick_cmd", "mobipick-run", "rqt", "rviz"]  # container name fragments treated as related
   related_image_keywords: ["mobipick_labs"]  # extra image substrings treated as related for cleanup
 
+worlds:
+  default: "moelk_tables"                    # default world_config if none is selected
+
 exit:
   dialog_title: "Shutting Down"                       # window title shown during exit cleanup
   dialog_message: "Shutting down simulation and cleaning up. Please wait..."  # body text while we tear down containers

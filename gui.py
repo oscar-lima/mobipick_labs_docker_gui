@@ -95,6 +95,9 @@ CONFIG_DEFAULTS = {
         'related_container_keywords': ['mobipick', 'mobipick_cmd', 'mobipick-run', 'rqt', 'rviz'],
         'related_image_keywords': ['mobipick_labs'],
     },
+    'worlds': {
+        'default': 'moelk_tables',
+    },
 }
 
 
@@ -341,6 +344,9 @@ class MainWindow(QMainWindow):
         self._selected_image = self._images_cfg.get('default', '')
         self._image_choices: list[str] = []
         self._related_patterns: list[str] = []
+        self._worlds_cfg = CONFIG['worlds']
+        self._default_world = self._worlds_cfg.get('default', 'moelk_tables')
+        self._selected_world = self._default_world
 
         # sim state
         self._sim_container_name = 'mobipick-run'
@@ -402,6 +408,7 @@ class MainWindow(QMainWindow):
 
         self.world_combo = QComboBox()
         actions.addWidget(self.world_combo)
+        self.world_combo.currentIndexChanged.connect(self._on_world_changed)
 
         self.image_label = QLabel('image:')
         actions.addWidget(self.image_label)
@@ -501,6 +508,9 @@ class MainWindow(QMainWindow):
         compose_env = dict(CONFIG['process']['compose_run_env'])
         if self._selected_image:
             compose_env['MOBIPICK_IMAGE'] = self._selected_image
+        world = self._current_world()
+        if world:
+            compose_env['MOBIPICK_WORLD'] = world
         for key, value in compose_env.items():
             env_args.extend(['--env', f'{key}={value}'])
         return env_args
@@ -511,6 +521,9 @@ class MainWindow(QMainWindow):
             env.insert(str(key), str(value))
         if self._selected_image:
             env.insert('MOBIPICK_IMAGE', self._selected_image)
+        world = self._current_world()
+        if world:
+            env.insert('MOBIPICK_WORLD', world)
         if extra:
             for key, value in extra.items():
                 env.insert(str(key), str(value))
@@ -526,6 +539,9 @@ class MainWindow(QMainWindow):
             env[str(key)] = str(value)
         if self._selected_image:
             env['MOBIPICK_IMAGE'] = self._selected_image
+        world = self._current_world()
+        if world:
+            env['MOBIPICK_WORLD'] = world
         run_kwargs['env'] = env
         return run_kwargs
 
@@ -544,6 +560,12 @@ class MainWindow(QMainWindow):
             repo, tag = image_ref.rsplit(':', 1)
             return repo, tag
         return image_ref, ''
+
+    def _current_world(self) -> str:
+        world = (self._selected_world or '').strip()
+        if not world:
+            world = self._default_world
+        return world or 'moelk_tables'
 
     def _update_related_patterns(self):
         images_cfg = self._images_cfg
@@ -648,6 +670,18 @@ class MainWindow(QMainWindow):
         self._console_log(2, f'Selected image: {new_image}')
         self.image_combo.setToolTip(new_image)
         self._update_related_patterns()
+        self._apply_env_to_all_tabs()
+
+    def _on_world_changed(self, index: int):
+        if index < 0:
+            return
+        new_world = self.world_combo.itemText(index).strip()
+        if not new_world:
+            return
+        if new_world == self._selected_world:
+            return
+        self._selected_world = new_world
+        self._console_log(2, f'Selected world: {new_world}')
         self._apply_env_to_all_tabs()
 
     def _cleanup_script_available(self) -> bool:
@@ -1054,7 +1088,18 @@ class MainWindow(QMainWindow):
             self._append_html('sim', f'<i>Failed to load YAML: {html.escape(str(e))}</i>')
         if not values:
             values = ['moelk_tables']
+        self.world_combo.blockSignals(True)
         self.world_combo.addItems(values)
+        target_world = self._selected_world if self._selected_world in values else self._default_world
+        if target_world in values:
+            index = values.index(target_world)
+        else:
+            index = 0
+            self._selected_world = values[0]
+        self.world_combo.setCurrentIndex(index)
+        self.world_combo.blockSignals(False)
+        self._selected_world = self.world_combo.currentText().strip() or self._default_world
+        self._on_world_changed(self.world_combo.currentIndex())
 
     # ---------- Sim control ----------
 
@@ -1087,7 +1132,8 @@ class MainWindow(QMainWindow):
 
     # event driven bring up
     def bring_up_sim(self):
-        self._log_info('starting simulation stack')
+        world = self._current_world()
+        self._log_info(f'starting simulation stack (world {world})')
         self._sp_run(['docker', 'network', 'create', 'mobipick'], check=False, log_key='sim')
         self._grant_x()
 
