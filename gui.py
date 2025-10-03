@@ -14,7 +14,7 @@ from datetime import datetime
 
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QPushButton, QVBoxLayout, QWidget, QTextEdit,
-    QLineEdit, QHBoxLayout, QLabel, QSizePolicy, QFileDialog,
+    QLineEdit, QHBoxLayout, QLabel, QSizePolicy,
     QComboBox, QTabWidget, QMessageBox, QTabBar, QCheckBox
 )
 from PyQt5.QtCore import QProcess, QTimer, QProcessEnvironment, Qt
@@ -421,10 +421,6 @@ class MainWindow(QMainWindow):
         self.reload_images_button.clicked.connect(self._reload_images)
         actions.addWidget(self.reload_images_button)
 
-        self.browse_yaml_button = QPushButton('Load YAML')
-        self.browse_yaml_button.clicked.connect(self._on_load_yaml_clicked)
-        actions.addWidget(self.browse_yaml_button)
-
         root.addLayout(actions)
 
         self._update_related_patterns()
@@ -788,10 +784,6 @@ class MainWindow(QMainWindow):
         self._log_button_click(self.rqt_tables_button)
         self.open_rqt_tables_demo()
 
-    def _on_load_yaml_clicked(self):
-        self._log_button_click(self.browse_yaml_button)
-        self.load_yaml_dialog()
-
     def _on_run_command_clicked(self):
         self._log_button_click(self.run_command_button)
         self.run_custom_command()
@@ -1059,11 +1051,6 @@ class MainWindow(QMainWindow):
                 break
 
     # ---------- YAML ----------
-
-    def load_yaml_dialog(self):
-        path, _ = QFileDialog.getOpenFileName(self, 'Select YAML', '', 'YAML files (*.yaml *.yml);;All files (*)')
-        if path:
-            self.load_yaml(path)
 
     def load_yaml(self, path: str):
         self.world_combo.clear()
