@@ -260,6 +260,7 @@ class MainWindow(QMainWindow):
 
         self.tasks: dict[str, ProcessTab] = {}
         self._bg_procs: list[QProcess] = []
+        self._cleanup_done = False
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -377,12 +378,19 @@ class MainWindow(QMainWindow):
 
         self._console_log(1, f'Mobipick Labs Control ready (verbosity {self._verbosity})')
 
+        app_instance = QApplication.instance()
+        if app_instance:
+            app_instance.aboutToQuit.connect(self._ensure_cleanup_before_exit)
+
     # ---------- Log tab helpers ----------
 
     def _fmt_args(self, args_or_str) -> str:
         if isinstance(args_or_str, str):
             return args_or_str
         return ' '.join(shlex.quote(s) for s in args_or_str)
+
+    def _cleanup_script_available(self) -> bool:
+        return Path(SCRIPT_CLEAN).is_file() and os.access(SCRIPT_CLEAN, os.X_OK)
 
     def _is_docker_command(self, args_or_str) -> bool:
         if isinstance(args_or_str, str):
@@ -497,8 +505,18 @@ class MainWindow(QMainWindow):
             self._console_log(1, msg)
             raise
 
+        if self._is_clean_command(args) and cp.returncode == 0:
+            self._cleanup_done = True
+
         self._maybe_emit_subprocess_output(cp, run_kwargs, is_docker)
         return cp
+
+    def _is_clean_command(self, args_or_str) -> bool:
+        if isinstance(args_or_str, str):
+            return args_or_str.strip().split()[:1] == [SCRIPT_CLEAN]
+        if not args_or_str:
+            return False
+        return args_or_str[0] == SCRIPT_CLEAN
 
     def _maybe_emit_subprocess_output(self, cp: subprocess.CompletedProcess, run_kwargs: dict, is_docker: bool):
         stdout_setting = run_kwargs.get('stdout')
@@ -515,6 +533,20 @@ class MainWindow(QMainWindow):
             if err_text:
                 for line in err_text.splitlines():
                     self._console_log(1, line)
+
+    def _ensure_cleanup_before_exit(self):
+        if self._cleanup_done:
+            return
+        if not self._cleanup_script_available():
+            self._console_log(2, 'clean.bash not found or not executable; skipping exit cleanup.')
+            return
+        self._console_log(1, 'Running clean.bash before exit...')
+        try:
+            result = self._sp_run([SCRIPT_CLEAN], check=False)
+            if isinstance(result, subprocess.CompletedProcess) and result.returncode == 0:
+                self._cleanup_done = True
+        except Exception as exc:
+            self._console_log(1, f'Failed to execute clean.bash during exit: {exc}')
 
     def _run_command_sequence(
         self,
@@ -556,6 +588,8 @@ class MainWindow(QMainWindow):
                 msg = f'! command exited {code}: {self._fmt_args(current)}'
                 self._append_log_html(f"<i>{html.escape(msg)}</i>")
                 self._console_log(1, msg)
+            if current and self._is_clean_command(current) and code == 0:
+                self._cleanup_done = True
             current = None
             QTimer.singleShot(0, start_next)
 
@@ -567,6 +601,8 @@ class MainWindow(QMainWindow):
             msg = f'! command failed: {self._fmt_args(current)} ({err})'
             self._append_log_html(f"<i>{html.escape(msg)}</i>")
             self._console_log(1, msg)
+            if current and self._is_clean_command(current):
+                self._cleanup_done = False
             current = None
             QTimer.singleShot(0, start_next)
 
@@ -799,11 +835,11 @@ class MainWindow(QMainWindow):
             # stop everything related, including rqt/rviz/mobipick_cmd one offs
             commands += self._stop_all_related(tab)
 
-            clean_exists = Path(SCRIPT_CLEAN).is_file() and os.access(SCRIPT_CLEAN, os.X_OK)
-            if clean_exists:
+            clean_exists = self._cleanup_script_available()
+            if not self._cleanup_done and clean_exists:
                 tab.append_line_html('<i>Invoking clean.bash for final cleanup...</i>')
                 commands.append([SCRIPT_CLEAN])
-            else:
+            elif not clean_exists:
                 tab.append_line_html('<i>clean.bash not found or not executable.</i>')
 
             def _finalize():
@@ -1126,6 +1162,7 @@ class MainWindow(QMainWindow):
                 pass
             proc.deleteLater()
         self._bg_procs.clear()
+        self._ensure_cleanup_before_exit()
         for p in list(self.tasks.values()):
             if p.is_running():
                 try:
