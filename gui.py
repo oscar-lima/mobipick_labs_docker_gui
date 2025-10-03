@@ -383,6 +383,11 @@ class MainWindow(QMainWindow):
         line = f'[{ts}] event: {details}'
         self._append_log_html(html.escape(line))
 
+    def _log_info(self, details: str):
+        ts = datetime.now().strftime('%H:%M:%S')
+        line = f'[{ts}] info: {details}'
+        self._append_log_html(html.escape(line))
+
     def _log_button_click(self, button: QPushButton, fallback: str | None = None):
         label = button.text().strip()
         if not label:
@@ -395,10 +400,12 @@ class MainWindow(QMainWindow):
 
     def _on_refresh_clicked(self):
         self._log_button_click(self.refresh_sim_button)
+        self._log_info('refreshing sim status view')
         self.update_sim_status_from_poll(force=True)
 
     def _on_interrupt_clicked(self):
         self._log_button_click(self.interrupt_button)
+        self._log_info('sending interrupt to current custom tab')
         self.interrupt_current_tab()
 
     def _on_tables_demo_clicked(self):
@@ -582,6 +589,7 @@ class MainWindow(QMainWindow):
 
     # event driven bring up
     def bring_up_sim(self):
+        self._log_info('starting simulation stack')
         self._sp_run(['docker', 'network', 'create', 'mobipick'], check=False,
                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self._grant_x()
@@ -623,6 +631,7 @@ class MainWindow(QMainWindow):
 
     # event driven shutdown
     def shutdown_sim(self):
+        self._log_info('stopping simulation stack')
         self.set_toggle_visual('yellow', 'Wait shutdown', enabled=False)
         self._killing = True
 
@@ -766,6 +775,7 @@ class MainWindow(QMainWindow):
     # ---------- Actions ----------
 
     def run_tables_demo(self):
+        self._log_info('launching tables demo container')
         tab = self._ensure_tab('tables', 'Tables Demo', closable=False)
         tab.container_name = f'mpcmd-{uuid.uuid4().hex[:10]}'
         inner = 'rosrun tables_demo_planning tables_demo_node.py'
@@ -777,6 +787,7 @@ class MainWindow(QMainWindow):
         self._focus_tab('tables')
 
     def open_rviz(self):
+        self._log_info('starting RViz viewer')
         tab = self._ensure_tab('rviz', 'RViz', closable=False)
         tab.container_name = f'mpcmd-{uuid.uuid4().hex[:10]}'
         rviz_cmd = 'rosrun rviz rviz -d $(rospack find tables_demo_bringup)/config/pick_n_place.rviz __ns:=mobipick'
@@ -789,6 +800,7 @@ class MainWindow(QMainWindow):
 
     def open_rqt_tables_demo(self):
         world = self.world_combo.currentText().strip() or 'moelk_tables'
+        self._log_info(f'starting rqt tables demo for {world}')
         tab = self._ensure_tab('rqt', 'RQt Tables', closable=False)
         tab.container_name = f'mpcmd-{uuid.uuid4().hex[:10]}'
         cmd = f'roslaunch rqt_tables_demo rqt_tables_demo.launch namespace:=mobipick world_config:={self._sh_quote(world)}'
@@ -803,6 +815,8 @@ class MainWindow(QMainWindow):
         text = self.command_input.text().strip()
         if not text:
             return
+
+        self._log_info(f'running custom command: {text}')
 
         if self.reuse_checkbox.isChecked():
             # reuse current idle custom tab or any idle one
