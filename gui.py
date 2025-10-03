@@ -14,7 +14,7 @@ from PyQt5.QtWidgets import (
     QLineEdit, QHBoxLayout, QLabel, QSizePolicy, QFileDialog,
     QComboBox, QTabWidget, QMessageBox, QTabBar, QCheckBox
 )
-from PyQt5.QtCore import QProcess, QTimer
+from PyQt5.QtCore import QProcess, QTimer, QProcessEnvironment
 from PyQt5.QtGui import QTextCursor, QTextDocument
 from collections import deque
 from typing import Deque
@@ -141,6 +141,9 @@ class ProcessTab:
 
         self.proc = QProcess(parent)
         self.proc.setProcessChannelMode(QProcess.MergedChannels)
+        env = QProcessEnvironment.systemEnvironment()
+        env.insert('COMPOSE_IGNORE_ORPHANS', '1')
+        self.proc.setProcessEnvironment(env)
 
         # coalesce very chatty streams to reduce signal storms
         self._coalesce_timer = QTimer(parent)
