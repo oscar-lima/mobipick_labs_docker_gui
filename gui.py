@@ -88,6 +88,13 @@ CONFIG_DEFAULTS = {
         'log_start_message': 'Shutting down containers before exit...',
         'log_done_message': 'Shutdown complete. Exiting...',
     },
+    'images': {
+        'default': 'brean/mobipick_labs:noetic',
+        'discovery_filters': ['mobipick'],
+        'include_none_tag': False,
+        'related_container_keywords': ['mobipick', 'mobipick_cmd', 'mobipick-run', 'rqt', 'rviz'],
+        'related_image_keywords': ['mobipick_labs'],
+    },
 }
 
 
@@ -228,10 +235,7 @@ class ProcessTab:
 
         self.proc = QProcess(parent)
         self.proc.setProcessChannelMode(QProcess.MergedChannels)
-        env = QProcessEnvironment.systemEnvironment()
-        for key, value in CONFIG['process']['qprocess_env'].items():
-            env.insert(str(key), str(value))
-        self.proc.setProcessEnvironment(env)
+        self._apply_env()
 
         self.proc.readyReadStandardOutput.connect(self._on_stdout_buf)
         self.proc.readyReadStandardError.connect(self._on_stderr_buf)
@@ -245,12 +249,14 @@ class ProcessTab:
     def start_shell(self, bash_cmd: str):
         self.append_line_html(f'<i>&gt; {html.escape(bash_cmd)}</i>')
         self.parent._log_cmd(bash_cmd)
+        self._apply_env()
         self.proc.start('bash', ['-lc', bash_cmd])
 
     def start_program(self, program: str, args: list[str]):
         cmdline = program + ' ' + ' '.join(args)
         self.append_line_html(f'<i>&gt; {html.escape(cmdline)}</i>')
         self.parent._log_cmd([program] + args)
+        self._apply_env()
         self.proc.start(program, args)
 
     def pid(self) -> int | None:
@@ -302,6 +308,14 @@ class ProcessTab:
             # preserve newlines as plain text
             self.output.enqueue(False, data)
 
+    def _apply_env(self):
+        env = self.parent._build_process_environment()
+        self.proc.setProcessEnvironment(env)
+
+    def refresh_environment(self):
+        if not self.is_running():
+            self._apply_env()
+
 
 class MainWindow(QMainWindow):
     def __init__(self, verbosity: int = 1):
@@ -323,6 +337,10 @@ class MainWindow(QMainWindow):
         self._yaml_path = None
         self._custom_counter = 0
         self._timers_cfg = CONFIG['timers']
+        self._images_cfg = CONFIG['images']
+        self._selected_image = self._images_cfg.get('default', '')
+        self._image_choices: list[str] = []
+        self._related_patterns: list[str] = []
 
         # sim state
         self._sim_container_name = 'mobipick-run'
@@ -385,11 +403,25 @@ class MainWindow(QMainWindow):
         self.world_combo = QComboBox()
         actions.addWidget(self.world_combo)
 
+        self.image_label = QLabel('image:')
+        actions.addWidget(self.image_label)
+
+        self.image_combo = QComboBox()
+        actions.addWidget(self.image_combo)
+        self.image_combo.currentIndexChanged.connect(self._on_image_changed)
+
+        self.reload_images_button = QPushButton('Refresh Images')
+        self.reload_images_button.clicked.connect(self._reload_images)
+        actions.addWidget(self.reload_images_button)
+
         self.browse_yaml_button = QPushButton('Load YAML')
         self.browse_yaml_button.clicked.connect(self._on_load_yaml_clicked)
         actions.addWidget(self.browse_yaml_button)
 
         root.addLayout(actions)
+
+        self._update_related_patterns()
+        self._load_available_images()
 
         # custom command row
         cmdrow = QHBoxLayout()
@@ -436,6 +468,8 @@ class MainWindow(QMainWindow):
         # central log tab
         self._ensure_tab('log', 'Log', closable=False)
 
+        self._apply_env_to_all_tabs()
+
         # polling
         self.poll_timer = QTimer(self)
         self.poll_timer.timeout.connect(self._poll)
@@ -464,9 +498,157 @@ class MainWindow(QMainWindow):
 
     def _compose_env_args(self) -> list[str]:
         env_args: list[str] = []
-        for key, value in CONFIG['process']['compose_run_env'].items():
+        compose_env = dict(CONFIG['process']['compose_run_env'])
+        if self._selected_image:
+            compose_env['MOBIPICK_IMAGE'] = self._selected_image
+        for key, value in compose_env.items():
             env_args.extend(['--env', f'{key}={value}'])
         return env_args
+
+    def _build_process_environment(self, extra: Optional[dict[str, str]] = None) -> QProcessEnvironment:
+        env = QProcessEnvironment.systemEnvironment()
+        for key, value in CONFIG['process']['qprocess_env'].items():
+            env.insert(str(key), str(value))
+        if self._selected_image:
+            env.insert('MOBIPICK_IMAGE', self._selected_image)
+        if extra:
+            for key, value in extra.items():
+                env.insert(str(key), str(value))
+        return env
+
+    def _prepare_run_env(self, run_kwargs: dict) -> dict:
+        env = run_kwargs.get('env')
+        if env is None:
+            env = os.environ.copy()
+        else:
+            env = {str(k): str(v) for k, v in env.items()}
+        for key, value in CONFIG['process']['qprocess_env'].items():
+            env[str(key)] = str(value)
+        if self._selected_image:
+            env['MOBIPICK_IMAGE'] = self._selected_image
+        run_kwargs['env'] = env
+        return run_kwargs
+
+    def _safe_docker_cmd(self, *docker_args: str, suppress_output: bool = True) -> list[str]:
+        shell_cmd = shlex.join(['docker', *docker_args])
+        if suppress_output:
+            shell_cmd += ' >/dev/null 2>&1'
+        shell_cmd += ' || true'
+        return ['bash', '-lc', shell_cmd]
+
+    @staticmethod
+    def _split_image_ref(image_ref: str) -> tuple[str, str]:
+        if not image_ref:
+            return '', ''
+        if ':' in image_ref and not image_ref.endswith(']'):
+            repo, tag = image_ref.rsplit(':', 1)
+            return repo, tag
+        return image_ref, ''
+
+    def _update_related_patterns(self):
+        images_cfg = self._images_cfg
+        patterns = list(images_cfg.get('related_container_keywords', []))
+        if self._selected_image:
+            patterns.append(self._selected_image)
+        repo, tag = self._split_image_ref(self._selected_image)
+        if repo:
+            patterns.append(repo)
+            patterns.extend(part for part in repo.split('/') if part)
+        if tag:
+            patterns.append(tag)
+        patterns.extend(images_cfg.get('related_image_keywords', []))
+        self._related_patterns = list(dict.fromkeys(p for p in patterns if p))
+
+    def _reload_images(self):
+        self._load_available_images(show_feedback=True)
+
+    def _load_available_images(self, show_feedback: bool = False):
+        images_cfg = self._images_cfg
+        filters = [f.lower() for f in images_cfg.get('discovery_filters', []) if f]
+        include_none = bool(images_cfg.get('include_none_tag', False))
+        choices: list[str] = []
+        try:
+            run_kwargs = {'stdout': subprocess.PIPE, 'stderr': subprocess.PIPE, 'text': True, 'check': False}
+            run_kwargs = self._prepare_run_env(run_kwargs)
+            cp = subprocess.run(['docker', 'images', '--format', '{{.Repository}}:{{.Tag}}'], **run_kwargs)
+            output_lines = (cp.stdout or '').splitlines() if isinstance(cp.stdout, str) else []
+            if cp.returncode not in (0, None):
+                self._console_log(1, f'docker images returned {cp.returncode}')
+        except Exception as exc:
+            output_lines = []
+            self._console_log(1, f'Failed to list docker images: {exc}')
+
+        for line in output_lines:
+            line = line.strip()
+            if not line:
+                continue
+            if ':' in line:
+                repo, tag = line.rsplit(':', 1)
+            else:
+                repo, tag = line, ''
+            if not include_none and ('<none>' in (repo.strip(), tag.strip())):
+                continue
+            if filters and not any(f in line.lower() for f in filters):
+                continue
+            choices.append(line)
+
+        default_image = images_cfg.get('default', '')
+        if default_image:
+            choices.insert(0, default_image)
+
+        choices = [choice for choice in dict.fromkeys(choice for choice in choices if choice)]
+
+        prev_selection = self._selected_image
+        if choices:
+            if prev_selection not in choices:
+                self._selected_image = choices[0]
+            else:
+                self._selected_image = prev_selection
+        else:
+            self._selected_image = ''
+
+        self._image_choices = choices
+
+        self.image_combo.blockSignals(True)
+        self.image_combo.clear()
+        if choices:
+            for choice in choices:
+                self.image_combo.addItem(choice)
+            index = choices.index(self._selected_image)
+            self.image_combo.setCurrentIndex(index)
+            self.image_combo.setEnabled(True)
+        else:
+            self.image_combo.addItem('No images found')
+            self.image_combo.setEnabled(False)
+        self.image_combo.blockSignals(False)
+        self.image_combo.setToolTip(self._selected_image or 'No image selected')
+
+        if show_feedback:
+            if choices:
+                self._console_log(2, f'Available images: {", ".join(choices)}')
+            else:
+                QMessageBox.warning(self, 'Images', 'No matching docker images were found.')
+
+        self._update_related_patterns()
+        self._apply_env_to_all_tabs()
+
+    def _apply_env_to_all_tabs(self):
+        for tab in self.tasks.values():
+            tab.refresh_environment()
+
+    def _on_image_changed(self, index: int):
+        if not self._image_choices:
+            return
+        if index < 0 or index >= len(self._image_choices):
+            return
+        new_image = self._image_choices[index]
+        if new_image == self._selected_image:
+            return
+        self._selected_image = new_image
+        self._console_log(2, f'Selected image: {new_image}')
+        self.image_combo.setToolTip(new_image)
+        self._update_related_patterns()
+        self._apply_env_to_all_tabs()
 
     def _cleanup_script_available(self) -> bool:
         return Path(SCRIPT_CLEAN).is_file() and os.access(SCRIPT_CLEAN, os.X_OK)
@@ -598,6 +780,7 @@ class MainWindow(QMainWindow):
         is_docker = self._is_docker_command(args)
 
         run_kwargs = dict(kwargs)
+        run_kwargs = self._prepare_run_env(run_kwargs)
         if 'stdout' not in run_kwargs:
             run_kwargs['stdout'] = subprocess.PIPE
         if 'stderr' not in run_kwargs:
@@ -681,12 +864,7 @@ class MainWindow(QMainWindow):
             return
 
         proc = QProcess(self)
-        env_obj = QProcessEnvironment.systemEnvironment()
-        env_obj.insert('COMPOSE_IGNORE_ORPHANS', '1')
-        if env:
-            for key, value in env.items():
-                env_obj.insert(str(key), str(value))
-        proc.setProcessEnvironment(env_obj)
+        proc.setProcessEnvironment(self._build_process_environment(env or {}))
 
         queue: deque[list[str]] = deque(commands)
         current: list[str] | None = None
@@ -698,6 +876,7 @@ class MainWindow(QMainWindow):
                 return
             current = queue.popleft()
             self._log_cmd(current)
+            proc.setProcessEnvironment(self._build_process_environment(env or {}))
             proc.start(current[0], current[1:])
 
         def handle_stdout():
@@ -997,8 +1176,8 @@ class MainWindow(QMainWindow):
             stdout_text = (cp.stdout or '').strip()
             if stdout_text:
                 if include_int:
-                    commands.append(['docker', 'kill', '-s', 'INT', name])
-                commands.append(['docker', 'stop', name])
+                    commands.append(self._safe_docker_cmd('kill', '-s', 'INT', name))
+                commands.append(self._safe_docker_cmd('stop', name))
         except Exception as e:
             self._console_log(1, f'Failed to inspect container {name}: {e}')
         return commands
@@ -1010,7 +1189,7 @@ class MainWindow(QMainWindow):
                               stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=False, text=True)
             cid = cp.stdout.strip()
             if cid:
-                commands.append(['docker', 'stop', name])
+                commands.append(self._safe_docker_cmd('stop', name))
                 if tab:
                     tab.append_line_html(f'<i>docker stop {html.escape(name)}</i>')
         except Exception as e:
@@ -1029,44 +1208,61 @@ class MainWindow(QMainWindow):
     # Stop all related containers, robust name/image/label pattern matching.
     # Sends INT first for a graceful shutdown of GUIs, then docker stop.
     def _stop_all_related(self, tab: ProcessTab | None = None) -> list[list[str]]:
-        patterns = [
-            'mobipick', 'mobipick_cmd', 'mobipick-run',
-            'brean/mobipick_labs', 'rqt', 'rviz'
-        ]
+        patterns = list(self._related_patterns or [])
         commands: list[list[str]] = []
         try:
             cp = self._sp_run(
-                ['docker', 'ps', '-a', '--format', '{{.ID}} {{.Names}} {{.Image}} {{.Labels}}'],
+                ['docker', 'ps', '-a', '--format', '{{.ID}}|{{.Names}}|{{.Image}}|{{.Labels}}|{{.Status}}'],
                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=False, text=True
             )
-            ids: list[str] = []
+            patterns_lower = [p.lower() for p in patterns]
+            matches: list[tuple[str, str, str]] = []  # (id, name, status)
             for ln in cp.stdout.splitlines():
                 ln = ln.strip()
                 if not ln:
                     continue
-                parts = ln.split(' ', 3)  # id, name, image, labels
-                if len(parts) < 3:
+                parts = ln.split('|', 4)
+                if len(parts) < 5:
                     continue
-                cid, cname, cimage = parts[0], parts[1], parts[2]
-                clabels = parts[3] if len(parts) == 4 else ''
-                hay = f'{cname} {cimage} {clabels}'
-                if any(p in hay for p in patterns):
-                    ids.append(cid)
+                cid, cname, cimage, clabels, cstatus = parts
+                hay_lower = f'{cname} {cimage} {clabels}'.lower()
+                if patterns_lower and not any(p in hay_lower for p in patterns_lower):
+                    continue
+                matches.append((cid, cname, cstatus))
 
-            ids = list(dict.fromkeys(ids))  # unique, preserve order
-
-            if not ids:
+            if not matches:
                 if tab:
                     tab.append_line_html('<i>No related containers found.</i>')
                 return commands
 
-            if tab:
-                tab.append_line_html(f'<i>Sending INT to related containers: {html.escape(" ".join(ids))}</i>')
-            commands.append(['docker', 'kill', '-s', 'INT', *ids])
+            running_ids: list[str] = []
+            skipped: list[str] = []
+            for cid, _, cstatus in matches:
+                if cstatus.lower().startswith('up'):
+                    running_ids.append(cid)
+                else:
+                    skipped.append(cid)
 
-            if tab:
-                tab.append_line_html(f'<i>Stopping related containers: {html.escape(" ".join(ids))}</i>')
-            commands.append(['docker', 'stop', *ids])
+            if running_ids:
+                if tab:
+                    tab.append_line_html(
+                        f'<i>Sending INT to related containers: {html.escape(" ".join(running_ids))}</i>'
+                    )
+                for cid in running_ids:
+                    commands.append(self._safe_docker_cmd('kill', '-s', 'INT', cid))
+
+            if running_ids:
+                if tab:
+                    tab.append_line_html(
+                        f'<i>Stopping related containers: {html.escape(" ".join(running_ids))}</i>'
+                    )
+                for cid in running_ids:
+                    commands.append(self._safe_docker_cmd('stop', cid))
+
+            if skipped and tab:
+                tab.append_line_html(
+                    f'<i>Skipping already stopped containers: {html.escape(" ".join(skipped))}</i>'
+                )
         except Exception as e:
             if tab:
                 tab.append_line_html(f'<i>Error while stopping related containers: {html.escape(str(e))}</i>')
