@@ -382,18 +382,28 @@ class MainWindow(QMainWindow):
 
     def _log_cmd(self, args_or_str):
         ts = datetime.now().strftime('%H:%M:%S')
-        line = f'[{ts}] $ {self._fmt_args(args_or_str)}'
-        self._append_log_html(html.escape(line))
+
+        if isinstance(args_or_str, str):
+            fmt = args_or_str.strip()
+            tokens = fmt.split()
+            is_docker = bool(tokens) and tokens[0] == 'docker'
+        else:
+            fmt = self._fmt_args(args_or_str)
+            is_docker = bool(args_or_str) and args_or_str[0] == 'docker'
+
+        line = f'[{ts}] $ {fmt}'
+        color = '#4da3ff' if is_docker else '#ffffff'
+        self._append_log_html(f'<span style="color:{color}">{html.escape(line)}</span>')
 
     def _log_event(self, details: str):
         ts = datetime.now().strftime('%H:%M:%S')
         line = f'[{ts}] event: {details}'
-        self._append_log_html(html.escape(line))
+        self._append_log_html(f'<span style="color:#ffa94d">{html.escape(line)}</span>')
 
     def _log_info(self, details: str):
         ts = datetime.now().strftime('%H:%M:%S')
-        line = f'[{ts}] info: {details}'
-        self._append_log_html(html.escape(line))
+        line = f'[{ts}] [INFO] {details}'
+        self._append_log_html(f'<span style="color:#50fa7b">{html.escape(line)}</span>')
 
     def _log_button_click(self, button: QPushButton, fallback: str | None = None):
         label = button.text().strip()
@@ -481,9 +491,9 @@ class MainWindow(QMainWindow):
             if current is None:
                 return
             if code != 0:
-                self._append_log_html(html.escape(
-                    f'! command exited {code}: {self._fmt_args(current)}'
-                ))
+                self._append_log_html(
+                    f"<i>{html.escape(f'! command exited {code}: {self._fmt_args(current)}')}</i>"
+                )
             current = None
             QTimer.singleShot(0, start_next)
 
@@ -492,7 +502,9 @@ class MainWindow(QMainWindow):
             if current is None:
                 return
             err = proc.errorString()
-            self._append_log_html(html.escape(f'! command failed: {self._fmt_args(current)} ({err})'))
+            self._append_log_html(
+                f"<i>{html.escape(f'! command failed: {self._fmt_args(current)} ({err})')}</i>"
+            )
             current = None
             QTimer.singleShot(0, start_next)
 
