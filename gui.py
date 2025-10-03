@@ -15,10 +15,10 @@ from PyQt5.QtWidgets import (
     QLineEdit, QHBoxLayout, QLabel, QSizePolicy, QFileDialog,
     QComboBox, QTabWidget, QMessageBox, QTabBar, QCheckBox
 )
-from PyQt5.QtCore import QProcess, QTimer, QProcessEnvironment
+from PyQt5.QtCore import QProcess, QTimer, QProcessEnvironment, Qt
 from PyQt5.QtGui import QTextCursor, QTextDocument
 from collections import deque
-from typing import Deque, Callable
+from typing import Deque, Callable, Optional
 
 # compiled once, reused by ansi_to_html
 SGR_RE = re.compile(r'\x1b\[(\d+(?:;\d+)*)m')
@@ -244,6 +244,8 @@ class MainWindow(QMainWindow):
         self.tasks: dict[str, ProcessTab] = {}
         self._bg_procs: list[QProcess] = []
         self._cleanup_done = False
+        self._exit_in_progress = False
+        self._exit_dialog: Optional[QMessageBox] = None
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -556,6 +558,8 @@ class MainWindow(QMainWindow):
                     self._console_log(1, line)
 
     def _ensure_cleanup_before_exit(self):
+        if self._exit_in_progress:
+            return
         if self._cleanup_done:
             return
         if not self._cleanup_script_available():
@@ -575,6 +579,7 @@ class MainWindow(QMainWindow):
         *,
         env: dict | None = None,
         on_finished: Callable[[], None] | None = None,
+        log_key: str | None = None,
     ):
         if not commands:
             if on_finished:
@@ -601,10 +606,22 @@ class MainWindow(QMainWindow):
             self._log_cmd(current)
             proc.start(current[0], current[1:])
 
+        def handle_stdout():
+            data = bytes(proc.readAllStandardOutput())
+            if data and log_key:
+                self._append_command_output(log_key, data)
+
+        def handle_stderr():
+            data = bytes(proc.readAllStandardError())
+            if data and log_key:
+                self._append_command_output(log_key, data)
+
         def handle_finished(code: int, _status):
             nonlocal current
             if current is None:
                 return
+            handle_stdout()
+            handle_stderr()
             if code != 0:
                 msg = f'! command exited {code}: {self._fmt_args(current)}'
                 self._append_log_html(f"<i>{html.escape(msg)}</i>")
@@ -618,6 +635,8 @@ class MainWindow(QMainWindow):
             nonlocal current
             if current is None:
                 return
+            handle_stdout()
+            handle_stderr()
             err = proc.errorString()
             msg = f'! command failed: {self._fmt_args(current)} ({err})'
             self._append_log_html(f"<i>{html.escape(msg)}</i>")
@@ -634,6 +653,8 @@ class MainWindow(QMainWindow):
             if on_finished:
                 QTimer.singleShot(0, on_finished)
 
+        proc.readyReadStandardOutput.connect(handle_stdout)
+        proc.readyReadStandardError.connect(handle_stderr)
         proc.finished.connect(handle_finished)
         proc.errorOccurred.connect(handle_error)
         self._bg_procs.append(proc)
@@ -812,28 +833,15 @@ class MainWindow(QMainWindow):
         self.set_toggle_visual('green', 'Stop Sim', enabled=True)
 
     def _graceful_stop_container(self, name: str, tab: ProcessTab | None = None):
-        try:
-            # act only if the exact-named container exists
-            cp = self._sp_run(['docker', 'ps', '-q', '--filter', f'name=^{name}$'],
-                            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                            check=False, text=True)
-            cid = cp.stdout.strip()
-            if not cid:
-                if tab:
-                    tab.append_line_html(f'<i>No running container named {html.escape(name)}</i>')
-                return
-            # send INT first for a graceful stop of GUI apps, then stop
-            self._run_command_sequence([
-                ['docker', 'kill', '-s', 'INT', name],
-                ['docker', 'stop', name],
-            ])
+        commands = self._collect_container_commands(name, log_key=(tab.key if tab else 'log'))
+        if not commands:
             if tab:
-                tab.append_line_html(f'<i>docker kill -s INT {html.escape(name)}</i>')
-            if tab:
-                tab.append_line_html(f'<i>docker stop {html.escape(name)}</i>')
-        except Exception as e:
-            if tab:
-                tab.append_line_html(f'<i>Targeted stop error: {html.escape(str(e))}</i>')
+                tab.append_line_html(f'<i>No running container named {html.escape(name)}</i>')
+            return
+        if tab:
+            tab.append_line_html(f'<i>docker kill -s INT {html.escape(name)}</i>')
+            tab.append_line_html(f'<i>docker stop {html.escape(name)}</i>')
+        self._run_command_sequence(commands, log_key=(tab.key if tab else 'log'))
 
     # event driven shutdown
     def shutdown_sim(self):
@@ -874,11 +882,31 @@ class MainWindow(QMainWindow):
                 self.set_toggle_visual('red', 'Start Sim', enabled=True)
 
             if commands:
-                self._run_command_sequence(commands, on_finished=_finalize)
+                self._run_command_sequence(commands, on_finished=_finalize, log_key=tab.key)
             else:
                 _finalize()
 
         QTimer.singleShot(2500, _fallbacks)
+
+    def _collect_container_commands(self, name: str, *, log_key: str | None = None, include_int: bool = True) -> list[list[str]]:
+        commands: list[list[str]] = []
+        try:
+            cp = self._sp_run(
+                ['docker', 'ps', '-q', '--filter', f'name=^{name}$'],
+                check=False,
+                log_key=log_key,
+                log_stdout=False,
+                log_stderr=True,
+                text=True,
+            )
+            stdout_text = (cp.stdout or '').strip()
+            if stdout_text:
+                if include_int:
+                    commands.append(['docker', 'kill', '-s', 'INT', name])
+                commands.append(['docker', 'stop', name])
+        except Exception as e:
+            self._console_log(1, f'Failed to inspect container {name}: {e}')
+        return commands
 
     def _docker_stop_if_exists(self, name: str, tab: ProcessTab | None = None) -> list[list[str]]:
         commands: list[list[str]] = []
@@ -895,9 +923,16 @@ class MainWindow(QMainWindow):
                 tab.append_line_html(f'<i>docker stop error: {html.escape(str(e))}</i>')
         return commands
 
+    def _collect_exit_commands(self) -> list[list[str]]:
+        commands: list[list[str]] = []
+        commands += self._stop_all_related(None)
+        if not self._cleanup_done and self._cleanup_script_available():
+            commands.append([SCRIPT_CLEAN])
+        return commands
+
     # Stop all related containers, robust name/image/label pattern matching.
     # Sends INT first for a graceful shutdown of GUIs, then docker stop.
-    def _stop_all_related(self, tab: ProcessTab) -> list[list[str]]:
+    def _stop_all_related(self, tab: ProcessTab | None = None) -> list[list[str]]:
         patterns = [
             'mobipick', 'mobipick_cmd', 'mobipick-run',
             'brean/mobipick_labs', 'rqt', 'rviz'
@@ -925,16 +960,22 @@ class MainWindow(QMainWindow):
             ids = list(dict.fromkeys(ids))  # unique, preserve order
 
             if not ids:
-                tab.append_line_html('<i>No related containers found.</i>')
+                if tab:
+                    tab.append_line_html('<i>No related containers found.</i>')
                 return commands
 
-            tab.append_line_html(f'<i>Sending INT to related containers: {html.escape(" ".join(ids))}</i>')
+            if tab:
+                tab.append_line_html(f'<i>Sending INT to related containers: {html.escape(" ".join(ids))}</i>')
             commands.append(['docker', 'kill', '-s', 'INT', *ids])
 
-            tab.append_line_html(f'<i>Stopping related containers: {html.escape(" ".join(ids))}</i>')
+            if tab:
+                tab.append_line_html(f'<i>Stopping related containers: {html.escape(" ".join(ids))}</i>')
             commands.append(['docker', 'stop', *ids])
         except Exception as e:
-            tab.append_line_html(f'<i>Error while stopping related containers: {html.escape(str(e))}</i>')
+            if tab:
+                tab.append_line_html(f'<i>Error while stopping related containers: {html.escape(str(e))}</i>')
+            else:
+                self._console_log(1, f'Error while stopping related containers: {e}')
         return commands
 
     # optionally keep a manual refresh helper for rare external changes
@@ -1180,13 +1221,23 @@ class MainWindow(QMainWindow):
         if app:
             app.quit()
 
-    def _update_buttons(self):
-        # initial deterministic state to avoid AttributeError
-        self.interrupt_button.setEnabled(False)
+    def _begin_exit_sequence(self):
+        if self._exit_in_progress:
+            return
+        self._exit_in_progress = True
+        self._console_log(1, 'Shutting down containers before exit...')
+        self.hide()
+        self._exit_dialog = QMessageBox()
+        self._exit_dialog.setWindowTitle('Shutting Down')
+        self._exit_dialog.setText('Shutting down simulation and cleaning up. Please wait...')
+        self._exit_dialog.setIcon(QMessageBox.Information)
+        self._exit_dialog.setStandardButtons(QMessageBox.NoButton)
+        self._exit_dialog.setWindowModality(Qt.ApplicationModal)
+        self._exit_dialog.setWindowFlag(Qt.WindowStaysOnTopHint, True)
+        self._exit_dialog.show()
+        QTimer.singleShot(0, self._perform_exit_cleanup)
 
-    # ---------- Close ----------
-
-    def closeEvent(self, event):
+    def _perform_exit_cleanup(self):
         for proc in list(self._bg_procs):
             try:
                 proc.kill()
@@ -1194,15 +1245,48 @@ class MainWindow(QMainWindow):
                 pass
             proc.deleteLater()
         self._bg_procs.clear()
-        self._ensure_cleanup_before_exit()
+
         for p in list(self.tasks.values()):
             if p.is_running():
                 try:
                     p.kill()
                 except Exception:
                     pass
+
+        commands = self._collect_exit_commands()
+        if commands:
+            self._run_command_sequence(commands, on_finished=self._finalize_exit, log_key='log')
+        else:
+            self._finalize_exit()
+
+    def _finalize_exit(self):
+        if self._exit_dialog:
+            self._exit_dialog.close()
+            self._exit_dialog = None
+
         self._revoke_x()
-        event.accept()
+
+        if not self._cleanup_done and not self._cleanup_script_available():
+            self._cleanup_done = True
+
+        self._console_log(1, 'Shutdown complete. Exiting...')
+
+        app = QApplication.instance()
+        if app:
+            QTimer.singleShot(0, app.quit)
+
+    def _update_buttons(self):
+        # initial deterministic state to avoid AttributeError
+        self.interrupt_button.setEnabled(False)
+
+    # ---------- Close ----------
+
+    def closeEvent(self, event):
+        if self._exit_in_progress:
+            event.ignore()
+            return
+        event.ignore()
+        self._begin_exit_sequence()
 
 
 if __name__ == '__main__':
