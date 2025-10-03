@@ -394,19 +394,17 @@ class MainWindow(QMainWindow):
         self.rqt_button.clicked.connect(self._on_rqt_toggle_clicked)
         top.addWidget(self.rqt_button)
 
-        # optional manual refresh button for rare external changes
-        self.refresh_sim_button = QPushButton('Refresh')
-        self.refresh_sim_button.clicked.connect(self._on_refresh_clicked)
-        top.addWidget(self.refresh_sim_button)
-
-        self.clear_button = QPushButton('Clear Current Tab')
-        self.clear_button.clicked.connect(self.clear_current_tab)
-        top.addWidget(self.clear_button)
-
         spacer = QWidget()
         spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         top.addWidget(spacer)
         root.addLayout(top)
+
+        self.clear_button = QPushButton('Clear Current Tab')
+        self.clear_button.clicked.connect(self.clear_current_tab)
+
+        self.refresh_sim_button = QPushButton('Update Status')
+        self.refresh_sim_button.setToolTip('Re-check running status for toggles')
+        self.refresh_sim_button.clicked.connect(self._on_refresh_clicked)
 
         # actions row
         actions = QHBoxLayout()
@@ -478,6 +476,14 @@ class MainWindow(QMainWindow):
         self.tabs.setTabsClosable(False)
         self.tabs.tabCloseRequested.connect(self.on_tab_close_requested)
         root.addWidget(self.tabs)
+
+        controls_row = QHBoxLayout()
+        controls_row.addWidget(self.clear_button)
+        spacer_controls = QWidget()
+        spacer_controls.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        controls_row.addWidget(spacer_controls)
+        controls_row.addWidget(self.refresh_sim_button)
+        root.addLayout(controls_row)
 
         # search row (bottom)
         search = QHBoxLayout()
