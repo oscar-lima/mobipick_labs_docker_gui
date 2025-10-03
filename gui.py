@@ -7,6 +7,8 @@ import re
 import uuid
 import shlex
 import argparse
+import copy
+import yaml
 from pathlib import Path
 from datetime import datetime
 
@@ -32,9 +34,86 @@ COLOR_MAP = {
 # Requires: PyQt5, pyyaml
 SCRIPT_CLEAN = './clean.bash'
 DEFAULT_YAML_PATH = './config/worlds.yaml'
+CONFIG_FILE = Path(__file__).resolve().parent / 'config' / 'gui_settings.yaml'
 
-# limit how much we render per coalesce tick to keep UI responsive on very chatty streams
-MAX_BYTES_PER_TICK = 128 * 1024  # 128 KiB per stream per tick
+CONFIG_DEFAULTS = {
+    'log': {
+        'max_block_count': 20000,
+        'flush_interval_ms': 30,
+        'background_color': '#000000',
+        'text_color': '#ffffff',
+        'font_family': 'monospace',
+        'scroll_tolerance_min': 2,
+    },
+    'window': {
+        'geometry': [100, 100, 1100, 780],
+        'title': 'Mobipick Labs Control',
+    },
+    'timers': {
+        'poll_ms': 1200,
+        'sigint_check_ms': 100,
+        'custom_tab_sigint_delay_ms': 1000,
+        'sim_shutdown_delay_ms': 2500,
+    },
+    'buttons': {
+        'sim_toggle': {
+            'padding_px': 6,
+            'disabled_opacity': 0.85,
+            'states': {
+                'green': {'bg': '#28a745', 'fg': 'white'},
+                'red': {'bg': '#dc3545', 'fg': 'white'},
+                'yellow': {'bg': '#ffc107', 'fg': 'black'},
+                'grey': {'bg': '#6c757d', 'fg': 'white'},
+            },
+        },
+        'close': {
+            'text': '✕',
+            'tooltip': 'Close tab',
+            'size': 18,
+            'stylesheet': 'QPushButton { border: none; padding: 0px; }',
+        },
+    },
+    'process': {
+        'qprocess_env': {
+            'COMPOSE_IGNORE_ORPHANS': '1',
+        },
+        'compose_run_env': {
+            'PYTHONUNBUFFERED': '1',
+            'PYTHONIOENCODING': 'UTF-8',
+        },
+    },
+    'exit': {
+        'dialog_title': 'Shutting Down',
+        'dialog_message': 'Shutting down simulation and cleaning up. Please wait...',
+        'log_start_message': 'Shutting down containers before exit...',
+        'log_done_message': 'Shutdown complete. Exiting...',
+    },
+}
+
+
+def _deep_update(base: dict, updates: dict) -> dict:
+    for key, value in updates.items():
+        if isinstance(value, dict) and isinstance(base.get(key), dict):
+            base[key] = _deep_update(base[key], value)
+        else:
+            base[key] = value
+    return base
+
+
+def _load_config() -> dict:
+    config = copy.deepcopy(CONFIG_DEFAULTS)
+    try:
+        if CONFIG_FILE.is_file():
+            with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+                data = yaml.safe_load(f) or {}
+            if isinstance(data, dict):
+                _deep_update(config, data)
+    except Exception as exc:
+        print(f'Warning: failed to load configuration from {CONFIG_FILE}: {exc}', file=sys.stderr)
+    return config
+
+
+CONFIG = _load_config()
 
 _SIGINT_TRIGGERED = False
 
@@ -85,13 +164,18 @@ class LogTextEdit(QTextEdit):
         self.setAcceptRichText(True)
         self.setReadOnly(True)
         self.setUndoRedoEnabled(False)                     # faster
-        self.document().setMaximumBlockCount(20000)        # bound memory
-        self.setStyleSheet('QTextEdit { background-color: #000000; color: #ffffff; font-family: monospace; }')
+        log_cfg = CONFIG['log']
+        self.document().setMaximumBlockCount(log_cfg['max_block_count'])        # bound memory
+        self.setStyleSheet(
+            f"QTextEdit {{ background-color: {log_cfg['background_color']}; "
+            f"color: {log_cfg['text_color']}; font-family: {log_cfg['font_family']}; }}"
+        )
+        self._scroll_tolerance_min = max(0, int(log_cfg.get('scroll_tolerance_min', 2)))
 
         # batching buffer and timer
         self._buf: Deque[tuple[bool, str]] = deque()       # (is_html, text)
         self._flush_timer = QTimer(self)
-        self._flush_timer.setInterval(30)                  # 30 ms flush cadence
+        self._flush_timer.setInterval(int(log_cfg['flush_interval_ms']))
         self._flush_timer.timeout.connect(self._flush)
 
     def enqueue(self, is_html: bool, text: str):
@@ -106,7 +190,7 @@ class LogTextEdit(QTextEdit):
         bar = self.verticalScrollBar()
         prev_value = bar.value()
         prev_max = bar.maximum()
-        tolerance = max(2, bar.singleStep())
+        tolerance = max(self._scroll_tolerance_min, bar.singleStep())
         at_bottom = prev_value >= max(0, prev_max - tolerance)
 
         self.setUpdatesEnabled(False)
@@ -145,7 +229,8 @@ class ProcessTab:
         self.proc = QProcess(parent)
         self.proc.setProcessChannelMode(QProcess.MergedChannels)
         env = QProcessEnvironment.systemEnvironment()
-        env.insert('COMPOSE_IGNORE_ORPHANS', '1')
+        for key, value in CONFIG['process']['qprocess_env'].items():
+            env.insert(str(key), str(value))
         self.proc.setProcessEnvironment(env)
 
         self.proc.readyReadStandardOutput.connect(self._on_stdout_buf)
@@ -228,13 +313,16 @@ class MainWindow(QMainWindow):
             value = 1
         self._verbosity = max(1, min(3, value))
 
-        self.setWindowTitle('Mobipick Labs Control')
-        self.setGeometry(100, 100, 1100, 780)
+        window_cfg = CONFIG['window']
+        self.setWindowTitle(window_cfg['title'])
+        if len(window_cfg.get('geometry', [])) == 4:
+            self.setGeometry(*window_cfg['geometry'])
 
         self._killing = False
         self._last_search = ''
         self._yaml_path = None
         self._custom_counter = 0
+        self._timers_cfg = CONFIG['timers']
 
         # sim state
         self._sim_container_name = 'mobipick-run'
@@ -351,11 +439,11 @@ class MainWindow(QMainWindow):
         # polling
         self.poll_timer = QTimer(self)
         self.poll_timer.timeout.connect(self._poll)
-        self.poll_timer.start(1200)
+        self.poll_timer.start(int(self._timers_cfg['poll_ms']))
 
         self._sigint_timer = QTimer(self)
         self._sigint_timer.timeout.connect(self._check_sigint)
-        self._sigint_timer.start(100)
+        self._sigint_timer.start(int(self._timers_cfg['sigint_check_ms']))
 
         self.load_yaml(DEFAULT_YAML_PATH)
         self._update_buttons()
@@ -373,6 +461,12 @@ class MainWindow(QMainWindow):
         if isinstance(args_or_str, str):
             return args_or_str
         return ' '.join(shlex.quote(s) for s in args_or_str)
+
+    def _compose_env_args(self) -> list[str]:
+        env_args: list[str] = []
+        for key, value in CONFIG['process']['compose_run_env'].items():
+            env_args.extend(['--env', f'{key}={value}'])
+        return env_args
 
     def _cleanup_script_available(self) -> bool:
         return Path(SCRIPT_CLEAN).is_file() and os.access(SCRIPT_CLEAN, os.X_OK)
@@ -677,10 +771,12 @@ class MainWindow(QMainWindow):
         bar = self.tabs.tabBar()
         bar.setTabButton(index, QTabBar.RightSide, None)
         if closable:
-            btn = QPushButton('✕', self)
-            btn.setToolTip('Close tab')
-            btn.setFixedSize(18, 18)
-            btn.setStyleSheet('QPushButton { border: none; padding: 0px; }')
+            close_cfg = CONFIG['buttons']['close']
+            btn = QPushButton(close_cfg['text'], self)
+            btn.setToolTip(close_cfg['tooltip'])
+            size = close_cfg.get('size', 18)
+            btn.setFixedSize(size, size)
+            btn.setStyleSheet(close_cfg.get('stylesheet', ''))
             btn.clicked.connect(self._on_close_button_clicked)
             bar.setTabButton(index, QTabBar.RightSide, btn)
 
@@ -821,8 +917,7 @@ class MainWindow(QMainWindow):
 
         args = [
             'compose', 'run', '--rm', '--name', self._sim_container_name,
-            '--env', 'PYTHONUNBUFFERED=1',
-            '--env', 'PYTHONIOENCODING=UTF-8',
+            *self._compose_env_args(),
             'mobipick'
         ]
         tab.start_program('docker', args)
@@ -886,7 +981,7 @@ class MainWindow(QMainWindow):
             else:
                 _finalize()
 
-        QTimer.singleShot(2500, _fallbacks)
+        QTimer.singleShot(int(self._timers_cfg['sim_shutdown_delay_ms']), _fallbacks)
 
     def _collect_container_commands(self, name: str, *, log_key: str | None = None, include_int: bool = True) -> list[list[str]]:
         commands: list[list[str]] = []
@@ -925,6 +1020,7 @@ class MainWindow(QMainWindow):
 
     def _collect_exit_commands(self) -> list[list[str]]:
         commands: list[list[str]] = []
+        commands += self._collect_container_commands(self._sim_container_name, log_key='log')
         commands += self._stop_all_related(None)
         if not self._cleanup_done and self._cleanup_script_available():
             commands.append([SCRIPT_CLEAN])
@@ -999,17 +1095,17 @@ class MainWindow(QMainWindow):
 
     def set_toggle_visual(self, state: str, text: str, enabled: bool):
         self.sim_toggle_button.setText(text)
-        if state == 'green':
-            bg = '#28a745'; fg = 'white'
-        elif state == 'red':
-            bg = '#dc3545'; fg = 'white'
-        elif state == 'yellow':
-            bg = '#ffc107'; fg = 'black'
-        else:
-            bg = '#6c757d'; fg = 'white'
+        toggle_cfg = CONFIG['buttons']['sim_toggle']
+        states = toggle_cfg['states']
+        default_state = states.get('grey', next(iter(states.values())))
+        state_cfg = states.get(state, default_state)
+        padding = toggle_cfg.get('padding_px', 6)
+        disabled_opacity = toggle_cfg.get('disabled_opacity', 0.85)
+        bg = state_cfg.get('bg', '#6c757d')
+        fg = state_cfg.get('fg', '#ffffff')
         self.sim_toggle_button.setStyleSheet(
-            f'QPushButton {{ background-color: {bg}; color: {fg}; border: none; padding: 6px; }}'
-            f'QPushButton:disabled {{ opacity: 0.85; }}'
+            f'QPushButton {{ background-color: {bg}; color: {fg}; border: none; padding: {padding}px; }}'
+            f'QPushButton:disabled {{ opacity: {disabled_opacity}; }}'
         )
         self.sim_toggle_button.setEnabled(enabled)
 
@@ -1035,6 +1131,7 @@ class MainWindow(QMainWindow):
         inner = 'rosrun tables_demo_planning tables_demo_node.py'
         args = [
             'compose', 'run', '--rm', '--name', tab.container_name,
+            *self._compose_env_args(),
             'mobipick_cmd', 'bash', '-lc', self._wrap_line_buffered(inner)
         ]
         tab.start_program('docker', args)
@@ -1047,6 +1144,7 @@ class MainWindow(QMainWindow):
         rviz_cmd = 'rosrun rviz rviz -d $(rospack find tables_demo_bringup)/config/pick_n_place.rviz __ns:=mobipick'
         args = [
             'compose', 'run', '--rm', '--name', tab.container_name,
+            *self._compose_env_args(),
             'mobipick_cmd', 'bash', '-lc', self._wrap_line_buffered(rviz_cmd)
         ]
         tab.start_program('docker', args)
@@ -1060,6 +1158,7 @@ class MainWindow(QMainWindow):
         cmd = f'roslaunch rqt_tables_demo rqt_tables_demo.launch namespace:=mobipick world_config:={self._sh_quote(world)}'
         args = [
             'compose', 'run', '--rm', '--name', tab.container_name,
+            *self._compose_env_args(),
             'mobipick_cmd', 'bash', '-lc', self._wrap_line_buffered(cmd)
         ]
         tab.start_program('docker', args)
@@ -1094,6 +1193,7 @@ class MainWindow(QMainWindow):
         wrapped = self._wrap_line_buffered(text)
         args = [
             'compose', 'run', '--rm', '--name', tab.container_name,
+            *self._compose_env_args(),
             'mobipick_cmd', 'bash', '-lc', wrapped
         ]
         tab.start_program('docker', args)
@@ -1124,7 +1224,7 @@ class MainWindow(QMainWindow):
             if tab.container_name:
                 self._graceful_stop_container(tab.container_name, tab)
 
-        QTimer.singleShot(1000, _container_sigint_then_stop)
+        QTimer.singleShot(int(self._timers_cfg['custom_tab_sigint_delay_ms']), _container_sigint_then_stop)
 
     # ---------- Output and search ----------
 
@@ -1225,11 +1325,12 @@ class MainWindow(QMainWindow):
         if self._exit_in_progress:
             return
         self._exit_in_progress = True
-        self._console_log(1, 'Shutting down containers before exit...')
+        exit_cfg = CONFIG['exit']
+        self._console_log(1, exit_cfg['log_start_message'])
         self.hide()
         self._exit_dialog = QMessageBox()
-        self._exit_dialog.setWindowTitle('Shutting Down')
-        self._exit_dialog.setText('Shutting down simulation and cleaning up. Please wait...')
+        self._exit_dialog.setWindowTitle(exit_cfg['dialog_title'])
+        self._exit_dialog.setText(exit_cfg['dialog_message'])
         self._exit_dialog.setIcon(QMessageBox.Information)
         self._exit_dialog.setStandardButtons(QMessageBox.NoButton)
         self._exit_dialog.setWindowModality(Qt.ApplicationModal)
@@ -1269,7 +1370,7 @@ class MainWindow(QMainWindow):
         if not self._cleanup_done and not self._cleanup_script_available():
             self._cleanup_done = True
 
-        self._console_log(1, 'Shutdown complete. Exiting...')
+        self._console_log(1, CONFIG['exit']['log_done_message'])
 
         app = QApplication.instance()
         if app:
