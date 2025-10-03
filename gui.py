@@ -347,6 +347,8 @@ class MainWindow(QMainWindow):
         self._worlds_cfg = CONFIG['worlds']
         self._default_world = self._worlds_cfg.get('default', 'moelk_tables')
         self._selected_world = self._default_world
+        self._scripts_dir = Path(__file__).resolve().parent / 'scripts'
+        self._script_choices: list[str] = []
 
         # sim state
         self._sim_container_name = 'mobipick-run'
@@ -423,6 +425,24 @@ class MainWindow(QMainWindow):
 
         root.addLayout(actions)
 
+        scripts_row = QHBoxLayout()
+        scripts_row.addWidget(QLabel('Scripts:'))
+        self.script_combo = QComboBox()
+        self.script_combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        scripts_row.addWidget(self.script_combo)
+        self.refresh_scripts_button = QPushButton('Refresh Scripts')
+        self.refresh_scripts_button.clicked.connect(self._on_refresh_scripts_clicked)
+        scripts_row.addWidget(self.refresh_scripts_button)
+        self.run_script_button = QPushButton('Run Script')
+        self.run_script_button.clicked.connect(self._on_run_script_clicked)
+        scripts_row.addWidget(self.run_script_button)
+        root.addLayout(scripts_row)
+
+        self.run_script_button.setEnabled(False)
+        self.script_combo.setEnabled(False)
+
+        self._ensure_scripts_dir()
+
         self._update_related_patterns()
         self._load_available_images()
 
@@ -472,6 +492,7 @@ class MainWindow(QMainWindow):
         self._ensure_tab('log', 'Log', closable=False)
 
         self._apply_env_to_all_tabs()
+        self._refresh_script_options()
 
         # polling
         self.poll_timer = QTimer(self)
@@ -783,6 +804,104 @@ class MainWindow(QMainWindow):
     def _on_rqt_tables_clicked(self):
         self._log_button_click(self.rqt_tables_button)
         self.open_rqt_tables_demo()
+
+    def _on_refresh_scripts_clicked(self):
+        self._log_button_click(self.refresh_scripts_button, 'Refresh Scripts')
+        count = self._refresh_script_options()
+        self._log_info(f'Refreshed scripts list ({count} available)')
+
+    def _on_run_script_clicked(self):
+        self._log_button_click(self.run_script_button, 'Run Script')
+        self.run_selected_script()
+
+    def _select_custom_tab_key(self) -> str:
+        if self.reuse_checkbox.isChecked():
+            cur_key = self._current_tab_key()
+            if cur_key and cur_key.startswith('custom') and not self.tasks[cur_key].is_running():
+                self._ensure_close_for_key(cur_key)
+                return cur_key
+            for k, t in self.tasks.items():
+                if k.startswith('custom') and not t.is_running():
+                    self._ensure_close_for_key(k)
+                    return k
+        return self._new_custom_tab_key(always_new=True)
+
+    def run_selected_script(self):
+        if not self._script_choices:
+            QMessageBox.information(self, 'Scripts', 'No scripts available. Click Refresh Scripts to update the list.')
+            return
+        script = self.script_combo.currentText().strip()
+        if not script or script not in self._script_choices:
+            QMessageBox.information(self, 'Scripts', 'Selected script is not available.')
+            return
+
+        self._log_info(f'running script: {script}')
+
+        key_target = self._select_custom_tab_key()
+        tab = self.tasks[key_target]
+        tab.container_name = f'mpcmd-{uuid.uuid4().hex[:10]}'
+        inner = f"python3 /root/scripts/{self._sh_quote(script)}"
+        args = [
+            'compose', 'run', '--rm', '--name', tab.container_name,
+            *self._compose_env_args(),
+            'mobipick_cmd', 'bash', '-lc', self._wrap_line_buffered(inner)
+        ]
+        tab.start_program('docker', args)
+        self._focus_tab(key_target)
+
+    def _ensure_scripts_dir(self):
+        try:
+            self._scripts_dir.mkdir(parents=True, exist_ok=True)
+        except Exception as exc:
+            self._console_log(1, f'Failed to ensure scripts directory {self._scripts_dir}: {exc}')
+
+    def _collect_scripts(self) -> list[str]:
+        if not self._scripts_dir.exists():
+            return []
+        try:
+            cp = self._sp_run(
+                ['ls', str(self._scripts_dir)],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+                text=True,
+                log_key='log',
+                log_stdout=False,
+                log_stderr=True,
+            )
+        except Exception as exc:
+            self._console_log(1, f'Failed to list scripts: {exc}')
+            return []
+        output = self._decode_output(getattr(cp, 'stdout', ''))
+        entries = [line.strip() for line in output.splitlines() if line.strip()]
+        scripts: list[str] = []
+        for entry in entries:
+            path = self._scripts_dir / entry
+            if path.is_file() and entry.endswith('.py'):
+                scripts.append(entry)
+        scripts.sort()
+        return scripts
+
+    def _refresh_script_options(self) -> int:
+        scripts = self._collect_scripts()
+        previous = self.script_combo.currentText().strip() if hasattr(self, 'script_combo') else ''
+        self._script_choices = scripts
+        if hasattr(self, 'script_combo'):
+            self.script_combo.blockSignals(True)
+            self.script_combo.clear()
+            if scripts:
+                self.script_combo.addItems(scripts)
+                index = scripts.index(previous) if previous in scripts else 0
+                self.script_combo.setCurrentIndex(index)
+                self.script_combo.setEnabled(True)
+                self.run_script_button.setEnabled(True)
+            else:
+                self.script_combo.addItem('No scripts found')
+                self.script_combo.setCurrentIndex(0)
+                self.script_combo.setEnabled(False)
+                self.run_script_button.setEnabled(False)
+            self.script_combo.blockSignals(False)
+        return len(scripts)
 
     def _on_run_command_clicked(self):
         self._log_button_click(self.run_command_button)
@@ -1400,22 +1519,7 @@ class MainWindow(QMainWindow):
 
         self._log_info(f'running custom command: {text}')
 
-        if self.reuse_checkbox.isChecked():
-            # reuse current idle custom tab or any idle one
-            key_target = None
-            cur_key = self._current_tab_key()
-            if cur_key and cur_key.startswith('custom') and not self.tasks[cur_key].is_running():
-                key_target = cur_key
-            else:
-                for k, t in self.tasks.items():
-                    if k.startswith('custom') and not t.is_running():
-                        key_target = k
-                        break
-            if key_target is None:
-                key_target = self._new_custom_tab_key(always_new=True)
-        else:
-            # always open a brand new tab when unchecked
-            key_target = self._new_custom_tab_key(always_new=True)
+        key_target = self._select_custom_tab_key()
 
         tab = self.tasks[key_target]
         tab.container_name = f'mpcmd-{uuid.uuid4().hex[:10]}'
