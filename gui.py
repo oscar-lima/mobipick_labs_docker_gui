@@ -148,15 +148,9 @@ class ProcessTab:
         env.insert('COMPOSE_IGNORE_ORPHANS', '1')
         self.proc.setProcessEnvironment(env)
 
-        # coalesce very chatty streams to reduce signal storms
-        self._coalesce_timer = QTimer(parent)
-        self._coalesce_timer.setInterval(25)
-        self._coalesce_timer.setSingleShot(True)
-        self._stdout_buf = bytearray()
-        self._stderr_buf = bytearray()
         self.proc.readyReadStandardOutput.connect(self._on_stdout_buf)
         self.proc.readyReadStandardError.connect(self._on_stderr_buf)
-        self._coalesce_timer.timeout.connect(self._flush_coalesced)
+        self.proc.finished.connect(self._drain_remaining)
 
         self.proc.finished.connect(lambda code, st: parent.on_task_finished(self.key, code, st))
 
@@ -191,35 +185,23 @@ class ProcessTab:
     def append_line_html(self, html_text: str):
         self.output.enqueue(True, html_text + '<br>')
 
-    # buffered handlers
     def _on_stdout_buf(self):
-        self._stdout_buf += bytes(self.proc.readAllStandardOutput())
-        self._coalesce_timer.start()
+        data = bytes(self.proc.readAllStandardOutput())
+        if data:
+            self._append_raw(data)
 
     def _on_stderr_buf(self):
-        self._stderr_buf += bytes(self.proc.readAllStandardError())
-        self._coalesce_timer.start()
+        data = bytes(self.proc.readAllStandardError())
+        if data:
+            self._append_raw(data)
 
-    def _flush_coalesced(self):
-        # process a bounded slice each tick to keep UI responsive
-        did_work = False
-        if self._stdout_buf:
-            chunk = bytes(self._stdout_buf[:MAX_BYTES_PER_TICK])
-            del self._stdout_buf[:len(chunk)]
-            self._append_raw(chunk)
-            did_work = True
-        if self._stderr_buf:
-            chunk = bytes(self._stderr_buf[:MAX_BYTES_PER_TICK])
-            del self._stderr_buf[:len(chunk)]
-            self._append_raw(chunk)
-            did_work = True
-
-        # if backlog remains, reschedule another tick
-        if self._stdout_buf or self._stderr_buf:
-            self._coalesce_timer.start()
-        elif not did_work:
-            # nothing to do
-            return
+    def _drain_remaining(self, *_):
+        data_out = bytes(self.proc.readAllStandardOutput())
+        if data_out:
+            self._append_raw(data_out)
+        data_err = bytes(self.proc.readAllStandardError())
+        if data_err:
+            self._append_raw(data_err)
 
     # fast path for plain text, HTML only if ANSI present
     def _append_raw(self, data_bytes: bytes):
@@ -228,6 +210,7 @@ class ProcessTab:
         data = data_bytes.decode(errors='replace')
         if not data:
             return
+        data = data.replace('\r\n', '\n').replace('\r', '\n')
         if '\x1b[' in data:
             self.output.enqueue(True, ansi_to_html(data))
         else:
@@ -415,6 +398,27 @@ class MainWindow(QMainWindow):
             return
         self.tasks['log'].append_line_html(html_text)
 
+    def _append_command_output(self, key: str, text, *, is_html: bool = False):
+        if text is None:
+            return
+        if isinstance(text, bytes):
+            text = text.decode(errors='replace')
+        if not text:
+            return
+        lines = text.splitlines()
+        if not lines:
+            return
+        for line in lines:
+            if not line:
+                self._append_html(key, '&nbsp;')
+                continue
+            if is_html:
+                self._append_html(key, line)
+            elif '\x1b[' in line:
+                self._append_html(key, ansi_to_html(line))
+            else:
+                self._append_html(key, html.escape(line))
+
     def _log_cmd(self, args_or_str):
         ts = datetime.now().strftime('%H:%M:%S')
 
@@ -484,7 +488,15 @@ class MainWindow(QMainWindow):
         self._log_event('user pressed enter to run command')
         self.run_custom_command()
 
-    def _sp_run(self, args, **kwargs):
+    def _sp_run(
+        self,
+        args,
+        *,
+        log_key: str | None = None,
+        log_stdout: bool = True,
+        log_stderr: bool = True,
+        **kwargs,
+    ):
         # wrapper around subprocess.run with logging into the Log tab and verbosity-aware console output
         self._log_cmd(args)
         is_docker = self._is_docker_command(args)
@@ -503,12 +515,21 @@ class MainWindow(QMainWindow):
             msg = f'! command raised {exc.returncode}: {self._fmt_args(args)}'
             self._append_log_html(f"<i>{html.escape(msg)}</i>")
             self._console_log(1, msg)
+            if log_key and log_stderr:
+                self._append_command_output(log_key, msg)
             raise
 
         if self._is_clean_command(args) and cp.returncode == 0:
             self._cleanup_done = True
 
         self._maybe_emit_subprocess_output(cp, run_kwargs, is_docker)
+
+        if log_key:
+            if log_stdout and run_kwargs.get('stdout') == subprocess.PIPE:
+                self._append_command_output(log_key, getattr(cp, 'stdout', None))
+            if log_stderr and run_kwargs.get('stderr') == subprocess.PIPE:
+                self._append_command_output(log_key, getattr(cp, 'stderr', None))
+
         return cp
 
     def _is_clean_command(self, args_or_str) -> bool:
@@ -542,7 +563,7 @@ class MainWindow(QMainWindow):
             return
         self._console_log(1, 'Running clean.bash before exit...')
         try:
-            result = self._sp_run([SCRIPT_CLEAN], check=False)
+            result = self._sp_run([SCRIPT_CLEAN], check=False, log_key='log')
             if isinstance(result, subprocess.CompletedProcess) and result.returncode == 0:
                 self._cleanup_done = True
         except Exception as exc:
@@ -743,12 +764,12 @@ class MainWindow(QMainWindow):
 
     def _grant_x(self):
         if not self._sim_xhost_granted:
-            self._sp_run(['xhost', '+local:root'], check=False)
+            self._sp_run(['xhost', '+local:root'], check=False, log_key='sim')
             self._sim_xhost_granted = True
 
     def _revoke_x(self):
         if self._sim_xhost_granted:
-            self._sp_run(['xhost', '-local:root'], check=False)
+            self._sp_run(['xhost', '-local:root'], check=False, log_key='sim')
             self._sim_xhost_granted = False
 
     def is_sim_running(self) -> bool:
@@ -771,14 +792,18 @@ class MainWindow(QMainWindow):
     # event driven bring up
     def bring_up_sim(self):
         self._log_info('starting simulation stack')
-        self._sp_run(['docker', 'network', 'create', 'mobipick'], check=False,
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self._sp_run(['docker', 'network', 'create', 'mobipick'], check=False, log_key='sim')
         self._grant_x()
 
         tab = self._ensure_tab('sim', 'Sim', closable=False)
         tab.container_name = self._sim_container_name  # ensure sim tab is addressable
 
-        args = ['compose', 'run', '--rm', '--name', self._sim_container_name, 'mobipick']
+        args = [
+            'compose', 'run', '--rm', '--name', self._sim_container_name,
+            '--env', 'PYTHONUNBUFFERED=1',
+            '--env', 'PYTHONIOENCODING=UTF-8',
+            'mobipick'
+        ]
         tab.start_program('docker', args)
 
         # event driven state
