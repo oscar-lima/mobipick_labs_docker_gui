@@ -1110,6 +1110,7 @@ class MainWindow(QMainWindow):
     def _do_find(self, edit: QTextEdit, pattern: str, flags=QTextDocument.FindFlags()):
         if not pattern:
             return False
+        original_cursor = edit.textCursor()
         if pattern != self._last_search:
             cursor = edit.textCursor()
             cursor.movePosition(QTextCursor.Start)
@@ -1124,6 +1125,8 @@ class MainWindow(QMainWindow):
                 cursor.movePosition(QTextCursor.Start)
             edit.setTextCursor(cursor)
             found = edit.find(pattern, flags)
+        if not found:
+            edit.setTextCursor(original_cursor)
         return found
 
     def find_next(self):
@@ -1131,16 +1134,20 @@ class MainWindow(QMainWindow):
         if not edit:
             return
         pattern = self.search_input.text()
-        if not self._do_find(edit, pattern) and pattern:
-            edit.insertHtml(f"<i>No match for '{html.escape(pattern)}'</i><br>")
+        if not pattern:
+            return
+        if not self._do_find(edit, pattern):
+            QMessageBox.information(self, 'Search', f"No match for '{pattern}'")
 
     def find_prev(self):
         edit = self._current_text_edit()
         if not edit:
             return
         pattern = self.search_input.text()
-        if not self._do_find(edit, pattern, QTextDocument.FindBackward) and pattern:
-            edit.insertHtml(f"<i>No match for '{html.escape(pattern)}'</i><br>")
+        if not pattern:
+            return
+        if not self._do_find(edit, pattern, QTextDocument.FindBackward):
+            QMessageBox.information(self, 'Search', f"No match for '{pattern}'")
 
     # ---------- Process completion callback ----------
 
