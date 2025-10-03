@@ -462,7 +462,13 @@ class MainWindow(QMainWindow):
         cmdrow.addWidget(self.reuse_checkbox)
         root.addLayout(cmdrow)
 
-        # search row
+        # tabs
+        self.tabs = QTabWidget()
+        self.tabs.setTabsClosable(False)
+        self.tabs.tabCloseRequested.connect(self.on_tab_close_requested)
+        root.addWidget(self.tabs)
+
+        # search row (bottom)
         search = QHBoxLayout()
         search.addWidget(QLabel('Search:'))
         self.search_input = QLineEdit()
@@ -476,12 +482,6 @@ class MainWindow(QMainWindow):
         self.find_next_button.clicked.connect(self.find_next)
         search.addWidget(self.find_next_button)
         root.addLayout(search)
-
-        # tabs
-        self.tabs = QTabWidget()
-        self.tabs.setTabsClosable(False)
-        self.tabs.tabCloseRequested.connect(self.on_tab_close_requested)
-        root.addWidget(self.tabs)
 
         # fixed tabs
         self._ensure_tab('sim', 'Sim', closable=False)
