@@ -1272,7 +1272,7 @@ class MainWindow(QMainWindow):
     # event driven shutdown
     def shutdown_sim(self):
         self._log_info('stopping simulation stack')
-        self.set_toggle_visual('yellow', 'Wait shutdown', enabled=False)
+        self.set_toggle_visual('yellow', 'Shutting down...', enabled=False)
         self._killing = True
 
         tab = self._ensure_tab('sim', 'Sim', closable=False)
@@ -1425,7 +1425,7 @@ class MainWindow(QMainWindow):
     # optionally keep a manual refresh helper for rare external changes
     def update_sim_status_from_poll(self, force=False):
         if self._killing:
-            self.set_toggle_visual('yellow', 'Wait shutdown', enabled=False)
+            self.set_toggle_visual('yellow', 'Shutting down...', enabled=False)
             return
         if not force:
             self.set_toggle_visual('green', 'Stop Sim', True) if self._sim_running_cached \
@@ -1632,9 +1632,10 @@ class MainWindow(QMainWindow):
             self.tasks[key].container_name = None
         if key == 'sim':
             self._revoke_x()
-            self._killing = False
             # sim process ended, reflect stopped state immediately
             self._sim_running_cached = False
+            if self._killing:
+                return
             self.set_toggle_visual('red', 'Start Sim', enabled=True)
 
     # ---------- Poll and initial states ----------
