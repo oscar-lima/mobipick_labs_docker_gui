@@ -6,6 +6,7 @@ import html
 import re
 import uuid
 import shlex
+import argparse
 from pathlib import Path
 from datetime import datetime
 
@@ -235,8 +236,14 @@ class ProcessTab:
 
 
 class MainWindow(QMainWindow):
-    def __init__(self):
+    def __init__(self, verbosity: int = 1):
         super().__init__()
+
+        try:
+            value = int(verbosity)
+        except (TypeError, ValueError):
+            value = 1
+        self._verbosity = max(1, min(3, value))
 
         self.setWindowTitle('Mobipick Labs Control')
         self.setGeometry(100, 100, 1100, 780)
@@ -368,12 +375,32 @@ class MainWindow(QMainWindow):
         self._update_buttons()
         self.update_sim_status_from_poll()
 
+        self._console_log(1, f'Mobipick Labs Control ready (verbosity {self._verbosity})')
+
     # ---------- Log tab helpers ----------
 
     def _fmt_args(self, args_or_str) -> str:
         if isinstance(args_or_str, str):
             return args_or_str
         return ' '.join(shlex.quote(s) for s in args_or_str)
+
+    def _is_docker_command(self, args_or_str) -> bool:
+        if isinstance(args_or_str, str):
+            tokens = args_or_str.strip().split()
+            return bool(tokens) and tokens[0] == 'docker'
+        return bool(args_or_str) and args_or_str[0] == 'docker'
+
+    def _console_log(self, level: int, message: str):
+        if self._verbosity >= level:
+            print(message, flush=True)
+
+    @staticmethod
+    def _decode_output(data) -> str:
+        if data is None:
+            return ''
+        if isinstance(data, bytes):
+            return data.decode(errors='replace')
+        return str(data)
 
     def _append_log_html(self, html_text: str):
         if 'log' not in self.tasks:
@@ -385,25 +412,25 @@ class MainWindow(QMainWindow):
 
         if isinstance(args_or_str, str):
             fmt = args_or_str.strip()
-            tokens = fmt.split()
-            is_docker = bool(tokens) and tokens[0] == 'docker'
         else:
             fmt = self._fmt_args(args_or_str)
-            is_docker = bool(args_or_str) and args_or_str[0] == 'docker'
-
+        is_docker = self._is_docker_command(args_or_str)
         line = f'[{ts}] $ {fmt}'
         color = '#4da3ff' if is_docker else '#ffffff'
         self._append_log_html(f'<span style="color:{color}">{html.escape(line)}</span>')
+        self._console_log(3, line)
 
     def _log_event(self, details: str):
         ts = datetime.now().strftime('%H:%M:%S')
         line = f'[{ts}] event: {details}'
         self._append_log_html(f'<span style="color:#ffa94d">{html.escape(line)}</span>')
+        self._console_log(3, line)
 
     def _log_info(self, details: str):
         ts = datetime.now().strftime('%H:%M:%S')
         line = f'[{ts}] [INFO] {details}'
         self._append_log_html(f'<span style="color:#50fa7b">{html.escape(line)}</span>')
+        self._console_log(2, line)
 
     def _log_button_click(self, button: QPushButton, fallback: str | None = None):
         label = button.text().strip()
@@ -449,10 +476,45 @@ class MainWindow(QMainWindow):
         self._log_event('user pressed enter to run command')
         self.run_custom_command()
 
-    def _sp_run(self, args: list[str], **kwargs):
-        # wrapper around subprocess.run with logging into the Log tab
+    def _sp_run(self, args, **kwargs):
+        # wrapper around subprocess.run with logging into the Log tab and verbosity-aware console output
         self._log_cmd(args)
-        return subprocess.run(args, **kwargs)
+        is_docker = self._is_docker_command(args)
+
+        run_kwargs = dict(kwargs)
+        if 'stdout' not in run_kwargs:
+            run_kwargs['stdout'] = subprocess.PIPE
+        if 'stderr' not in run_kwargs:
+            run_kwargs['stderr'] = subprocess.PIPE
+        if run_kwargs.get('text') is None and run_kwargs.get('stdout') == subprocess.PIPE:
+            run_kwargs['text'] = True
+
+        try:
+            cp = subprocess.run(args, **run_kwargs)
+        except subprocess.CalledProcessError as exc:
+            msg = f'! command raised {exc.returncode}: {self._fmt_args(args)}'
+            self._append_log_html(f"<i>{html.escape(msg)}</i>")
+            self._console_log(1, msg)
+            raise
+
+        self._maybe_emit_subprocess_output(cp, run_kwargs, is_docker)
+        return cp
+
+    def _maybe_emit_subprocess_output(self, cp: subprocess.CompletedProcess, run_kwargs: dict, is_docker: bool):
+        stdout_setting = run_kwargs.get('stdout')
+        stderr_setting = run_kwargs.get('stderr')
+
+        if stdout_setting == subprocess.PIPE and not is_docker:
+            out_text = self._decode_output(getattr(cp, 'stdout', None)).strip()
+            if out_text:
+                for line in out_text.splitlines():
+                    self._console_log(3, line)
+
+        if stderr_setting == subprocess.PIPE:
+            err_text = self._decode_output(getattr(cp, 'stderr', None)).strip()
+            if err_text:
+                for line in err_text.splitlines():
+                    self._console_log(1, line)
 
     def _run_command_sequence(
         self,
@@ -491,9 +553,9 @@ class MainWindow(QMainWindow):
             if current is None:
                 return
             if code != 0:
-                self._append_log_html(
-                    f"<i>{html.escape(f'! command exited {code}: {self._fmt_args(current)}')}</i>"
-                )
+                msg = f'! command exited {code}: {self._fmt_args(current)}'
+                self._append_log_html(f"<i>{html.escape(msg)}</i>")
+                self._console_log(1, msg)
             current = None
             QTimer.singleShot(0, start_next)
 
@@ -502,9 +564,9 @@ class MainWindow(QMainWindow):
             if current is None:
                 return
             err = proc.errorString()
-            self._append_log_html(
-                f"<i>{html.escape(f'! command failed: {self._fmt_args(current)} ({err})')}</i>"
-            )
+            msg = f'! command failed: {self._fmt_args(current)} ({err})'
+            self._append_log_html(f"<i>{html.escape(msg)}</i>")
+            self._console_log(1, msg)
             current = None
             QTimer.singleShot(0, start_next)
 
@@ -1075,8 +1137,23 @@ class MainWindow(QMainWindow):
 
 
 if __name__ == '__main__':
-    app = QApplication(sys.argv)
-    w = MainWindow()
+    parser = argparse.ArgumentParser(description='Mobipick Labs Control GUI')
+    parser.add_argument(
+        '-v', '--v', '--verbose',
+        dest='verbosity',
+        nargs='?',
+        const=3,
+        default=1,
+        type=int,
+        choices=[1, 2, 3],
+        help='Verbosity level (1=min, 3=max). If no value provided defaults to 3.'
+    )
+
+    parsed_args, qt_args = parser.parse_known_args()
+    verbosity = parsed_args.verbosity or 1
+
+    app = QApplication([sys.argv[0]] + qt_args)
+    w = MainWindow(verbosity=verbosity)
     w.show()
 
     def _handle_sigint(_sig, _frame):
