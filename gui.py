@@ -100,21 +100,29 @@ class LogTextEdit(QTextEdit):
         if not self._buf:
             self._flush_timer.stop()
             return
+        bar = self.verticalScrollBar()
+        prev_value = bar.value()
+        prev_max = bar.maximum()
+        tolerance = max(2, bar.singleStep())
+        at_bottom = prev_value >= max(0, prev_max - tolerance)
+
         self.setUpdatesEnabled(False)
         doc = self.document()
         doc.blockSignals(True)
-        cursor = self.textCursor()
+        cursor = QTextCursor(doc)
         cursor.movePosition(QTextCursor.End)
-        self.setTextCursor(cursor)
         try:
             # drain everything queued since last tick
             while self._buf:
                 is_html, s = self._buf.popleft()
                 if is_html:
-                    self.insertHtml(s)
+                    cursor.insertHtml(s)
                 else:
-                    self.insertPlainText(s)
-            self.moveCursor(QTextCursor.End)
+                    cursor.insertText(s)
+            if at_bottom:
+                bar.setValue(bar.maximum())
+            else:
+                bar.setValue(min(prev_value, bar.maximum()))
         finally:
             doc.blockSignals(False)
             self.setUpdatesEnabled(True)
@@ -247,12 +255,12 @@ class MainWindow(QMainWindow):
         # top controls
         top = QHBoxLayout()
         self.sim_toggle_button = QPushButton()
-        self.sim_toggle_button.clicked.connect(self.toggle_sim)
+        self.sim_toggle_button.clicked.connect(self._on_sim_toggle_clicked)
         top.addWidget(self.sim_toggle_button)
 
         # optional manual refresh button for rare external changes
         self.refresh_sim_button = QPushButton('Refresh')
-        self.refresh_sim_button.clicked.connect(lambda: self.update_sim_status_from_poll(force=True))
+        self.refresh_sim_button.clicked.connect(self._on_refresh_clicked)
         top.addWidget(self.refresh_sim_button)
 
         self.clear_button = QPushButton('Clear Current Tab')
@@ -261,7 +269,7 @@ class MainWindow(QMainWindow):
 
         self.interrupt_button = QPushButton('Interrupt Current')
         self.interrupt_button.setToolTip('Send ctrl+c to the running process in the current tab')
-        self.interrupt_button.clicked.connect(self.interrupt_current_tab)
+        self.interrupt_button.clicked.connect(self._on_interrupt_clicked)
         top.addWidget(self.interrupt_button)
 
         spacer = QWidget()
@@ -273,15 +281,15 @@ class MainWindow(QMainWindow):
         actions = QHBoxLayout()
 
         self.tables_demo_button = QPushButton('Run Tables Demo')
-        self.tables_demo_button.clicked.connect(self.run_tables_demo)
+        self.tables_demo_button.clicked.connect(self._on_tables_demo_clicked)
         actions.addWidget(self.tables_demo_button)
 
         self.rviz_button = QPushButton('Open RViz')
-        self.rviz_button.clicked.connect(self.open_rviz)
+        self.rviz_button.clicked.connect(self._on_rviz_clicked)
         actions.addWidget(self.rviz_button)
 
         self.rqt_tables_button = QPushButton('Open RQt Tables Demo')
-        self.rqt_tables_button.clicked.connect(self.open_rqt_tables_demo)
+        self.rqt_tables_button.clicked.connect(self._on_rqt_tables_clicked)
         actions.addWidget(self.rqt_tables_button)
 
         self.world_label = QLabel('world_config:')
@@ -291,7 +299,7 @@ class MainWindow(QMainWindow):
         actions.addWidget(self.world_combo)
 
         self.browse_yaml_button = QPushButton('Load YAML')
-        self.browse_yaml_button.clicked.connect(self.load_yaml_dialog)
+        self.browse_yaml_button.clicked.connect(self._on_load_yaml_clicked)
         actions.addWidget(self.browse_yaml_button)
 
         root.addLayout(actions)
@@ -300,11 +308,11 @@ class MainWindow(QMainWindow):
         cmdrow = QHBoxLayout()
         self.command_input = QLineEdit()
         self.command_input.setPlaceholderText('Enter custom command, press Enter to run')
-        self.command_input.returnPressed.connect(self.run_custom_command)
+        self.command_input.returnPressed.connect(self._on_command_input_return)
         cmdrow.addWidget(self.command_input)
 
         self.run_command_button = QPushButton('Run Command')
-        self.run_command_button.clicked.connect(self.run_custom_command)
+        self.run_command_button.clicked.connect(self._on_run_command_clicked)
         cmdrow.addWidget(self.run_command_button)
 
         self.reuse_checkbox = QCheckBox('Run in current custom tab')
@@ -372,6 +380,53 @@ class MainWindow(QMainWindow):
         line = f'[{ts}] $ {self._fmt_args(args_or_str)}'
         self._append_log_html(html.escape(line))
 
+    def _log_event(self, details: str):
+        ts = datetime.now().strftime('%H:%M:%S')
+        line = f'[{ts}] event: {details}'
+        self._append_log_html(html.escape(line))
+
+    def _log_button_click(self, button: QPushButton, fallback: str | None = None):
+        label = button.text().strip()
+        if not label:
+            label = fallback or 'button'
+        self._log_event(f'user clicked {label}')
+
+    def _on_sim_toggle_clicked(self):
+        self._log_button_click(self.sim_toggle_button, 'Sim Toggle')
+        self.toggle_sim()
+
+    def _on_refresh_clicked(self):
+        self._log_button_click(self.refresh_sim_button)
+        self.update_sim_status_from_poll(force=True)
+
+    def _on_interrupt_clicked(self):
+        self._log_button_click(self.interrupt_button)
+        self.interrupt_current_tab()
+
+    def _on_tables_demo_clicked(self):
+        self._log_button_click(self.tables_demo_button)
+        self.run_tables_demo()
+
+    def _on_rviz_clicked(self):
+        self._log_button_click(self.rviz_button)
+        self.open_rviz()
+
+    def _on_rqt_tables_clicked(self):
+        self._log_button_click(self.rqt_tables_button)
+        self.open_rqt_tables_demo()
+
+    def _on_load_yaml_clicked(self):
+        self._log_button_click(self.browse_yaml_button)
+        self.load_yaml_dialog()
+
+    def _on_run_command_clicked(self):
+        self._log_button_click(self.run_command_button)
+        self.run_custom_command()
+
+    def _on_command_input_return(self):
+        self._log_event('user pressed enter to run command')
+        self.run_custom_command()
+
     def _sp_run(self, args: list[str], **kwargs):
         # wrapper around subprocess.run with logging into the Log tab
         self._log_cmd(args)
@@ -437,6 +492,9 @@ class MainWindow(QMainWindow):
 
     def on_tab_close_requested(self, index: int):
         widget = self.tabs.widget(index)
+        tab_text = self.tabs.tabText(index)
+        if tab_text:
+            self._log_event(f'user clicked close for {tab_text}')
         key = None
         for k, t in self.tasks.items():
             if t.output is widget:
