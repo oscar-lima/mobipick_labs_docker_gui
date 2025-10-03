@@ -17,7 +17,7 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import QProcess, QTimer, QProcessEnvironment
 from PyQt5.QtGui import QTextCursor, QTextDocument
 from collections import deque
-from typing import Deque
+from typing import Deque, Callable
 
 # compiled once, reused by ansi_to_html
 SGR_RE = re.compile(r'\x1b\[(\d+(?:;\d+)*)m')
@@ -34,6 +34,8 @@ DEFAULT_YAML_PATH = './config/worlds.yaml'
 
 # limit how much we render per coalesce tick to keep UI responsive on very chatty streams
 MAX_BYTES_PER_TICK = 128 * 1024  # 128 KiB per stream per tick
+
+_SIGINT_TRIGGERED = False
 
 
 def ansi_to_html(chunk: str) -> str:
@@ -250,6 +252,7 @@ class MainWindow(QMainWindow):
         self._sim_running_cached = False  # event driven sim state
 
         self.tasks: dict[str, ProcessTab] = {}
+        self._bg_procs: list[QProcess] = []
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -357,6 +360,10 @@ class MainWindow(QMainWindow):
         self.poll_timer.timeout.connect(self._poll)
         self.poll_timer.start(1200)
 
+        self._sigint_timer = QTimer(self)
+        self._sigint_timer.timeout.connect(self._check_sigint)
+        self._sigint_timer.start(100)
+
         self.load_yaml(DEFAULT_YAML_PATH)
         self._update_buttons()
         self.update_sim_status_from_poll()
@@ -436,6 +443,70 @@ class MainWindow(QMainWindow):
         # wrapper around subprocess.run with logging into the Log tab
         self._log_cmd(args)
         return subprocess.run(args, **kwargs)
+
+    def _run_command_sequence(
+        self,
+        commands: list[list[str]],
+        *,
+        env: dict | None = None,
+        on_finished: Callable[[], None] | None = None,
+    ):
+        if not commands:
+            if on_finished:
+                QTimer.singleShot(0, on_finished)
+            return
+
+        proc = QProcess(self)
+        env_obj = QProcessEnvironment.systemEnvironment()
+        env_obj.insert('COMPOSE_IGNORE_ORPHANS', '1')
+        if env:
+            for key, value in env.items():
+                env_obj.insert(str(key), str(value))
+        proc.setProcessEnvironment(env_obj)
+
+        queue: deque[list[str]] = deque(commands)
+        current: list[str] | None = None
+
+        def start_next():
+            nonlocal current
+            if not queue:
+                cleanup()
+                return
+            current = queue.popleft()
+            self._log_cmd(current)
+            proc.start(current[0], current[1:])
+
+        def handle_finished(code: int, _status):
+            nonlocal current
+            if current is None:
+                return
+            if code != 0:
+                self._append_log_html(html.escape(
+                    f'! command exited {code}: {self._fmt_args(current)}'
+                ))
+            current = None
+            QTimer.singleShot(0, start_next)
+
+        def handle_error(_error):
+            nonlocal current
+            if current is None:
+                return
+            err = proc.errorString()
+            self._append_log_html(html.escape(f'! command failed: {self._fmt_args(current)} ({err})'))
+            current = None
+            QTimer.singleShot(0, start_next)
+
+        def cleanup():
+            if proc in self._bg_procs:
+                self._bg_procs.remove(proc)
+            proc.deleteLater()
+            if on_finished:
+                QTimer.singleShot(0, on_finished)
+
+        proc.finished.connect(handle_finished)
+        proc.errorOccurred.connect(handle_error)
+        self._bg_procs.append(proc)
+        start_next()
 
     # ---------- Tabs and process management ----------
 
@@ -617,12 +688,12 @@ class MainWindow(QMainWindow):
                     tab.append_line_html(f'<i>No running container named {html.escape(name)}</i>')
                 return
             # send INT first for a graceful stop of GUI apps, then stop
-            self._sp_run(['docker', 'kill', '-s', 'INT', name], check=False,
-                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self._run_command_sequence([
+                ['docker', 'kill', '-s', 'INT', name],
+                ['docker', 'stop', name],
+            ])
             if tab:
                 tab.append_line_html(f'<i>docker kill -s INT {html.escape(name)}</i>')
-            self._sp_run(['docker', 'stop', name], check=False,
-                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             if tab:
                 tab.append_line_html(f'<i>docker stop {html.escape(name)}</i>')
         except Exception as e:
@@ -647,48 +718,56 @@ class MainWindow(QMainWindow):
                 tab.append_line_html(f'<i>Failed to send SIGINT: {html.escape(str(e))}</i>')
 
         def _fallbacks():
-            # stop sim container if present
-            self._docker_stop_if_exists(self._sim_container_name, tab)
-            # stop everything related, including rqt/rviz/mobipick_cmd one offs
-            self._stop_all_related(tab)
+            commands: list[list[str]] = []
 
-            if Path(SCRIPT_CLEAN).is_file() and os.access(SCRIPT_CLEAN, os.X_OK):
+            # stop sim container if present
+            commands += self._docker_stop_if_exists(self._sim_container_name, tab)
+            # stop everything related, including rqt/rviz/mobipick_cmd one offs
+            commands += self._stop_all_related(tab)
+
+            clean_exists = Path(SCRIPT_CLEAN).is_file() and os.access(SCRIPT_CLEAN, os.X_OK)
+            if clean_exists:
                 tab.append_line_html('<i>Invoking clean.bash for final cleanup...</i>')
-                try:
-                    self._sp_run([SCRIPT_CLEAN], check=False)
-                except Exception as e:
-                    tab.append_line_html(f'<i>clean.bash failed: {html.escape(str(e))}</i>')
+                commands.append([SCRIPT_CLEAN])
             else:
                 tab.append_line_html('<i>clean.bash not found or not executable.</i>')
 
-            self._revoke_x()
-            self._sim_running_cached = False
-            self._killing = False
-            self.set_toggle_visual('red', 'Start Sim', enabled=True)
+            def _finalize():
+                self._revoke_x()
+                self._sim_running_cached = False
+                self._killing = False
+                self.set_toggle_visual('red', 'Start Sim', enabled=True)
+
+            if commands:
+                self._run_command_sequence(commands, on_finished=_finalize)
+            else:
+                _finalize()
 
         QTimer.singleShot(2500, _fallbacks)
 
-    def _docker_stop_if_exists(self, name: str, tab: ProcessTab | None = None):
+    def _docker_stop_if_exists(self, name: str, tab: ProcessTab | None = None) -> list[list[str]]:
+        commands: list[list[str]] = []
         try:
             cp = self._sp_run(['docker', 'ps', '-q', '--filter', f'name=^{name}$'],
                               stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=False, text=True)
             cid = cp.stdout.strip()
             if cid:
-                self._sp_run(['docker', 'stop', name], check=False,
-                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                commands.append(['docker', 'stop', name])
                 if tab:
                     tab.append_line_html(f'<i>docker stop {html.escape(name)}</i>')
         except Exception as e:
             if tab:
                 tab.append_line_html(f'<i>docker stop error: {html.escape(str(e))}</i>')
+        return commands
 
     # Stop all related containers, robust name/image/label pattern matching.
     # Sends INT first for a graceful shutdown of GUIs, then docker stop.
-    def _stop_all_related(self, tab: ProcessTab):
+    def _stop_all_related(self, tab: ProcessTab) -> list[list[str]]:
         patterns = [
             'mobipick', 'mobipick_cmd', 'mobipick-run',
             'brean/mobipick_labs', 'rqt', 'rviz'
         ]
+        commands: list[list[str]] = []
         try:
             cp = self._sp_run(
                 ['docker', 'ps', '-a', '--format', '{{.ID}} {{.Names}} {{.Image}} {{.Labels}}'],
@@ -712,17 +791,16 @@ class MainWindow(QMainWindow):
 
             if not ids:
                 tab.append_line_html('<i>No related containers found.</i>')
-                return
+                return commands
 
             tab.append_line_html(f'<i>Sending INT to related containers: {html.escape(" ".join(ids))}</i>')
-            self._sp_run(['docker', 'kill', '-s', 'INT'] + ids, check=False,
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            commands.append(['docker', 'kill', '-s', 'INT', *ids])
 
             tab.append_line_html(f'<i>Stopping related containers: {html.escape(" ".join(ids))}</i>')
-            self._sp_run(['docker', 'stop'] + ids, check=False,
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            commands.append(['docker', 'stop', *ids])
         except Exception as e:
             tab.append_line_html(f'<i>Error while stopping related containers: {html.escape(str(e))}</i>')
+        return commands
 
     # optionally keep a manual refresh helper for rare external changes
     def update_sim_status_from_poll(self, force=False):
@@ -951,6 +1029,15 @@ class MainWindow(QMainWindow):
         running_custom = bool(key and key.startswith('custom') and self.tasks[key].is_running())
         self.interrupt_button.setEnabled(running_custom)
 
+    def _check_sigint(self):
+        global _SIGINT_TRIGGERED
+        if not _SIGINT_TRIGGERED:
+            return
+        _SIGINT_TRIGGERED = False
+        app = QApplication.instance()
+        if app:
+            app.quit()
+
     def _update_buttons(self):
         # initial deterministic state to avoid AttributeError
         self.interrupt_button.setEnabled(False)
@@ -958,6 +1045,13 @@ class MainWindow(QMainWindow):
     # ---------- Close ----------
 
     def closeEvent(self, event):
+        for proc in list(self._bg_procs):
+            try:
+                proc.kill()
+            except Exception:
+                pass
+            proc.deleteLater()
+        self._bg_procs.clear()
         for p in list(self.tasks.values()):
             if p.is_running():
                 try:
@@ -974,7 +1068,8 @@ if __name__ == '__main__':
     w.show()
 
     def _handle_sigint(_sig, _frame):
-        app.quit()
+        global _SIGINT_TRIGGERED
+        _SIGINT_TRIGGERED = True
 
     signal.signal(signal.SIGINT, _handle_sigint)
 
