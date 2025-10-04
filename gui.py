@@ -325,7 +325,7 @@ class ProcessTab:
         if not data:
             return
         data = self.parent._filter_terminal_escapes(data)
-        data = data.replace('\r\n', '\n').replace('\r', '\n')
+        data = self.parent._collapse_carriage_returns(data)
         self.parent._prepare_tab_for_origin(self.key, 'container')
         if '\x1b[' in data:
             self.output.enqueue(True, ansi_to_html(data))
@@ -2559,6 +2559,21 @@ class MainWindow(QMainWindow):
         sanitized = CSI_SEQ_RE.sub(_keep_sgr, sanitized)
         sanitized = sanitized.replace('\x1b7', '').replace('\x1b8', '')
         return sanitized
+
+    def _collapse_carriage_returns(self, text: str) -> str:
+        if '\r' not in text:
+            return text
+        text = text.replace('\r\n', '\n')
+        if '\r' not in text:
+            return text
+        out_chars: list[str] = []
+        for ch in text:
+            if ch == '\r':
+                while out_chars and out_chars[-1] != '\n':
+                    out_chars.pop()
+            else:
+                out_chars.append(ch)
+        return ''.join(out_chars)
 
     # ---------- Utils ----------
 
