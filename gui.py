@@ -43,6 +43,8 @@ CONFIG_DEFAULTS = {
         'flush_interval_ms': 30,
         'background_color': '#000000',
         'text_color': '#ffffff',
+        'gui_log_color': '#ff00ff',
+        'command_log_color': '#4da3ff',
         'font_family': 'monospace',
         'scroll_tolerance_min': 2,
     },
@@ -253,14 +255,22 @@ class ProcessTab:
         self.exec_id: str | None = None
 
     def start_shell(self, bash_cmd: str):
-        self.append_line_html(f'<i>&gt; {html.escape(bash_cmd)}</i>')
+        self.parent._append_gui_html(
+            self.key,
+            f'<i>&gt; {html.escape(bash_cmd)}</i>',
+            color=self.parent._command_log_color,
+        )
         self.parent._log_cmd(bash_cmd)
         self._apply_env()
         self.proc.start('bash', ['-lc', bash_cmd])
 
     def start_program(self, program: str, args: list[str]):
         cmdline = program + ' ' + ' '.join(args)
-        self.append_line_html(f'<i>&gt; {html.escape(cmdline)}</i>')
+        self.parent._append_gui_html(
+            self.key,
+            f'<i>&gt; {html.escape(cmdline)}</i>',
+            color=self.parent._command_log_color,
+        )
         self.parent._log_cmd([program] + args)
         self._apply_env()
         self.proc.start(program, args)
@@ -358,6 +368,9 @@ class MainWindow(QMainWindow):
         self._roscore_stopping = False
         self._roscore_last_start_ts: float | None = None
         self._toggle_states: dict[str, str] = {}
+        self._last_log_origin: dict[str, str] = {}
+        self._gui_log_color = str(CONFIG['log'].get('gui_log_color', '#ff00ff'))
+        self._command_log_color = str(CONFIG['log'].get('command_log_color', '#4da3ff'))
 
         # sim state
         self._sim_container_name = 'mobipick-run'
@@ -803,7 +816,10 @@ class MainWindow(QMainWindow):
         lines = text.splitlines()
         if not lines:
             return
-        for line in lines:
+        tab = self.tasks.get(key)
+        for idx, line in enumerate(lines):
+            if idx == 0 and tab and self._last_log_origin.get(key) != 'container':
+                self._insert_gap(tab)
             if not line:
                 self._append_html(key, '&nbsp;')
                 continue
@@ -813,6 +829,8 @@ class MainWindow(QMainWindow):
                 self._append_html(key, ansi_to_html(line))
             else:
                 self._append_html(key, html.escape(line))
+        if lines:
+            self._last_log_origin[key] = 'container'
 
     def _log_cmd(self, args_or_str):
         ts = datetime.now().strftime('%H:%M:%S')
@@ -823,8 +841,7 @@ class MainWindow(QMainWindow):
             fmt = self._fmt_args(args_or_str)
         is_docker = self._is_docker_command(args_or_str)
         line = f'[{ts}] $ {fmt}'
-        color = '#4da3ff' if is_docker else '#ffffff'
-        self._append_log_html(f'<span style="color:{color}">{html.escape(line)}</span>')
+        self._append_gui_html('log', html.escape(line), color=self._command_log_color)
         self._console_log(3, line)
 
     def _log_event(self, details: str):
@@ -1049,7 +1066,7 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(
                 self,
                 'Save Log',
-                f"Failed to save log to {path}:\n{exc}",
+                f"Failed to save log to {html.escape(path)}:\n{html.escape(str(exc))}",
             )
             return False
 
@@ -1391,14 +1408,14 @@ class MainWindow(QMainWindow):
                 elif isinstance(data, list):
                     values = [str(x) for x in data]
                 else:
-                    self._append_html('sim', f'<i>YAML format not recognized in {html.escape(path)}</i>')
+                    self._append_gui_html('sim', f'<i>YAML format not recognized in {html.escape(path)}</i>')
                 self._yaml_path = path
             else:
-                self._append_html('sim', f'<i>YAML not found: {html.escape(path)}</i>')
+                self._append_gui_html('sim', f'<i>YAML not found: {html.escape(path)}</i>')
         except ImportError:
-            self._append_html('sim', '<i>PyYAML not installed, using default option set.</i>')
+            self._append_gui_html('sim', '<i>PyYAML not installed, using default option set.</i>')
         except Exception as e:
-            self._append_html('sim', f'<i>Failed to load YAML: {html.escape(str(e))}</i>')
+            self._append_gui_html('sim', f'<i>Failed to load YAML: {html.escape(str(e))}</i>')
         if not values:
             values = ['moelk_tables']
         self.world_combo.blockSignals(True)
@@ -1539,10 +1556,10 @@ class MainWindow(QMainWindow):
         if pid:
             try:
                 os.kill(pid, signal.SIGINT)
-                tab.append_line_html('<i>Sent SIGINT to roscore (graceful stop)...</i>')
+                self._append_gui_html(tab.key, '<i>Sent SIGINT to roscore (graceful stop)...</i>')
                 self._log_cmd(f'kill -SIGINT {pid}')
             except Exception as e:
-                tab.append_line_html(f'<i>Failed to send SIGINT: {html.escape(str(e))}</i>')
+                self._append_gui_html(tab.key, f'<i>Failed to send SIGINT: {html.escape(str(e))}</i>')
 
         def _cleanup():
             commands: list[list[str]] = []
@@ -1551,10 +1568,10 @@ class MainWindow(QMainWindow):
 
             clean_exists = self._cleanup_script_available()
             if not self._cleanup_done and clean_exists:
-                tab.append_line_html('<i>Invoking clean.bash for final cleanup...</i>')
+                self._append_gui_html(tab.key, '<i>Invoking clean.bash for final cleanup...</i>')
                 commands.append([SCRIPT_CLEAN])
             elif not clean_exists:
-                tab.append_line_html('<i>clean.bash not found or not executable.</i>')
+                self._append_gui_html(tab.key, '<i>clean.bash not found or not executable.</i>')
 
             def _finalize():
                 self._roscore_running_cached = False
@@ -1628,14 +1645,14 @@ class MainWindow(QMainWindow):
         if not commands:
             if tab:
                 label = name or (exec_id or 'container')
-                tab.append_line_html(f'<i>No running container named {html.escape(label)}</i>')
+                self._append_gui_html(tab.key, f'<i>No running container named {html.escape(label)}</i>')
             if on_finished:
                 on_finished()
             return
         if tab:
             label = name or (exec_id or 'container')
-            tab.append_line_html(f'<i>docker kill -s INT {html.escape(label)}</i>')
-            tab.append_line_html(f'<i>docker stop {html.escape(label)}</i>')
+            self._append_gui_html(tab.key, f'<i>docker kill -s INT {html.escape(label)}</i>')
+            self._append_gui_html(tab.key, f'<i>docker stop {html.escape(label)}</i>')
         self._run_command_sequence(
             commands,
             log_key=(tab.key if tab else 'log'),
@@ -1654,10 +1671,10 @@ class MainWindow(QMainWindow):
         if pid:
             try:
                 os.kill(pid, signal.SIGINT)
-                tab.append_line_html('<i>Sent SIGINT to docker compose (graceful stop)...</i>')
+                self._append_gui_html(tab.key, '<i>Sent SIGINT to docker compose (graceful stop)...</i>')
                 self._log_cmd(f'kill -SIGINT {pid}')
             except Exception as e:
-                tab.append_line_html(f'<i>Failed to send SIGINT: {html.escape(str(e))}</i>')
+                self._append_gui_html(tab.key, f'<i>Failed to send SIGINT: {html.escape(str(e))}</i>')
 
         def _fallbacks():
             commands: list[list[str]] = []
@@ -1703,7 +1720,7 @@ class MainWindow(QMainWindow):
         for cid in ids:
             commands.append(self._safe_docker_cmd('stop', cid))
             if tab:
-                tab.append_line_html(f'<i>docker stop {html.escape(cid)}</i>')
+                self._append_gui_html(tab.key, f'<i>docker stop {html.escape(cid)}</i>')
         return commands
 
     def _collect_exit_commands(self) -> list[list[str]]:
@@ -1743,7 +1760,7 @@ class MainWindow(QMainWindow):
 
             if not matches:
                 if tab:
-                    tab.append_line_html('<i>No related containers found.</i>')
+                    self._append_gui_html(tab.key, '<i>No related containers found.</i>')
                 return commands
 
             running_ids: list[str] = []
@@ -1756,7 +1773,8 @@ class MainWindow(QMainWindow):
 
             if running_ids:
                 if tab:
-                    tab.append_line_html(
+                    self._append_gui_html(
+                        tab.key,
                         f'<i>Sending INT to related containers: {html.escape(" ".join(running_ids))}</i>'
                     )
                 for cid in running_ids:
@@ -1764,19 +1782,21 @@ class MainWindow(QMainWindow):
 
             if running_ids:
                 if tab:
-                    tab.append_line_html(
+                    self._append_gui_html(
+                        tab.key,
                         f'<i>Stopping related containers: {html.escape(" ".join(running_ids))}</i>'
                     )
                 for cid in running_ids:
                     commands.append(self._safe_docker_cmd('stop', cid))
 
             if skipped and tab:
-                tab.append_line_html(
+                self._append_gui_html(
+                    tab.key,
                     f'<i>Skipping already stopped containers: {html.escape(" ".join(skipped))}</i>'
                 )
         except Exception as e:
             if tab:
-                tab.append_line_html(f'<i>Error while stopping related containers: {html.escape(str(e))}</i>')
+                self._append_gui_html(tab.key, f'<i>Error while stopping related containers: {html.escape(str(e))}</i>')
             else:
                 self._console_log(1, f'Error while stopping related containers: {e}')
         return commands
@@ -2097,10 +2117,10 @@ class MainWindow(QMainWindow):
         if pid:
             try:
                 os.kill(pid, signal.SIGINT)
-                tab.append_line_html('<i>Sent SIGINT to client (ctrl+c)...</i>')
+                self._append_gui_html(tab.key, '<i>Sent SIGINT to client (ctrl+c)...</i>')
                 self._log_cmd(f'kill -SIGINT {pid}')
             except Exception as e:
-                tab.append_line_html(f'<i>Failed to SIGINT client: {html.escape(str(e))}</i>')
+                self._append_gui_html(tab.key, f'<i>Failed to SIGINT client: {html.escape(str(e))}</i>')
 
         container_name = tab.container_name
 
@@ -2133,12 +2153,16 @@ class MainWindow(QMainWindow):
         widget = self.tabs.currentWidget()
         if isinstance(widget, QTextEdit):
             widget.clear()
+            key = self._current_tab_key()
+            if key:
+                self._last_log_origin.pop(key, None)
 
     def clear_all_tabs(self):
         for i in range(self.tabs.count()):
             widget = self.tabs.widget(i)
             if isinstance(widget, QTextEdit):
                 widget.clear()
+        self._last_log_origin.clear()
 
     def save_current_log(self):
         index = self.tabs.currentIndex()
@@ -2190,8 +2214,24 @@ class MainWindow(QMainWindow):
                 return
         QMessageBox.information(self, 'Save Logs', f'Saved {len(entries)} log file(s).')
 
-    def _append_html(self, key: str, html_text: str):
-        self._ensure_tab(key, key.title(), closable=(key.startswith('custom'))).append_line_html(html_text)
+    def _insert_gap(self, tab: ProcessTab):
+        tab.append_line_html('&nbsp;')
+
+    def _append_html(self, key: str, html_text: str, *, gui: bool = False, color: str | None = None):
+        tab = self._ensure_tab(key, key.title(), closable=(key.startswith('custom')))
+        origin = 'gui' if gui else 'container'
+        last = self._last_log_origin.get(key)
+        if last and last != origin:
+            self._insert_gap(tab)
+        if gui:
+            color = html.escape(color or self._gui_log_color)
+            tab.append_line_html(f'<span style="color:{color}">{html_text}</span>')
+        else:
+            tab.append_line_html(html_text)
+        self._last_log_origin[key] = origin
+
+    def _append_gui_html(self, key: str, html_text: str, *, color: str | None = None):
+        self._append_html(key, html_text, gui=True, color=color)
 
     # ---------- Utils ----------
 
@@ -2252,7 +2292,7 @@ class MainWindow(QMainWindow):
     def on_task_finished(self, key: str, exit_code: int, exit_status):
         status_name = 'NormalExit' if int(exit_status) == int(QProcess.NormalExit) else 'Crashed'
         if key in self.tasks:
-            self._append_html(key, f'<i>Process finished with code {exit_code} [{status_name}]</i>')
+            self._append_gui_html(key, f'<i>Process finished with code {exit_code} [{status_name}]</i>')
             self.tasks[key].container_name = None
             self.tasks[key].exec_id = None
         if key == 'roscore':

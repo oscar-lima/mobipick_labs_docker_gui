@@ -3,6 +3,8 @@ log:
   flush_interval_ms: 30         # how often the log widget flushes buffered text to the screen (lower = more frequent updates)
   background_color: "#000000"   # log tab background color
   text_color: "#ffffff"         # default text color for plain log lines
+  gui_log_color: "#ff00ff"      # color for GUI-generated status messages
+  command_log_color: "#4da3ff"  # color for command lines emitted by the GUI
   font_family: "monospace"      # font family used for log text
   scroll_tolerance_min: 2       # how close (in scroll units) the user must be to the bottom for auto-scroll to stay enabled
 
