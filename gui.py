@@ -102,6 +102,11 @@ CONFIG_DEFAULTS = {
     'worlds': {
         'default': 'moelk_tables',
     },
+    'terminal': {
+        'launcher': 'gnome-terminal --title "{title}" -- bash -lc "{command}"',
+        'title': 'Mobipick Terminal',
+        'container_prefix': 'mobipick-terminal',
+    },
 }
 
 
@@ -368,6 +373,16 @@ class MainWindow(QMainWindow):
         self._roscore_running_cached = False
         self._roscore_stopping = False
         self._roscore_last_start_ts: float | None = None
+        self._terminal_cfg = CONFIG.get('terminal', {})
+        self._terminal_launcher_template = str(self._terminal_cfg.get('launcher', 'gnome-terminal --title "{title}" -- bash -lc "{command}"'))
+        self._terminal_title = str(self._terminal_cfg.get('title', 'Mobipick Terminal'))
+        self._terminal_container_prefix = str(self._terminal_cfg.get('container_prefix', 'mobipick-terminal'))
+        self._terminal_proc: QProcess | None = None
+        self._terminal_container_name: str | None = None
+        self._terminal_exec_id: str | None = None
+        self._terminal_running_cached = False
+        self._terminal_stopping = False
+        self._project_root = Path(__file__).resolve().parent
         self._toggle_states: dict[str, str] = {}
         self._last_log_origin: dict[str, str] = {}
         self._gui_log_color = str(CONFIG['log'].get('gui_log_color', '#ff00ff'))
@@ -409,6 +424,10 @@ class MainWindow(QMainWindow):
         self.rqt_button = QPushButton()
         self.rqt_button.clicked.connect(self._on_rqt_toggle_clicked)
         top.addWidget(self.rqt_button)
+
+        self.terminal_button = QPushButton()
+        self.terminal_button.clicked.connect(self._on_terminal_toggle_clicked)
+        top.addWidget(self.terminal_button)
 
         spacer = QWidget()
         spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
@@ -892,6 +911,12 @@ class MainWindow(QMainWindow):
         if not self._guard_toggle_action('rqt', self.rqt_button):
             return
         self.toggle_rqt_tables_demo()
+
+    def _on_terminal_toggle_clicked(self):
+        self._log_button_click(self.terminal_button, 'Terminal')
+        if not self._guard_toggle_action('terminal', self.terminal_button):
+            return
+        self.toggle_terminal()
 
     def _on_roscore_toggle_clicked(self):
         self._log_button_click(self.roscore_button, 'Roscore')
@@ -1581,6 +1606,11 @@ class MainWindow(QMainWindow):
         else:
             self._disable_toggle_preserving_visual('script', self.run_script_button)
 
+        if self._terminal_is_active():
+            self.stop_terminal()
+        else:
+            self._disable_toggle_preserving_visual('terminal', self.terminal_button)
+
         tab = self._ensure_tab('roscore', 'Roscore', closable=False)
 
         pid = tab.pid()
@@ -1620,6 +1650,9 @@ class MainWindow(QMainWindow):
                 self.set_rqt_visual('red', 'Start RQt Tables', True)
                 self._script_active_tab_key = None
                 self.set_script_visual('red', 'Run Script', bool(self._script_choices))
+                self._terminal_stopping = False
+                self._terminal_running_cached = False
+                self.set_terminal_visual('red', 'Open Terminal', True)
                 self._update_stop_custom_enabled()
 
             if commands:
@@ -1845,6 +1878,7 @@ class MainWindow(QMainWindow):
                 names = None
 
         self._update_roscore_status(force=force, names=names)
+        self._update_terminal_status(force=force, names=names)
 
         if self._killing:
             self.set_toggle_visual('yellow', 'Shutting down...', enabled=False)
@@ -1885,6 +1919,23 @@ class MainWindow(QMainWindow):
             self._roscore_running_cached = False
             self.set_roscore_visual('red', 'Start Roscore', enabled=True)
 
+    def _update_terminal_status(self, *, force: bool = False, names: set[str] | None = None):
+        if self._terminal_stopping:
+            self.set_terminal_visual('yellow', 'Closing Terminal...', False)
+            return
+
+        running = self._terminal_proc is not None and self._terminal_proc.state() != QProcess.NotRunning
+
+        if force and names is not None and self._terminal_container_name:
+            running = running or (self._terminal_container_name in names)
+
+        self._terminal_running_cached = running
+
+        if running:
+            self.set_terminal_visual('green', 'Close Terminal', True)
+        else:
+            self.set_terminal_visual('red', 'Open Terminal', True)
+
     def _set_toggle_state(self, key: str, button: QPushButton, state: str, text: str, enabled: bool):
         button.setText(text)
         toggle_cfg = CONFIG['buttons']['sim_toggle']
@@ -1924,6 +1975,9 @@ class MainWindow(QMainWindow):
 
     def set_script_visual(self, state: str, text: str, enabled: bool):
         self._set_toggle_state('script', self.run_script_button, state, text, enabled)
+
+    def set_terminal_visual(self, state: str, text: str, enabled: bool):
+        self._set_toggle_state('terminal', self.terminal_button, state, text, enabled)
 
     def _guard_toggle_action(self, key: str, button: QPushButton) -> bool:
         if self._toggle_states.get(key) != 'yellow':
@@ -2093,6 +2147,164 @@ class MainWindow(QMainWindow):
             tab,
             on_stopped=lambda: self.set_rqt_visual('red', 'Start RQt Tables', True),
         )
+
+    def toggle_terminal(self):
+        if self._terminal_stopping:
+            return
+        if self._terminal_is_active():
+            self.stop_terminal()
+        else:
+            self.open_terminal()
+
+    def open_terminal(self):
+        if self._terminal_stopping or self._terminal_is_active():
+            return
+        self.set_terminal_visual('yellow', 'Starting Terminal...', False)
+
+        def _start_terminal():
+            self._ensure_network(log_key='log')
+            exec_id = uuid.uuid4().hex
+            container_name = f"{self._terminal_container_prefix}-{exec_id[:10]}"
+
+            command_parts = [
+                'docker', 'compose', 'run', '--rm', '--name', container_name,
+                '--label', f'mobipick.exec={exec_id}',
+                '--label', 'mobipick.role=terminal',
+                '--label', 'mobipick.tab=terminal',
+                *self._compose_env_args(),
+                'mobipick_cmd', 'bash'
+            ]
+            command_str = self._fmt_args(command_parts)
+            launcher = self._build_terminal_launcher(command_str)
+            if not launcher:
+                self._append_gui_html('log', '<i>Terminal launcher is not configured properly.</i>')
+                self.set_terminal_visual('red', 'Open Terminal', True)
+                return
+
+            self._terminal_stopping = False
+            self._terminal_running_cached = True
+            self._terminal_container_name = container_name
+            self._terminal_exec_id = exec_id
+
+            proc = QProcess(self)
+            proc.setProcessEnvironment(self._build_process_environment())
+            proc.setWorkingDirectory(str(self._project_root))
+            proc.finished.connect(self._on_terminal_proc_finished)
+            proc.errorOccurred.connect(self._on_terminal_proc_error)
+            self._terminal_proc = proc
+
+            proc.start(launcher[0], launcher[1:])
+            if not proc.waitForStarted(5000):
+                self._append_gui_html('log', '<i>Failed to launch terminal application.</i>')
+                self._terminal_running_cached = False
+                self._terminal_proc = None
+                proc.deleteLater()
+                self._cleanup_terminal_container()
+                self._terminal_container_name = None
+                self._terminal_exec_id = None
+                self.set_terminal_visual('red', 'Open Terminal', True)
+                return
+
+            self._append_gui_html('log', f'<i>Launching terminal: {html.escape(command_str)}</i>')
+            self.set_terminal_visual('green', 'Close Terminal', True)
+
+        self._ensure_roscore_ready(_start_terminal)
+
+    def stop_terminal(self):
+        if self._terminal_stopping and self._terminal_proc is None:
+            self._finalize_terminal_stop()
+            return
+        if not self._terminal_is_active() and not self._terminal_container_name:
+            self._terminal_running_cached = False
+            self.set_terminal_visual('red', 'Open Terminal', True)
+            return
+        if not self._terminal_stopping:
+            self._terminal_stopping = True
+            self.set_terminal_visual('yellow', 'Closing Terminal...', False)
+
+        if self._terminal_proc and self._terminal_proc.state() != QProcess.NotRunning:
+            self._terminal_proc.terminate()
+            QTimer.singleShot(2000, self._force_kill_terminal_proc)
+        else:
+            self._finalize_terminal_stop()
+
+        self._cleanup_terminal_container()
+
+    def _force_kill_terminal_proc(self):
+        if self._terminal_proc and self._terminal_proc.state() != QProcess.NotRunning:
+            self._terminal_proc.kill()
+
+    def _finalize_terminal_stop(self):
+        self._terminal_running_cached = False
+        self._terminal_stopping = False
+        self.set_terminal_visual('red', 'Open Terminal', True)
+
+    def _terminal_is_active(self) -> bool:
+        if self._terminal_proc and self._terminal_proc.state() != QProcess.NotRunning:
+            return True
+        return bool(self._terminal_running_cached)
+
+    def _build_terminal_launcher(self, command: str) -> list[str] | None:
+        template = (self._terminal_launcher_template or '').strip()
+        if not template:
+            return None
+        try:
+            formatted = template.format(title=self._terminal_title, command=command)
+        except Exception as exc:
+            self._append_gui_html('log', f'<i>Failed to format terminal launcher: {html.escape(str(exc))}</i>')
+            return None
+        try:
+            parts = shlex.split(formatted)
+        except ValueError as exc:
+            self._append_gui_html('log', f'<i>Invalid terminal launcher command: {html.escape(str(exc))}</i>')
+            return None
+        if not parts:
+            return None
+        return parts
+
+    def _on_terminal_proc_finished(self, exit_code: int, exit_status):
+        if self._terminal_proc:
+            self._terminal_proc.deleteLater()
+        self._terminal_proc = None
+        self._cleanup_terminal_container()
+        self._finalize_terminal_stop()
+
+    def _on_terminal_proc_error(self, _error):
+        self._append_gui_html('log', '<i>Terminal launcher reported an error.</i>')
+        if self._terminal_proc and self._terminal_proc.state() != QProcess.NotRunning:
+            self._terminal_proc.kill()
+        if self._terminal_proc:
+            self._terminal_proc.deleteLater()
+        self._terminal_proc = None
+        self._cleanup_terminal_container()
+        self._terminal_running_cached = False
+        self._terminal_stopping = False
+        self.set_terminal_visual('red', 'Open Terminal', True)
+
+    def _cleanup_terminal_container(self):
+        name = self._terminal_container_name
+        if not name:
+            return
+        self._terminal_container_name = None
+        self._terminal_exec_id = None
+        try:
+            subprocess.run(
+                ['docker', 'stop', name],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+        except Exception:
+            pass
+        try:
+            subprocess.run(
+                ['docker', 'rm', name],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+        except Exception:
+            pass
 
     def run_custom_command(self):
         text = self.command_input.text().strip()
@@ -2344,6 +2556,7 @@ class MainWindow(QMainWindow):
             self.set_tables_visual('red', 'Run Tables Demo', True)
             self.set_rviz_visual('red', 'Start RViz', True)
             self.set_rqt_visual('red', 'Start RQt Tables', True)
+            self.stop_terminal()
             self._script_active_tab_key = None
             self.set_script_visual('red', 'Run Script', bool(self._script_choices))
             self._update_stop_custom_enabled()
@@ -2414,6 +2627,8 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(0, self._perform_exit_cleanup)
 
     def _perform_exit_cleanup(self):
+        self.stop_terminal()
+
         for proc in list(self._bg_procs):
             try:
                 proc.kill()
@@ -2458,6 +2673,7 @@ class MainWindow(QMainWindow):
         self.set_rviz_visual('red', 'Start RViz', True)
         self.set_rqt_visual('red', 'Start RQt Tables', True)
         self.set_script_visual('red', 'Run Script', bool(self._script_choices))
+        self.set_terminal_visual('red', 'Open Terminal', True)
         self.stop_custom_button.setEnabled(False)
         self._update_stop_custom_enabled()
 
