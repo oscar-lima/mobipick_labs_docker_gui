@@ -250,6 +250,7 @@ class ProcessTab:
 
         # per tab docker container name (for custom commands)
         self.container_name: str | None = None
+        self.exec_id: str | None = None
 
     def start_shell(self, bash_cmd: str):
         self.append_line_html(f'<i>&gt; {html.escape(bash_cmd)}</i>')
@@ -356,6 +357,7 @@ class MainWindow(QMainWindow):
         self._roscore_running_cached = False
         self._roscore_stopping = False
         self._roscore_last_start_ts: float | None = None
+        self._toggle_states: dict[str, str] = {}
 
         # sim state
         self._sim_container_name = 'mobipick-run'
@@ -831,6 +833,8 @@ class MainWindow(QMainWindow):
 
     def _on_sim_toggle_clicked(self):
         self._log_button_click(self.sim_toggle_button, 'Sim Toggle')
+        if not self._guard_toggle_action('sim', self.sim_toggle_button):
+            return
         self.toggle_sim()
 
     def _on_refresh_clicked(self):
@@ -845,18 +849,26 @@ class MainWindow(QMainWindow):
 
     def _on_tables_toggle_clicked(self):
         self._log_button_click(self.tables_button, 'Tables Demo')
+        if not self._guard_toggle_action('tables', self.tables_button):
+            return
         self.toggle_tables_demo()
 
     def _on_rviz_toggle_clicked(self):
         self._log_button_click(self.rviz_button, 'RViz')
+        if not self._guard_toggle_action('rviz', self.rviz_button):
+            return
         self.toggle_rviz()
 
     def _on_rqt_toggle_clicked(self):
         self._log_button_click(self.rqt_button, 'RQt Tables Demo')
+        if not self._guard_toggle_action('rqt', self.rqt_button):
+            return
         self.toggle_rqt_tables_demo()
 
     def _on_roscore_toggle_clicked(self):
         self._log_button_click(self.roscore_button, 'Roscore')
+        if not self._guard_toggle_action('roscore', self.roscore_button):
+            return
         self.toggle_roscore()
 
     def _on_refresh_scripts_clicked(self):
@@ -866,6 +878,8 @@ class MainWindow(QMainWindow):
 
     def _on_run_script_clicked(self):
         self._log_button_click(self.run_script_button, 'Run Script')
+        if not self._guard_toggle_action('script', self.run_script_button):
+            return
         self.toggle_script_execution()
 
     def _select_custom_tab_key(self) -> str:
@@ -903,10 +917,13 @@ class MainWindow(QMainWindow):
 
             key_target = self._select_custom_tab_key()
             tab = self.tasks[key_target]
-            tab.container_name = f'mpcmd-{uuid.uuid4().hex[:10]}'
+            exec_id = uuid.uuid4().hex
+            tab.exec_id = exec_id
+            tab.container_name = f'mpcmd-{exec_id[:10]}'
             inner = f"python3 /root/scripts/{self._sh_quote(script)}"
             args = [
                 'compose', 'run', '--rm', '--name', tab.container_name,
+                '--label', f'mobipick.exec={exec_id}', '--label', f'mobipick.tab={key_target}',
                 *self._compose_env_args(),
                 'mobipick_cmd', 'bash', '-lc', self._wrap_line_buffered(inner)
             ]
@@ -914,6 +931,7 @@ class MainWindow(QMainWindow):
             self._script_active_tab_key = key_target
             self.set_script_visual('green', 'Stop Script', True)
             self._focus_tab(key_target)
+            self._update_stop_custom_enabled()
 
         self._ensure_roscore_ready(_run_script)
 
@@ -922,19 +940,64 @@ class MainWindow(QMainWindow):
         if not key or key not in self.tasks:
             self._script_active_tab_key = None
             self.set_script_visual('red', 'Run Script', bool(self._script_choices))
+            self._update_stop_custom_enabled()
             return
         tab = self.tasks[key]
         if not tab.is_running():
             self._script_active_tab_key = None
             self.set_script_visual('red', 'Run Script', bool(self._script_choices))
+            self._update_stop_custom_enabled()
             return
-        self._stop_custom_tab(tab)
+        self._stop_custom_tab(
+            tab,
+            on_stopped=self._finalize_script_stop,
+        )
+
+    def _finalize_script_stop(self):
+        self._script_active_tab_key = None
+        self.set_script_visual('red', 'Run Script', bool(self._script_choices))
 
     def _ensure_scripts_dir(self):
         try:
             self._scripts_dir.mkdir(parents=True, exist_ok=True)
         except Exception as exc:
             self._console_log(1, f'Failed to ensure scripts directory {self._scripts_dir}: {exc}')
+
+    def _update_stop_custom_enabled(self):
+        if not hasattr(self, 'stop_custom_button'):
+            return
+        running_custom = any(
+            tab.is_running() for key, tab in self.tasks.items() if key.startswith('custom')
+        )
+        self.stop_custom_button.setEnabled(running_custom)
+
+    def _docker_ps_ids(self, filters: list[str]) -> list[str]:
+        if not filters:
+            return []
+        cmd = ['docker', 'ps', '-q']
+        for flt in filters:
+            cmd.extend(['--filter', flt])
+        try:
+            cp = subprocess.run(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                check=False,
+                text=True,
+            )
+            return [line.strip() for line in (cp.stdout or '').splitlines() if line.strip()]
+        except Exception as exc:
+            self._console_log(1, f'Failed to query docker ps {filters}: {exc}')
+            return []
+
+    def _resolve_container_ids(self, *, name: str | None = None, exec_id: str | None = None) -> list[str]:
+        ids: list[str] = []
+        if exec_id:
+            ids.extend(self._docker_ps_ids([f'label=mobipick.exec={exec_id}']))
+        if name:
+            ids.extend(self._docker_ps_ids([f'name={name}']))
+            ids.extend(self._docker_ps_ids([f'label=com.docker.compose.oneoff.name={name}']))
+        return list(dict.fromkeys(ids))
 
     def _collect_scripts(self) -> list[str]:
         if not self._scripts_dir.exists():
@@ -1384,9 +1447,12 @@ class MainWindow(QMainWindow):
         if self._roscore_stopping:
             return
         self._log_info('starting roscore master')
+        self.set_roscore_visual('yellow', 'Starting Roscore...', False)
         self._ensure_network(log_key='roscore')
         tab = self._ensure_tab('roscore', 'Roscore', closable=False)
         tab.container_name = self._roscore_container_name
+        exec_id = uuid.uuid4().hex
+        tab.exec_id = exec_id
         inner = 'roscore'
         self._roscore_running_cached = True
         self._roscore_stopping = False
@@ -1394,6 +1460,7 @@ class MainWindow(QMainWindow):
         self.set_roscore_visual('green', 'Stop Roscore', enabled=True)
         args = [
             'compose', 'run', '--rm', '--name', self._roscore_container_name,
+            '--label', f'mobipick.exec={exec_id}', '--label', f'mobipick.tab={tab.key}',
             *self._compose_env_args(),
             'mobipick_cmd', 'bash', '-lc', self._wrap_line_buffered(inner)
         ]
@@ -1424,7 +1491,7 @@ class MainWindow(QMainWindow):
 
         def _cleanup():
             commands: list[list[str]] = []
-            commands += self._docker_stop_if_exists(self._roscore_container_name, tab)
+            commands += self._docker_stop_if_exists(self._roscore_container_name, tab, exec_id=tab.exec_id)
             commands += self._stop_all_related(tab, exclude={self._roscore_container_name})
 
             clean_exists = self._cleanup_script_available()
@@ -1439,6 +1506,7 @@ class MainWindow(QMainWindow):
                 self._roscore_stopping = False
                 self._roscore_last_start_ts = None
                 tab.container_name = None
+                tab.exec_id = None
                 self.set_roscore_visual('red', 'Start Roscore', enabled=True)
                 self._revoke_x()
                 self._sim_running_cached = False
@@ -1448,6 +1516,7 @@ class MainWindow(QMainWindow):
                 self.set_rqt_visual('red', 'Start RQt Tables', True)
                 self._script_active_tab_key = None
                 self.set_script_visual('red', 'Run Script', bool(self._script_choices))
+                self._update_stop_custom_enabled()
 
             if commands:
                 self._run_command_sequence(commands, on_finished=_finalize, log_key=tab.key)
@@ -1461,6 +1530,7 @@ class MainWindow(QMainWindow):
     def bring_up_sim(self):
         if self._killing:
             return
+        self.set_toggle_visual('yellow', 'Starting Sim...', False)
 
         def _start_sim():
             world = self._current_world()
@@ -1469,9 +1539,12 @@ class MainWindow(QMainWindow):
 
             tab = self._ensure_tab('sim', 'Sim', closable=False)
             tab.container_name = self._sim_container_name  # ensure sim tab is addressable
+            exec_id = uuid.uuid4().hex
+            tab.exec_id = exec_id
 
             args = [
                 'compose', 'run', '--rm', '--name', self._sim_container_name,
+                '--label', f'mobipick.exec={exec_id}', '--label', f'mobipick.tab={tab.key}',
                 *self._compose_env_args(),
                 'mobipick'
             ]
@@ -1485,16 +1558,34 @@ class MainWindow(QMainWindow):
 
         self._ensure_roscore_ready(_start_sim)
 
-    def _graceful_stop_container(self, name: str, tab: ProcessTab | None = None):
-        commands = self._collect_container_commands(name, log_key=(tab.key if tab else 'log'))
+    def _graceful_stop_container(
+        self,
+        name: str | None,
+        tab: ProcessTab | None = None,
+        exec_id: str | None = None,
+        on_finished: Callable[[], None] | None = None,
+    ):
+        commands = self._collect_container_commands(
+            name,
+            exec_id=exec_id,
+            log_key=(tab.key if tab else 'log'),
+        )
         if not commands:
             if tab:
-                tab.append_line_html(f'<i>No running container named {html.escape(name)}</i>')
+                label = name or (exec_id or 'container')
+                tab.append_line_html(f'<i>No running container named {html.escape(label)}</i>')
+            if on_finished:
+                on_finished()
             return
         if tab:
-            tab.append_line_html(f'<i>docker kill -s INT {html.escape(name)}</i>')
-            tab.append_line_html(f'<i>docker stop {html.escape(name)}</i>')
-        self._run_command_sequence(commands, log_key=(tab.key if tab else 'log'))
+            label = name or (exec_id or 'container')
+            tab.append_line_html(f'<i>docker kill -s INT {html.escape(label)}</i>')
+            tab.append_line_html(f'<i>docker stop {html.escape(label)}</i>')
+        self._run_command_sequence(
+            commands,
+            log_key=(tab.key if tab else 'log'),
+            on_finished=on_finished,
+        )
 
     # event driven shutdown
     def shutdown_sim(self):
@@ -1517,13 +1608,14 @@ class MainWindow(QMainWindow):
             commands: list[list[str]] = []
 
             # stop sim container if present
-            commands += self._docker_stop_if_exists(self._sim_container_name, tab)
+            commands += self._docker_stop_if_exists(self._sim_container_name, tab, exec_id=tab.exec_id)
 
             def _finalize():
                 self._revoke_x()
                 self._sim_running_cached = False
                 self._killing = False
                 self.set_toggle_visual('red', 'Start Sim', enabled=True)
+                tab.exec_id = None
 
             if commands:
                 self._run_command_sequence(commands, on_finished=_finalize, log_key=tab.key)
@@ -1532,39 +1624,31 @@ class MainWindow(QMainWindow):
 
         QTimer.singleShot(int(self._timers_cfg['sim_shutdown_delay_ms']), _fallbacks)
 
-    def _collect_container_commands(self, name: str, *, log_key: str | None = None, include_int: bool = True) -> list[list[str]]:
+    def _collect_container_commands(
+        self,
+        name: str | None,
+        *,
+        exec_id: str | None = None,
+        log_key: str | None = None,
+        include_int: bool = True,
+    ) -> list[list[str]]:
         commands: list[list[str]] = []
-        try:
-            cp = self._sp_run(
-                ['docker', 'ps', '-q', '--filter', f'name=^{name}$'],
-                check=False,
-                log_key=log_key,
-                log_stdout=False,
-                log_stderr=True,
-                text=True,
-            )
-            stdout_text = (cp.stdout or '').strip()
-            if stdout_text:
-                if include_int:
-                    commands.append(self._safe_docker_cmd('kill', '-s', 'INT', name))
-                commands.append(self._safe_docker_cmd('stop', name))
-        except Exception as e:
-            self._console_log(1, f'Failed to inspect container {name}: {e}')
+        ids = self._resolve_container_ids(name=name, exec_id=exec_id)
+        if not ids:
+            return commands
+        for cid in ids:
+            if include_int:
+                commands.append(self._safe_docker_cmd('kill', '-s', 'INT', cid))
+            commands.append(self._safe_docker_cmd('stop', cid))
         return commands
 
-    def _docker_stop_if_exists(self, name: str, tab: ProcessTab | None = None) -> list[list[str]]:
+    def _docker_stop_if_exists(self, name: str | None, tab: ProcessTab | None = None, exec_id: str | None = None) -> list[list[str]]:
         commands: list[list[str]] = []
-        try:
-            cp = self._sp_run(['docker', 'ps', '-q', '--filter', f'name=^{name}$'],
-                              stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=False, text=True)
-            cid = cp.stdout.strip()
-            if cid:
-                commands.append(self._safe_docker_cmd('stop', name))
-                if tab:
-                    tab.append_line_html(f'<i>docker stop {html.escape(name)}</i>')
-        except Exception as e:
+        ids = self._resolve_container_ids(name=name, exec_id=exec_id)
+        for cid in ids:
+            commands.append(self._safe_docker_cmd('stop', cid))
             if tab:
-                tab.append_line_html(f'<i>docker stop error: {html.escape(str(e))}</i>')
+                tab.append_line_html(f'<i>docker stop {html.escape(cid)}</i>')
         return commands
 
     def _collect_exit_commands(self) -> list[list[str]]:
@@ -1694,7 +1778,7 @@ class MainWindow(QMainWindow):
             self._roscore_running_cached = False
             self.set_roscore_visual('red', 'Start Roscore', enabled=True)
 
-    def _apply_control_visual(self, button: QPushButton, state: str, text: str, enabled: bool):
+    def _set_toggle_state(self, key: str, button: QPushButton, state: str, text: str, enabled: bool):
         button.setText(text)
         toggle_cfg = CONFIG['buttons']['sim_toggle']
         states = toggle_cfg['states']
@@ -1709,24 +1793,38 @@ class MainWindow(QMainWindow):
             f'QPushButton:disabled {{ opacity: {disabled_opacity}; }}'
         )
         button.setEnabled(enabled)
+        self._toggle_states[key] = state
 
     def set_toggle_visual(self, state: str, text: str, enabled: bool):
-        self._apply_control_visual(self.sim_toggle_button, state, text, enabled)
+        self._set_toggle_state('sim', self.sim_toggle_button, state, text, enabled)
 
     def set_roscore_visual(self, state: str, text: str, enabled: bool):
-        self._apply_control_visual(self.roscore_button, state, text, enabled)
+        self._set_toggle_state('roscore', self.roscore_button, state, text, enabled)
 
     def set_tables_visual(self, state: str, text: str, enabled: bool):
-        self._apply_control_visual(self.tables_button, state, text, enabled)
+        self._set_toggle_state('tables', self.tables_button, state, text, enabled)
 
     def set_rviz_visual(self, state: str, text: str, enabled: bool):
-        self._apply_control_visual(self.rviz_button, state, text, enabled)
+        self._set_toggle_state('rviz', self.rviz_button, state, text, enabled)
 
     def set_rqt_visual(self, state: str, text: str, enabled: bool):
-        self._apply_control_visual(self.rqt_button, state, text, enabled)
+        self._set_toggle_state('rqt', self.rqt_button, state, text, enabled)
 
     def set_script_visual(self, state: str, text: str, enabled: bool):
-        self._apply_control_visual(self.run_script_button, state, text, enabled)
+        self._set_toggle_state('script', self.run_script_button, state, text, enabled)
+
+    def _guard_toggle_action(self, key: str, button: QPushButton) -> bool:
+        if self._toggle_states.get(key) != 'yellow':
+            return True
+        text = button.text().strip().lower()
+        if 'shutting' in text or 'stop' in text:
+            msg = 'Process is shutting down, please wait.'
+        elif 'starting' in text or 'start' in text:
+            msg = 'Process is starting, please wait.'
+        else:
+            msg = 'Process is busy, please wait.'
+        QMessageBox.information(self, 'Please Wait', msg)
+        return False
 
     # ---------- Buffering control helper ----------
     def _wrap_line_buffered(self, inner: str) -> str:
@@ -1762,10 +1860,13 @@ class MainWindow(QMainWindow):
         def _start_tables():
             self._log_info('launching tables demo container')
             tab = self._ensure_tab('tables', 'Tables Demo', closable=False)
-            tab.container_name = f'mpcmd-{uuid.uuid4().hex[:10]}'
+            exec_id = uuid.uuid4().hex
+            tab.exec_id = exec_id
+            tab.container_name = f'mpcmd-{exec_id[:10]}'
             inner = 'rosrun tables_demo_planning tables_demo_node.py'
             args = [
                 'compose', 'run', '--rm', '--name', tab.container_name,
+                '--label', f'mobipick.exec={exec_id}', '--label', f'mobipick.tab={tab.key}',
                 *self._compose_env_args(),
                 'mobipick_cmd', 'bash', '-lc', self._wrap_line_buffered(inner)
             ]
@@ -1781,7 +1882,10 @@ class MainWindow(QMainWindow):
             self.set_tables_visual('red', 'Run Tables Demo', True)
             return
         self.set_tables_visual('yellow', 'Stopping Tables Demo...', False)
-        self._stop_custom_tab(tab)
+        self._stop_custom_tab(
+            tab,
+            on_stopped=lambda: self.set_tables_visual('red', 'Run Tables Demo', True),
+        )
 
     def toggle_rviz(self):
         tab = self.tasks['rviz']
@@ -1803,10 +1907,13 @@ class MainWindow(QMainWindow):
             self._log_info('starting RViz viewer')
             self._grant_x()
             tab = self._ensure_tab('rviz', 'RViz', closable=False)
-            tab.container_name = f'mpcmd-{uuid.uuid4().hex[:10]}'
+            exec_id = uuid.uuid4().hex
+            tab.exec_id = exec_id
+            tab.container_name = f'mpcmd-{exec_id[:10]}'
             rviz_cmd = 'rosrun rviz rviz -d $(rospack find tables_demo_bringup)/config/pick_n_place.rviz __ns:=mobipick'
             args = [
                 'compose', 'run', '--rm', '--name', tab.container_name,
+                '--label', f'mobipick.exec={exec_id}', '--label', f'mobipick.tab={tab.key}',
                 *self._compose_env_args(),
                 'mobipick_cmd', 'bash', '-lc', self._wrap_line_buffered(rviz_cmd)
             ]
@@ -1822,7 +1929,10 @@ class MainWindow(QMainWindow):
             self.set_rviz_visual('red', 'Start RViz', True)
             return
         self.set_rviz_visual('yellow', 'Stopping RViz...', False)
-        self._stop_custom_tab(tab)
+        self._stop_custom_tab(
+            tab,
+            on_stopped=lambda: self.set_rviz_visual('red', 'Start RViz', True),
+        )
 
     def toggle_rqt_tables_demo(self):
         tab = self.tasks['rqt']
@@ -1845,10 +1955,13 @@ class MainWindow(QMainWindow):
             self._log_info(f'starting rqt tables demo for {world}')
             self._grant_x()
             tab = self._ensure_tab('rqt', 'RQt Tables', closable=False)
-            tab.container_name = f'mpcmd-{uuid.uuid4().hex[:10]}'
+            exec_id = uuid.uuid4().hex
+            tab.exec_id = exec_id
+            tab.container_name = f'mpcmd-{exec_id[:10]}'
             cmd = f'roslaunch rqt_tables_demo rqt_tables_demo.launch namespace:=mobipick world_config:={self._sh_quote(world)}'
             args = [
                 'compose', 'run', '--rm', '--name', tab.container_name,
+                '--label', f'mobipick.exec={exec_id}', '--label', f'mobipick.tab={tab.key}',
                 *self._compose_env_args(),
                 'mobipick_cmd', 'bash', '-lc', self._wrap_line_buffered(cmd)
             ]
@@ -1864,7 +1977,10 @@ class MainWindow(QMainWindow):
             self.set_rqt_visual('red', 'Start RQt Tables', True)
             return
         self.set_rqt_visual('yellow', 'Stopping RQt Tables...', False)
-        self._stop_custom_tab(tab)
+        self._stop_custom_tab(
+            tab,
+            on_stopped=lambda: self.set_rqt_visual('red', 'Start RQt Tables', True),
+        )
 
     def run_custom_command(self):
         text = self.command_input.text().strip()
@@ -1877,15 +1993,19 @@ class MainWindow(QMainWindow):
             key_target = self._select_custom_tab_key()
 
             tab = self.tasks[key_target]
-            tab.container_name = f'mpcmd-{uuid.uuid4().hex[:10]}'
+            exec_id = uuid.uuid4().hex
+            tab.exec_id = exec_id
+            tab.container_name = f'mpcmd-{exec_id[:10]}'
             wrapped = self._wrap_line_buffered(text)
             args = [
                 'compose', 'run', '--rm', '--name', tab.container_name,
+                '--label', f'mobipick.exec={exec_id}', '--label', f'mobipick.tab={key_target}',
                 *self._compose_env_args(),
                 'mobipick_cmd', 'bash', '-lc', wrapped
             ]
             tab.start_program('docker', args)
             self._focus_tab(key_target)
+            self._update_stop_custom_enabled()
 
         self._ensure_roscore_ready(_run_command)
 
@@ -1900,9 +2020,11 @@ class MainWindow(QMainWindow):
                     key = candidate
                     break
         if not key or key not in self.tasks:
+            self._update_stop_custom_enabled()
             return
         tab = self.tasks[key]
         if not tab.is_running():
+            self._update_stop_custom_enabled()
             return
 
         if key == self._script_active_tab_key:
@@ -1910,7 +2032,12 @@ class MainWindow(QMainWindow):
 
         self._stop_custom_tab(tab)
 
-    def _stop_custom_tab(self, tab: ProcessTab):
+    def _stop_custom_tab(
+        self,
+        tab: ProcessTab,
+        *,
+        on_stopped: Callable[[], None] | None = None,
+    ):
         pid = tab.pid()
         if pid:
             try:
@@ -1920,9 +2047,28 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 tab.append_line_html(f'<i>Failed to SIGINT client: {html.escape(str(e))}</i>')
 
+        container_name = tab.container_name
+
+        exec_id = getattr(tab, 'exec_id', None)
+
+        def finalize():
+            if container_name:
+                tab.container_name = None
+            tab.exec_id = None
+            if on_stopped:
+                on_stopped()
+            self._update_stop_custom_enabled()
+
         def _container_sigint_then_stop():
-            if tab.container_name:
-                self._graceful_stop_container(tab.container_name, tab)
+            if container_name or exec_id:
+                self._graceful_stop_container(
+                    container_name,
+                    tab,
+                    exec_id=exec_id,
+                    on_finished=finalize,
+                )
+            else:
+                finalize()
 
         QTimer.singleShot(int(self._timers_cfg['custom_tab_sigint_delay_ms']), _container_sigint_then_stop)
 
@@ -1997,6 +2143,7 @@ class MainWindow(QMainWindow):
         if key in self.tasks:
             self._append_html(key, f'<i>Process finished with code {exit_code} [{status_name}]</i>')
             self.tasks[key].container_name = None
+            self.tasks[key].exec_id = None
         if key == 'roscore':
             self._roscore_running_cached = False
             if self._roscore_stopping:
@@ -2010,6 +2157,7 @@ class MainWindow(QMainWindow):
             self.set_rqt_visual('red', 'Start RQt Tables', True)
             self._script_active_tab_key = None
             self.set_script_visual('red', 'Run Script', bool(self._script_choices))
+            self._update_stop_custom_enabled()
             return
         if key == 'sim':
             self._revoke_x()
@@ -2019,34 +2167,38 @@ class MainWindow(QMainWindow):
             self.set_toggle_visual('red', 'Start Sim', enabled=True)
             return
         if key == 'tables':
-            if self._roscore_stopping:
+            if self._roscore_stopping or self._toggle_states.get('tables') == 'yellow':
                 return
             self.set_tables_visual('red', 'Run Tables Demo', True)
             return
         if key == 'rviz':
-            if self._roscore_stopping:
+            if self._roscore_stopping or self._toggle_states.get('rviz') == 'yellow':
                 return
             self.set_rviz_visual('red', 'Start RViz', True)
             return
         if key == 'rqt':
-            if self._roscore_stopping:
+            if self._roscore_stopping or self._toggle_states.get('rqt') == 'yellow':
                 return
             self.set_rqt_visual('red', 'Start RQt Tables', True)
             return
         if key == self._script_active_tab_key:
+            if self._toggle_states.get('script') == 'yellow':
+                return
             self._script_active_tab_key = None
             if self._roscore_stopping:
                 self.set_script_visual('yellow', 'Shutting down...', False)
             else:
                 self.set_script_visual('red', 'Run Script', bool(self._script_choices))
+            self._update_stop_custom_enabled()
+            return
+
+        if key.startswith('custom'):
+            self._update_stop_custom_enabled()
 
     # ---------- Poll and initial states ----------
 
     def _poll(self):
-        running_custom = any(
-            tab.is_running() for key, tab in self.tasks.items() if key.startswith('custom')
-        )
-        self.stop_custom_button.setEnabled(running_custom)
+        self._update_stop_custom_enabled()
 
     def _check_sigint(self):
         global _SIGINT_TRIGGERED
@@ -2120,6 +2272,7 @@ class MainWindow(QMainWindow):
         self.set_rqt_visual('red', 'Start RQt Tables', True)
         self.set_script_visual('red', 'Run Script', bool(self._script_choices))
         self.stop_custom_button.setEnabled(False)
+        self._update_stop_custom_enabled()
 
     # ---------- Close ----------
 
