@@ -816,10 +816,7 @@ class MainWindow(QMainWindow):
         lines = text.splitlines()
         if not lines:
             return
-        tab = self.tasks.get(key)
-        for idx, line in enumerate(lines):
-            if idx == 0 and tab and self._last_log_origin.get(key) != 'container':
-                self._insert_gap(tab)
+        for line in lines:
             if not line:
                 self._append_html(key, '&nbsp;')
                 continue
@@ -2214,15 +2211,9 @@ class MainWindow(QMainWindow):
                 return
         QMessageBox.information(self, 'Save Logs', f'Saved {len(entries)} log file(s).')
 
-    def _insert_gap(self, tab: ProcessTab):
-        tab.append_line_html('&nbsp;')
-
     def _append_html(self, key: str, html_text: str, *, gui: bool = False, color: str | None = None):
         tab = self._ensure_tab(key, key.title(), closable=(key.startswith('custom')))
         origin = 'gui' if gui else 'container'
-        last = self._last_log_origin.get(key)
-        if last and last != origin:
-            self._insert_gap(tab)
         if gui:
             color = html.escape(color or self._gui_log_color)
             tab.append_line_html(f'<span style="color:{color}">{html_text}</span>')
