@@ -382,6 +382,8 @@ class MainWindow(QMainWindow):
         self._terminal_exec_id: str | None = None
         self._terminal_running_cached = False
         self._terminal_stopping = False
+        self._terminal_stream_tab_key: str | None = None
+        self._terminal_stream_counter = 0
         self._project_root = Path(__file__).resolve().parent
         self._toggle_states: dict[str, str] = {}
         self._last_log_origin: dict[str, str] = {}
@@ -1401,8 +1403,10 @@ class MainWindow(QMainWindow):
         if key is None:
             return
         tab = self.tasks[key]
-        if not (key.startswith('custom') or key.startswith('loadedlog')):
-            QMessageBox.information(self, 'Info', 'Only custom and loaded log tabs can be closed.')
+        if key == self._terminal_stream_tab_key:
+            self._terminal_stream_tab_key = None
+        if not (key.startswith('custom') or key.startswith('loadedlog') or key.startswith('terminal')):
+            QMessageBox.information(self, 'Info', 'Only custom, terminal, and loaded log tabs can be closed.')
             return
         if tab.is_running():
             try:
@@ -1656,6 +1660,9 @@ class MainWindow(QMainWindow):
                 self.set_script_visual('red', 'Run Script', bool(self._script_choices))
                 self._terminal_stopping = False
                 self._terminal_running_cached = False
+                if self._terminal_stream_tab_key and self._terminal_stream_tab_key in self.tasks:
+                    self._append_gui_html(self._terminal_stream_tab_key, '<i>Terminal session closed.</i>')
+                    self._terminal_stream_tab_key = None
                 self.set_terminal_visual('red', 'Open Terminal', True)
                 self._update_stop_custom_enabled()
 
@@ -2209,6 +2216,7 @@ class MainWindow(QMainWindow):
                 self.set_terminal_visual('red', 'Open Terminal', True)
                 return
 
+            self._start_terminal_stream(container_name, exec_id)
             self._append_gui_html('log', f'<i>Launching terminal: {html.escape(command_str)}</i>')
             self.set_terminal_visual('green', 'Close Terminal', True)
 
@@ -2309,6 +2317,23 @@ class MainWindow(QMainWindow):
             )
         except Exception:
             pass
+
+    def _start_terminal_stream(self, container_name: str, exec_id: str):
+        self._terminal_stream_counter += 1
+        key = f'terminal{self._terminal_stream_counter}'
+        label = f'Terminal {self._terminal_stream_counter}'
+        tab = self._ensure_tab(key, label, closable=True)
+        tab.output.clear()
+        tab.container_name = container_name
+        tab.exec_id = exec_id
+        script = (
+            f'until docker logs -f {self._sh_quote(container_name)}; do '
+            'sleep 0.2; '
+            'done'
+        )
+        tab.start_program('bash', ['-lc', script])
+        self._focus_tab(key)
+        self._terminal_stream_tab_key = key
 
     def run_custom_command(self):
         text = self.command_input.text().strip()
@@ -2574,6 +2599,8 @@ class MainWindow(QMainWindow):
 
     def on_task_finished(self, key: str, exit_code: int, exit_status):
         status_name = 'NormalExit' if int(exit_status) == int(QProcess.NormalExit) else 'Crashed'
+        if key == self._terminal_stream_tab_key:
+            self._terminal_stream_tab_key = None
         if key in self.tasks:
             self._append_gui_html(key, f'<i>Process finished with code {exit_code} [{status_name}]</i>')
             self.tasks[key].container_name = None
