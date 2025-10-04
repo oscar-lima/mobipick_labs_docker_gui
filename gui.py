@@ -1542,8 +1542,18 @@ class MainWindow(QMainWindow):
         self._log_info('stopping roscore master')
         self.set_roscore_visual('yellow', 'Shutting down...', enabled=False)
         self._roscore_stopping = True
-        self._killing = True
-        self.set_toggle_visual('yellow', 'Shutting down...', False)
+
+        sim_tab = self.tasks.get('sim')
+        sim_running = bool(sim_tab and sim_tab.is_running())
+        if not sim_running:
+            sim_running = bool(self._sim_running_cached)
+
+        if sim_running:
+            self._killing = True
+            self.set_toggle_visual('yellow', 'Shutting down...', False)
+        else:
+            self._killing = False
+            self._disable_toggle_preserving_visual('sim', self.sim_toggle_button)
         tables_running = 'tables' in self.tasks and self.tasks['tables'].is_running()
         rviz_running = 'rviz' in self.tasks and self.tasks['rviz'].is_running()
         rqt_running = 'rqt' in self.tasks and self.tasks['rqt'].is_running()
