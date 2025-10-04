@@ -1542,10 +1542,32 @@ class MainWindow(QMainWindow):
         self._log_info('stopping roscore master')
         self.set_roscore_visual('yellow', 'Shutting down...', enabled=False)
         self._roscore_stopping = True
-        self.set_tables_visual('yellow', 'Shutting down...', False)
-        self.set_rviz_visual('yellow', 'Shutting down...', False)
-        self.set_rqt_visual('yellow', 'Shutting down...', False)
-        self.set_script_visual('yellow', 'Shutting down...', False)
+        tables_running = 'tables' in self.tasks and self.tasks['tables'].is_running()
+        rviz_running = 'rviz' in self.tasks and self.tasks['rviz'].is_running()
+        rqt_running = 'rqt' in self.tasks and self.tasks['rqt'].is_running()
+        script_running = False
+        if self._script_active_tab_key and self._script_active_tab_key in self.tasks:
+            script_running = self.tasks[self._script_active_tab_key].is_running()
+
+        if tables_running:
+            self.set_tables_visual('yellow', 'Shutting down...', False)
+        else:
+            self._disable_toggle_preserving_visual('tables', self.tables_button)
+
+        if rviz_running:
+            self.set_rviz_visual('yellow', 'Shutting down...', False)
+        else:
+            self._disable_toggle_preserving_visual('rviz', self.rviz_button)
+
+        if rqt_running:
+            self.set_rqt_visual('yellow', 'Shutting down...', False)
+        else:
+            self._disable_toggle_preserving_visual('rqt', self.rqt_button)
+
+        if script_running:
+            self.set_script_visual('yellow', 'Shutting down...', False)
+        else:
+            self._disable_toggle_preserving_visual('script', self.run_script_button)
 
         tab = self._ensure_tab('roscore', 'Roscore', closable=False)
 
@@ -1866,6 +1888,11 @@ class MainWindow(QMainWindow):
         )
         button.setEnabled(enabled)
         self._toggle_states[key] = state
+
+    def _disable_toggle_preserving_visual(self, key: str, button: QPushButton):
+        current_state = self._toggle_states.get(key, 'red')
+        current_text = button.text()
+        self._set_toggle_state(key, button, current_state, current_text, False)
 
     def set_toggle_visual(self, state: str, text: str, enabled: bool):
         self._set_toggle_state('sim', self.sim_toggle_button, state, text, enabled)
