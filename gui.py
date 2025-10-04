@@ -21,10 +21,12 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import QProcess, QTimer, QProcessEnvironment, Qt
 from PyQt5.QtGui import QTextCursor, QTextDocument
 from collections import deque
-from typing import Deque, Callable, Optional
+from typing import Deque, Callable, Optional, Match
 
 # compiled once, reused by ansi_to_html
 SGR_RE = re.compile(r'\x1b\[(\d+(?:;\d+)*)m')
+OSC_SEQ_RE = re.compile(r'\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)')
+CSI_SEQ_RE = re.compile(r'\x1b\[[0-9;?]*[ -/]*[@-~]')
 COLOR_MAP = {
     30: '#000000', 31: '#ff5555', 32: '#50fa7b', 33: '#f1fa8c',
     34: '#bd93f9', 35: '#ff79c6', 36: '#8be9fd', 37: '#bbbbbb',
@@ -322,6 +324,7 @@ class ProcessTab:
         data = data_bytes.decode(errors='replace')
         if not data:
             return
+        data = self.parent._filter_terminal_escapes(data)
         data = data.replace('\r\n', '\n').replace('\r', '\n')
         self.parent._prepare_tab_for_origin(self.key, 'container')
         if '\x1b[' in data:
@@ -2326,10 +2329,12 @@ class MainWindow(QMainWindow):
         tab.output.clear()
         tab.container_name = container_name
         tab.exec_id = exec_id
+        quoted = self._sh_quote(container_name)
         script = (
-            f'until docker logs -f {self._sh_quote(container_name)}; do '
+            f'until docker container inspect {quoted} >/dev/null 2>&1; do '
             'sleep 0.2; '
-            'done'
+            'done; '
+            f'docker logs -f --tail 0 {quoted}'
         )
         tab.start_program('bash', ['-lc', script])
         self._focus_tab(key)
@@ -2540,6 +2545,20 @@ class MainWindow(QMainWindow):
 
     def _append_gui_html(self, key: str, html_text: str, *, color: str | None = None):
         self._append_html(key, html_text, gui=True, color=color)
+
+    def _filter_terminal_escapes(self, data: str) -> str:
+        if '\x1b' not in data:
+            return data
+        sanitized = OSC_SEQ_RE.sub('', data)
+        sanitized = sanitized.replace('\x07', '')
+
+        def _keep_sgr(match: Match[str]) -> str:
+            seq = match.group(0)
+            return seq if seq.endswith('m') else ''
+
+        sanitized = CSI_SEQ_RE.sub(_keep_sgr, sanitized)
+        sanitized = sanitized.replace('\x1b7', '').replace('\x1b8', '')
+        return sanitized
 
     # ---------- Utils ----------
 
