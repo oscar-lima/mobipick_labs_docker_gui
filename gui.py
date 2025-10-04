@@ -318,6 +318,7 @@ class ProcessTab:
         if not data:
             return
         data = data.replace('\r\n', '\n').replace('\r', '\n')
+        self.parent._prepare_tab_for_origin(self.key, 'container')
         if '\x1b[' in data:
             self.output.enqueue(True, ansi_to_html(data))
         else:
@@ -804,7 +805,8 @@ class MainWindow(QMainWindow):
     def _append_log_html(self, html_text: str):
         if 'log' not in self.tasks:
             return
-        self.tasks['log'].append_line_html(html_text)
+        tab = self._prepare_tab_for_origin('log', 'gui')
+        tab.append_line_html(html_text)
 
     def _append_command_output(self, key: str, text, *, is_html: bool = False):
         if text is None:
@@ -826,8 +828,6 @@ class MainWindow(QMainWindow):
                 self._append_html(key, ansi_to_html(line))
             else:
                 self._append_html(key, html.escape(line))
-        if lines:
-            self._last_log_origin[key] = 'container'
 
     def _log_cmd(self, args_or_str):
         ts = datetime.now().strftime('%H:%M:%S')
@@ -2241,15 +2241,22 @@ class MainWindow(QMainWindow):
                 return
         QMessageBox.information(self, 'Save Logs', f'Saved {len(entries)} log file(s).')
 
-    def _append_html(self, key: str, html_text: str, *, gui: bool = False, color: str | None = None):
+    def _prepare_tab_for_origin(self, key: str, origin: str) -> ProcessTab:
         tab = self._ensure_tab(key, key.title(), closable=(key.startswith('custom')))
+        last_origin = self._last_log_origin.get(key)
+        if last_origin and last_origin != origin:
+            tab.output.enqueue(True, '<br><br>')
+        self._last_log_origin[key] = origin
+        return tab
+
+    def _append_html(self, key: str, html_text: str, *, gui: bool = False, color: str | None = None):
         origin = 'gui' if gui else 'container'
+        tab = self._prepare_tab_for_origin(key, origin)
         if gui:
             color = html.escape(color or self._gui_log_color)
             tab.append_line_html(f'<span style="color:{color}">{html_text}</span>')
         else:
             tab.append_line_html(html_text)
-        self._last_log_origin[key] = origin
 
     def _append_gui_html(self, key: str, html_text: str, *, color: str | None = None):
         self._append_html(key, html_text, gui=True, color=color)
