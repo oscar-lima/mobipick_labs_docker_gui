@@ -1542,6 +1542,8 @@ class MainWindow(QMainWindow):
         self._log_info('stopping roscore master')
         self.set_roscore_visual('yellow', 'Shutting down...', enabled=False)
         self._roscore_stopping = True
+        self._killing = True
+        self.set_toggle_visual('yellow', 'Shutting down...', False)
         tables_running = 'tables' in self.tasks and self.tasks['tables'].is_running()
         rviz_running = 'rviz' in self.tasks and self.tasks['rviz'].is_running()
         rqt_running = 'rqt' in self.tasks and self.tasks['rqt'].is_running()
@@ -1601,6 +1603,7 @@ class MainWindow(QMainWindow):
                 self.set_roscore_visual('red', 'Start Roscore', enabled=True)
                 self._revoke_x()
                 self._sim_running_cached = False
+                self._killing = False
                 self.set_toggle_visual('red', 'Start Sim', enabled=True)
                 self.set_tables_visual('red', 'Run Tables Demo', True)
                 self.set_rviz_visual('red', 'Start RViz', True)
