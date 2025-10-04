@@ -2356,9 +2356,7 @@ class MainWindow(QMainWindow):
         if not _SIGINT_TRIGGERED:
             return
         _SIGINT_TRIGGERED = False
-        app = QApplication.instance()
-        if app:
-            app.quit()
+        self._begin_exit_sequence()
 
     def _begin_exit_sequence(self):
         if self._exit_in_progress:
