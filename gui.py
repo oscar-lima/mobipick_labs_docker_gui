@@ -15,7 +15,7 @@ from datetime import datetime
 
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QPushButton, QVBoxLayout, QWidget, QTextEdit,
-    QLineEdit, QHBoxLayout, QLabel, QSizePolicy,
+    QLineEdit, QHBoxLayout, QLabel, QSizePolicy, QFileDialog,
     QComboBox, QTabWidget, QMessageBox, QTabBar, QCheckBox
 )
 from PyQt5.QtCore import QProcess, QTimer, QProcessEnvironment, Qt
@@ -404,9 +404,18 @@ class MainWindow(QMainWindow):
         self.clear_button = QPushButton('Clear Current Tab')
         self.clear_button.clicked.connect(self.clear_current_tab)
 
+        self.clear_all_button = QPushButton('Clear All Tabs')
+        self.clear_all_button.clicked.connect(self.clear_all_tabs)
+
         self.refresh_sim_button = QPushButton('Update Status')
         self.refresh_sim_button.setToolTip('Re-check running status for toggles')
         self.refresh_sim_button.clicked.connect(self._on_refresh_clicked)
+
+        self.save_current_button = QPushButton('Save Current Log')
+        self.save_current_button.clicked.connect(self.save_current_log)
+
+        self.save_all_button = QPushButton('Save All Logs')
+        self.save_all_button.clicked.connect(self.save_all_logs)
 
         # actions row
         actions = QHBoxLayout()
@@ -481,9 +490,14 @@ class MainWindow(QMainWindow):
 
         controls_row = QHBoxLayout()
         controls_row.addWidget(self.clear_button)
+        controls_row.addWidget(self.clear_all_button)
+
         spacer_controls = QWidget()
         spacer_controls.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         controls_row.addWidget(spacer_controls)
+
+        controls_row.addWidget(self.save_current_button)
+        controls_row.addWidget(self.save_all_button)
         controls_row.addWidget(self.refresh_sim_button)
         root.addLayout(controls_row)
 
@@ -998,6 +1012,47 @@ class MainWindow(QMainWindow):
             ids.extend(self._docker_ps_ids([f'name={name}']))
             ids.extend(self._docker_ps_ids([f'label=com.docker.compose.oneoff.name={name}']))
         return list(dict.fromkeys(ids))
+
+    def _extract_widget_html(self, widget: QTextEdit) -> str | None:
+        doc = widget.document()
+        plain = doc.toPlainText()
+        if not plain or not plain.strip():
+            return None
+        html_content = doc.toHtml()
+        return html_content if html_content.strip() else None
+
+    def _suggest_log_filename(self, label: str) -> str:
+        slug = re.sub(r'[^a-zA-Z0-9_-]+', '_', label.strip().lower()).strip('_')
+        if not slug:
+            slug = 'log'
+        return f'{slug}.html'
+
+    @staticmethod
+    def _ensure_html_extension(path: str) -> str:
+        return path if path.lower().endswith('.html') else f'{path}.html'
+
+    def _resolve_unique_path(self, directory: str, filename: str) -> str:
+        base, ext = os.path.splitext(filename)
+        candidate = os.path.join(directory, filename)
+        counter = 1
+        while os.path.exists(candidate):
+            candidate = os.path.join(directory, f'{base}-{counter}{ext}')
+            counter += 1
+        return candidate
+
+    def _write_html_file(self, path: str, html_content: str) -> bool:
+        try:
+            with open(path, 'w', encoding='utf-8') as fh:
+                fh.write(html_content)
+            return True
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                'Save Log',
+                f"Failed to save log to {path}:\n{exc}",
+            )
+            return False
+
 
     def _collect_scripts(self) -> list[str]:
         if not self._scripts_dir.exists():
@@ -2078,6 +2133,62 @@ class MainWindow(QMainWindow):
         widget = self.tabs.currentWidget()
         if isinstance(widget, QTextEdit):
             widget.clear()
+
+    def clear_all_tabs(self):
+        for i in range(self.tabs.count()):
+            widget = self.tabs.widget(i)
+            if isinstance(widget, QTextEdit):
+                widget.clear()
+
+    def save_current_log(self):
+        index = self.tabs.currentIndex()
+        if index < 0:
+            return
+        widget = self.tabs.widget(index)
+        if not isinstance(widget, QTextEdit):
+            QMessageBox.information(self, 'Save Log', 'The current tab has no log to save.')
+            return
+        html = self._extract_widget_html(widget)
+        if html is None:
+            QMessageBox.information(self, 'Save Log', 'Nothing to save in the current tab.')
+            return
+        label = self.tabs.tabText(index).strip() or f'tab{index + 1}'
+        default_name = self._suggest_log_filename(label)
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            'Save Current Log',
+            default_name,
+            'HTML Files (*.html);;All Files (*)',
+        )
+        if not path:
+            return
+        path = self._ensure_html_extension(path)
+        self._write_html_file(path, html)
+
+    def save_all_logs(self):
+        entries: list[tuple[str, str]] = []
+        for i in range(self.tabs.count()):
+            widget = self.tabs.widget(i)
+            if not isinstance(widget, QTextEdit):
+                continue
+            html = self._extract_widget_html(widget)
+            if html is None:
+                continue
+            label = self.tabs.tabText(i).strip() or f'tab{i + 1}'
+            entries.append((label, html))
+        if not entries:
+            QMessageBox.information(self, 'Save Logs', 'There are no logs to save.')
+            return
+        directory = QFileDialog.getExistingDirectory(self, 'Select folder to save logs')
+        if not directory:
+            return
+        os.makedirs(directory, exist_ok=True)
+        for label, html in entries:
+            filename = self._suggest_log_filename(label)
+            path = self._resolve_unique_path(directory, filename)
+            if not self._write_html_file(path, html):
+                return
+        QMessageBox.information(self, 'Save Logs', f'Saved {len(entries)} log file(s).')
 
     def _append_html(self, key: str, html_text: str):
         self._ensure_tab(key, key.title(), closable=(key.startswith('custom'))).append_line_html(html_text)
