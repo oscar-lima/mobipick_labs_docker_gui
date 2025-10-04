@@ -447,6 +447,9 @@ class MainWindow(QMainWindow):
         self.save_current_button = QPushButton('Save Current Log')
         self.save_current_button.clicked.connect(self.save_current_log)
 
+        self.load_log_button = QPushButton('Load Log')
+        self.load_log_button.clicked.connect(self.load_log_file)
+
         self.save_all_button = QPushButton('Save All Logs')
         self.save_all_button.clicked.connect(self.save_all_logs)
 
@@ -530,6 +533,7 @@ class MainWindow(QMainWindow):
         controls_row.addWidget(spacer_controls)
 
         controls_row.addWidget(self.save_current_button)
+        controls_row.addWidget(self.load_log_button)
         controls_row.addWidget(self.save_all_button)
         controls_row.addWidget(self.refresh_sim_button)
         root.addLayout(controls_row)
@@ -1397,8 +1401,8 @@ class MainWindow(QMainWindow):
         if key is None:
             return
         tab = self.tasks[key]
-        if not key.startswith('custom'):
-            QMessageBox.information(self, 'Info', 'Only custom tabs can be closed.')
+        if not (key.startswith('custom') or key.startswith('loadedlog')):
+            QMessageBox.information(self, 'Info', 'Only custom and loaded log tabs can be closed.')
             return
         if tab.is_running():
             try:
@@ -2437,6 +2441,35 @@ class MainWindow(QMainWindow):
             return
         path = self._ensure_html_extension(path)
         self._write_html_file(path, html)
+
+    def load_log_file(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            'Load Log',
+            '',
+            'HTML Files (*.html);;All Files (*)',
+        )
+        if not path:
+            return
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                html_content = f.read()
+        except Exception as exc:
+            QMessageBox.critical(self, 'Load Log', f'Failed to load log file:\n{exc}')
+            return
+        if not html_content.strip():
+            QMessageBox.information(self, 'Load Log', 'The selected log file is empty.')
+            return
+        label = Path(path).stem or 'log'
+        key = f'loadedlog_{uuid.uuid4().hex}'
+        tab = self._ensure_tab(key, label, closable=True)
+        widget = tab.output
+        widget.clear()
+        widget.setHtml(html_content)
+        index = self.tabs.indexOf(widget)
+        if index >= 0:
+            self.tabs.setTabText(index, label)
+        self._focus_tab(key)
 
     def save_all_logs(self):
         entries: list[tuple[str, str]] = []
