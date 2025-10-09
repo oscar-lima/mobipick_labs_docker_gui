@@ -37,7 +37,6 @@ from PyQt5.QtWidgets import (
 from .ansi import CSI_SEQ_RE, OSC_SEQ_RE, ansi_to_html
 from .config import CONFIG, DEFAULT_YAML_PATH, PROJECT_ROOT, SCRIPT_CLEAN
 from .process_tab import ProcessTab
-from .web_bridge import NullWebBridge, WebBridge
 
 _SIGINT_TRIGGERED = False
 
@@ -49,7 +48,7 @@ def trigger_sigint():
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, verbosity: int = 1, *, web_bridge: WebBridge | None = None):
+    def __init__(self, verbosity: int = 1):
         super().__init__()
 
         try:
@@ -57,10 +56,6 @@ class MainWindow(QMainWindow):
         except (TypeError, ValueError):
             value = 1
         self._verbosity = max(1, min(3, value))
-
-        self._web_bridge = web_bridge or NullWebBridge()
-        if web_bridge is not None:
-            web_bridge.attach_window(self)
 
         window_cfg = CONFIG['window']
         self.setWindowTitle(window_cfg['title'])
@@ -177,9 +172,6 @@ class MainWindow(QMainWindow):
         self.world_combo = QComboBox()
         actions.addWidget(self.world_combo)
         self.world_combo.currentIndexChanged.connect(self._on_world_changed)
-        self.world_combo.currentIndexChanged.connect(
-            lambda _idx: self._publish_combo_state('world', self.world_combo)
-        )
 
         self.image_label = QLabel('image:')
         actions.addWidget(self.image_label)
@@ -187,9 +179,6 @@ class MainWindow(QMainWindow):
         self.image_combo = QComboBox()
         actions.addWidget(self.image_combo)
         self.image_combo.currentIndexChanged.connect(self._on_image_changed)
-        self.image_combo.currentIndexChanged.connect(
-            lambda _idx: self._publish_combo_state('image', self.image_combo)
-        )
 
         self.reload_images_button = QPushButton('Refresh Images')
         self.reload_images_button.clicked.connect(self._reload_images)
@@ -202,9 +191,6 @@ class MainWindow(QMainWindow):
         self.script_combo = QComboBox()
         self.script_combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         scripts_row.addWidget(self.script_combo)
-        self.script_combo.currentIndexChanged.connect(
-            lambda _idx: self._publish_combo_state('script', self.script_combo)
-        )
         self.refresh_scripts_button = QPushButton('Refresh Scripts')
         self.refresh_scripts_button.clicked.connect(self._on_refresh_scripts_clicked)
         scripts_row.addWidget(self.refresh_scripts_button)
@@ -488,7 +474,6 @@ class MainWindow(QMainWindow):
             self.image_combo.setEnabled(False)
         self.image_combo.blockSignals(False)
         self.image_combo.setToolTip(self._selected_image or 'No image selected')
-        self._publish_combo_state('image', self.image_combo)
 
         if show_feedback:
             if choices:
@@ -866,7 +851,6 @@ class MainWindow(QMainWindow):
                 self.script_combo.setCurrentIndex(0)
                 self.script_combo.setEnabled(False)
             self.script_combo.blockSignals(False)
-            self._publish_combo_state('script', self.script_combo)
         script_running = bool(
             self._script_active_tab_key and self._script_active_tab_key in self.tasks and self.tasks[self._script_active_tab_key].is_running()
         )
@@ -1065,7 +1049,6 @@ class MainWindow(QMainWindow):
         if key == 'sim':
             self.tabs.setCurrentIndex(idx)
         self.tasks[key] = tab
-        self._web_bridge.ensure_tab(key, label, closable)
         return tab
 
     def _apply_close_button(self, index: int, closable: bool):
@@ -1140,7 +1123,6 @@ class MainWindow(QMainWindow):
                 pass
         self.tabs.removeTab(index)
         del self.tasks[key]
-        self._web_bridge.remove_tab(key)
 
     def _focus_tab(self, key: str):
         w = self.tasks[key].output
@@ -1185,7 +1167,6 @@ class MainWindow(QMainWindow):
         self.world_combo.setCurrentIndex(index)
         self.world_combo.blockSignals(False)
         self._selected_world = self.world_combo.currentText().strip() or self._default_world
-        self._publish_combo_state('world', self.world_combo)
         self._on_world_changed(self.world_combo.currentIndex())
 
     # ---------- Sim control ----------
@@ -1690,18 +1671,6 @@ class MainWindow(QMainWindow):
         )
         button.setEnabled(enabled)
         self._toggle_states[key] = state
-        self._web_bridge.update_toggle(
-            key,
-            state=state,
-            text=text,
-            enabled=enabled,
-            colors={
-                'bg': bg,
-                'fg': fg,
-                'padding': padding,
-                'disabled_opacity': disabled_opacity,
-            },
-        )
 
     def _disable_toggle_preserving_visual(self, key: str, button: QPushButton):
         current_state = self._toggle_states.get(key, 'red')
@@ -2275,12 +2244,9 @@ class MainWindow(QMainWindow):
         tab = self._prepare_tab_for_origin(key, origin)
         if gui:
             color = html.escape(color or self._gui_log_color)
-            rendered = f'<span style="color:{color}">{html_text}</span>'
-            tab.append_line_html(rendered)
-            self._web_bridge.append_log(key, rendered, origin=origin)
+            tab.append_line_html(f'<span style="color:{color}">{html_text}</span>')
         else:
             tab.append_line_html(html_text)
-            self._web_bridge.append_log(key, html_text, origin=origin)
 
     def _append_gui_html(self, key: str, html_text: str, *, color: str | None = None):
         self._append_html(key, html_text, gui=True, color=color)
@@ -2319,11 +2285,6 @@ class MainWindow(QMainWindow):
     @staticmethod
     def _sh_quote(s: str) -> str:
         return "'" + s.replace("'", "'\\''") + "'"
-
-    def _publish_combo_state(self, name: str, combo: QComboBox):
-        options = [combo.itemText(i) for i in range(combo.count())]
-        current = combo.currentText() if combo.currentIndex() >= 0 else None
-        self._web_bridge.update_combobox(name, options=options, current=current)
 
     # ---------- Search within current tab ----------
 
