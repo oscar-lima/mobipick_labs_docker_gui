@@ -36,6 +36,8 @@ from PyQt5.QtWidgets import (
 
 from .ansi import CSI_SEQ_RE, OSC_SEQ_RE, ansi_to_html
 from .config import CONFIG, DEFAULT_YAML_PATH, PROJECT_ROOT, SCRIPT_CLEAN
+
+CONTAINER_SCRIPTS_DIR = '/root/scripts_430ofkjl04fsw'
 from .process_tab import ProcessTab
 
 _SIGINT_TRIGGERED = False
@@ -687,7 +689,7 @@ class MainWindow(QMainWindow):
             exec_id = uuid.uuid4().hex
             tab.exec_id = exec_id
             tab.container_name = f'mpcmd-{exec_id[:10]}'
-            inner = f"python3 /root/scripts/{self._sh_quote(script)}"
+            inner = f"python3 {CONTAINER_SCRIPTS_DIR}/{self._sh_quote(script)}"
             args = [
                 'compose', 'run', '--rm', '--name', tab.container_name,
                 '--label', f'mobipick.exec={exec_id}', '--label', f'mobipick.tab={key_target}',
