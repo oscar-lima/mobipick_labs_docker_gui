@@ -35,7 +35,13 @@ from PyQt5.QtWidgets import (
 )
 
 from .ansi import CSI_SEQ_RE, OSC_SEQ_RE, ansi_to_html
-from .config import CONFIG, DEFAULT_YAML_PATH, PROJECT_ROOT, SCRIPT_CLEAN
+from .config import (
+    CONFIG,
+    DEFAULT_YAML_PATH,
+    PROJECT_ROOT,
+    SCRIPT_CLEAN,
+    load_docker_cp_config,
+)
 
 CONTAINER_SCRIPTS_DIR = '/root/scripts_430ofkjl04fsw'
 from .process_tab import ProcessTab
@@ -95,6 +101,8 @@ class MainWindow(QMainWindow):
         self._terminal_stream_tab_key: str | None = None
         self._terminal_stream_counter = 0
         self._project_root = PROJECT_ROOT
+        self._docker_cp_config = load_docker_cp_config()
+        self._synced_container_refs: set[str] = set()
         self._toggle_states: dict[str, str] = {}
         self._last_log_origin: dict[str, str] = {}
         self._gui_log_color = str(CONFIG['log'].get('gui_log_color', '#ff00ff'))
@@ -155,6 +163,10 @@ class MainWindow(QMainWindow):
         self.commit_current_tab_button = QPushButton('Commit Current Tab')
         self.commit_current_tab_button.setToolTip('Create a docker image from the container backing the current tab')
         self.commit_current_tab_button.clicked.connect(self.commit_current_tab)
+
+        self.execute_docker_cp_button = QPushButton('Execute Docker cp')
+        self.execute_docker_cp_button.setToolTip('Copy configured paths from the active container to the host')
+        self.execute_docker_cp_button.clicked.connect(self.execute_docker_cp_from_container)
 
         self.refresh_sim_button = QPushButton('Update Status')
         self.refresh_sim_button.setToolTip('Re-check running status for toggles')
@@ -244,6 +256,7 @@ class MainWindow(QMainWindow):
         controls_row.addWidget(self.clear_button)
         controls_row.addWidget(self.clear_all_button)
         controls_row.addWidget(self.commit_current_tab_button)
+        controls_row.addWidget(self.execute_docker_cp_button)
 
         spacer_controls = QWidget()
         spacer_controls.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
@@ -397,6 +410,127 @@ class MainWindow(QMainWindow):
             repo, tag = image_ref.rsplit(':', 1)
             return repo, tag
         return image_ref, ''
+
+    def _docker_cp_entries(self, direction: str) -> list[dict[str, str]]:
+        config = getattr(self, '_docker_cp_config', {}) or {}
+        if direction not in {'host_to_container', 'container_to_host'}:
+            return []
+        if not config:
+            return []
+
+        image_ref = (self._selected_image or '').strip()
+        repo, tag = self._split_image_ref(image_ref)
+
+        candidates: list[str] = []
+        for candidate in ('default', '*', 'all'):
+            if candidate in config and candidate not in candidates:
+                candidates.append(candidate)
+        if '' in config and '' not in candidates and not image_ref:
+            candidates.append('')
+        for candidate in (image_ref, repo, tag):
+            if candidate and candidate in config and candidate not in candidates:
+                candidates.append(candidate)
+
+        entries: list[dict[str, str]] = []
+        for key in candidates:
+            section = config.get(key) or {}
+            values = section.get(direction)
+            if isinstance(values, list):
+                entries.extend(v for v in values if isinstance(v, dict))
+        return entries
+
+    @staticmethod
+    def _expand_host_path(path: str) -> str:
+        return os.path.expanduser(os.path.expandvars(path or ''))
+
+    def _container_reference_for_tab(self, tab: ProcessTab) -> str | None:
+        container_name = getattr(tab, 'container_name', None)
+        exec_id = getattr(tab, 'exec_id', None)
+        ids = self._resolve_container_ids(name=container_name, exec_id=exec_id)
+        if ids:
+            return ids[0]
+        return container_name
+
+    def _schedule_host_to_container_copy(self, tab: ProcessTab, attempt: int = 0):
+        if attempt > 6:
+            return
+        if not isinstance(tab, ProcessTab):
+            return
+        if not getattr(tab, 'container_name', None):
+            return
+        entries = self._docker_cp_entries('host_to_container')
+        if not entries:
+            return
+
+        delay_ms = 500 if attempt == 0 else 1000
+
+        def _attempt():
+            if not getattr(tab, 'container_name', None):
+                return
+            container_ref = self._container_reference_for_tab(tab)
+            if not container_ref:
+                self._schedule_host_to_container_copy(tab, attempt + 1)
+                return
+            ref_key = f'{container_ref}:{tab.key}'
+            if ref_key in self._synced_container_refs:
+                return
+            commands = self._build_host_to_container_commands(container_ref, entries, tab)
+            self._synced_container_refs.add(ref_key)
+            if not commands:
+                return
+            self._append_gui_html(tab.key, '<i>Copying configured host files into container...</i>')
+            self._run_command_sequence(commands, log_key=tab.key)
+
+        QTimer.singleShot(delay_ms, _attempt)
+
+    def _build_host_to_container_commands(
+        self,
+        container_ref: str,
+        entries: list[dict[str, str]],
+        tab: ProcessTab,
+    ) -> list[list[str]]:
+        commands: list[list[str]] = []
+        for entry in entries:
+            host_path = self._expand_host_path(entry.get('host', ''))
+            container_path = entry.get('container', '')
+            if not host_path or not container_path:
+                continue
+            if not os.path.exists(host_path):
+                self._append_gui_html(
+                    tab.key,
+                    f'<i>docker cp skipped (missing host path): {html.escape(host_path)}</i>',
+                )
+                continue
+            commands.append(['docker', 'cp', host_path, f'{container_ref}:{container_path}'])
+        return commands
+
+    def _build_container_to_host_commands(
+        self,
+        container_ref: str,
+        entries: list[dict[str, str]],
+        tab_key: str,
+    ) -> list[list[str]]:
+        commands: list[list[str]] = []
+        for entry in entries:
+            host_path_raw = entry.get('host', '')
+            container_path = entry.get('container', '')
+            host_path = self._expand_host_path(host_path_raw)
+            if not host_path or not container_path:
+                continue
+            target = Path(host_path)
+            try:
+                if host_path.endswith(os.sep):
+                    target.mkdir(parents=True, exist_ok=True)
+                else:
+                    target.parent.mkdir(parents=True, exist_ok=True)
+            except Exception as exc:
+                self._append_gui_html(
+                    tab_key,
+                    f'<i>Failed to prepare host path {html.escape(host_path)}: {html.escape(str(exc))}</i>',
+                )
+                continue
+            commands.append(['docker', 'cp', f'{container_ref}:{container_path}', host_path])
+        return commands
 
     def _current_world(self) -> str:
         world = (self._selected_world or '').strip()
@@ -702,6 +836,7 @@ class MainWindow(QMainWindow):
                 'mobipick_cmd', 'bash', '-lc', self._wrap_line_buffered(inner)
             ]
             tab.start_program('docker', args)
+            self._schedule_host_to_container_copy(tab)
             self._script_active_tab_key = key_target
             self.set_script_visual('green', 'Stop Script', True)
             self._focus_tab(key_target)
@@ -1282,6 +1417,7 @@ class MainWindow(QMainWindow):
             'mobipick_cmd', 'bash', '-lc', self._wrap_line_buffered(inner)
         ]
         tab.start_program('docker', args)
+        self._schedule_host_to_container_copy(tab)
         self._focus_tab('roscore')
 
     def shutdown_roscore(self):
@@ -1412,6 +1548,7 @@ class MainWindow(QMainWindow):
                 'mobipick'
             ]
             tab.start_program('docker', args)
+            self._schedule_host_to_container_copy(tab)
             self._focus_tab('sim')
 
             # event driven state
@@ -1763,6 +1900,7 @@ class MainWindow(QMainWindow):
                 'mobipick_cmd', 'bash', '-lc', self._wrap_line_buffered(inner)
             ]
             tab.start_program('docker', args)
+            self._schedule_host_to_container_copy(tab)
             self.set_tables_visual('green', 'Stop Tables Demo', True)
             self._focus_tab('tables')
 
@@ -1810,6 +1948,7 @@ class MainWindow(QMainWindow):
                 'mobipick_cmd', 'bash', '-lc', self._wrap_line_buffered(rviz_cmd)
             ]
             tab.start_program('docker', args)
+            self._schedule_host_to_container_copy(tab)
             self.set_rviz_visual('green', 'Stop RViz', True)
             self._focus_tab('rviz')
 
@@ -1858,6 +1997,7 @@ class MainWindow(QMainWindow):
                 'mobipick_cmd', 'bash', '-lc', self._wrap_line_buffered(cmd)
             ]
             tab.start_program('docker', args)
+            self._schedule_host_to_container_copy(tab)
             self.set_rqt_visual('green', 'Stop RQt Tables', True)
             self._focus_tab('rqt')
 
@@ -2074,6 +2214,7 @@ class MainWindow(QMainWindow):
                 'mobipick_cmd', 'bash', '-lc', wrapped
             ]
             tab.start_program('docker', args)
+            self._schedule_host_to_container_copy(tab)
             self._focus_tab(key_target)
             self._update_stop_custom_enabled()
 
@@ -2214,6 +2355,42 @@ class MainWindow(QMainWindow):
             if stderr_text:
                 self._append_gui_html(key, html.escape(stderr_text))
             QMessageBox.warning(self, 'Commit Current Tab', 'Failed to commit the current tab container. Check the tab log for details.')
+
+    def execute_docker_cp_from_container(self):
+        self._log_button_click(self.execute_docker_cp_button, 'Execute Docker cp')
+
+        key = self._current_tab_key()
+        if not key:
+            QMessageBox.information(self, 'Execute Docker cp', 'Select a tab before copying from its container.')
+            return
+
+        tab = self.tasks.get(key)
+        if not tab:
+            QMessageBox.information(self, 'Execute Docker cp', 'The selected tab is unavailable.')
+            return
+
+        container_name = getattr(tab, 'container_name', None)
+        if not container_name:
+            QMessageBox.information(self, 'Execute Docker cp', 'The current tab is not associated with a running container.')
+            return
+
+        entries = self._docker_cp_entries('container_to_host')
+        if not entries:
+            QMessageBox.information(self, 'Execute Docker cp', 'No docker cp paths configured for the selected image.')
+            return
+
+        container_ref = self._container_reference_for_tab(tab)
+        if not container_ref:
+            QMessageBox.warning(self, 'Execute Docker cp', 'Unable to determine the running container for the current tab.')
+            return
+
+        commands = self._build_container_to_host_commands(container_ref, entries, key)
+        if not commands:
+            self._append_gui_html(key, '<i>No docker cp commands to execute for the current configuration.</i>')
+            return
+
+        self._append_gui_html(key, '<i>Copying configured container paths to the host...</i>')
+        self._run_command_sequence(commands, log_key=key)
 
     def save_current_log(self):
         index = self.tabs.currentIndex()
