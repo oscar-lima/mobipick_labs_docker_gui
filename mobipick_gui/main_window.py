@@ -152,6 +152,10 @@ class MainWindow(QMainWindow):
         self.clear_all_button = QPushButton('Clear All Tabs')
         self.clear_all_button.clicked.connect(self.clear_all_tabs)
 
+        self.commit_current_tab_button = QPushButton('Commit Current Tab')
+        self.commit_current_tab_button.setToolTip('Create a docker image from the container backing the current tab')
+        self.commit_current_tab_button.clicked.connect(self.commit_current_tab)
+
         self.refresh_sim_button = QPushButton('Update Status')
         self.refresh_sim_button.setToolTip('Re-check running status for toggles')
         self.refresh_sim_button.clicked.connect(self._on_refresh_clicked)
@@ -239,6 +243,7 @@ class MainWindow(QMainWindow):
         controls_row = QHBoxLayout()
         controls_row.addWidget(self.clear_button)
         controls_row.addWidget(self.clear_all_button)
+        controls_row.addWidget(self.commit_current_tab_button)
 
         spacer_controls = QWidget()
         spacer_controls.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
@@ -2153,6 +2158,62 @@ class MainWindow(QMainWindow):
             if isinstance(widget, QTextEdit):
                 widget.clear()
         self._last_log_origin.clear()
+
+    def commit_current_tab(self):
+        self._log_button_click(self.commit_current_tab_button, 'Commit Current Tab')
+
+        key = self._current_tab_key()
+        if not key:
+            QMessageBox.information(self, 'Commit Current Tab', 'Select a tab before committing its container.')
+            return
+
+        tab = self.tasks.get(key)
+        if not tab:
+            QMessageBox.information(self, 'Commit Current Tab', 'The selected tab is unavailable.')
+            return
+
+        container_name = getattr(tab, 'container_name', None)
+        if not container_name:
+            QMessageBox.information(self, 'Commit Current Tab', 'The current tab is not associated with a running container.')
+            return
+
+        image_ref = (self._selected_image or '').strip()
+        if not image_ref:
+            QMessageBox.information(self, 'Commit Current Tab', 'Choose a target image from the image list before committing.')
+            return
+
+        container_ref = container_name
+        try:
+            inspect_cp = self._sp_run(
+                ['docker', 'container', 'inspect', '--format', '{{.Id}}', container_name],
+                log_key='log',
+                log_stdout=False,
+                text=True,
+            )
+        except Exception as exc:  # pragma: no cover - defensive logging
+            self._console_log(1, f'Failed to inspect container {container_name}: {exc}')
+        else:
+            if inspect_cp.returncode == 0:
+                container_id = (inspect_cp.stdout or '').strip()
+                if container_id:
+                    if container_id.startswith('sha256:'):
+                        container_id = container_id.split(':', 1)[1]
+                    container_ref = container_id[:64] or container_ref
+
+        commit_cp = self._sp_run(
+            ['docker', 'commit', container_ref, image_ref],
+            log_key=key,
+            text=True,
+        )
+
+        if commit_cp.returncode == 0:
+            message = f'Committed container {container_name} to image {image_ref}.'
+            self._append_gui_html(key, html.escape(message))
+        else:
+            stderr_text = self._decode_output(getattr(commit_cp, 'stderr', '')).strip()
+            if stderr_text:
+                self._append_gui_html(key, html.escape(stderr_text))
+            QMessageBox.warning(self, 'Commit Current Tab', 'Failed to commit the current tab container. Check the tab log for details.')
 
     def save_current_log(self):
         index = self.tabs.currentIndex()
