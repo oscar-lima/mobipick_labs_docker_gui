@@ -10,6 +10,7 @@ import yaml
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 CONFIG_FILE = PROJECT_ROOT / 'config' / 'gui_settings.yaml'
+DOCKER_CP_CONFIG_FILE = PROJECT_ROOT / 'config' / 'docker_cp_image_tag.yaml'
 SCRIPT_CLEAN = str(PROJECT_ROOT / 'clean.bash')
 DEFAULT_YAML_PATH = str(PROJECT_ROOT / 'config' / 'worlds.yaml')
 
@@ -110,11 +111,55 @@ def _load_config() -> Dict:
 
 CONFIG = _load_config()
 
+
+def load_docker_cp_config() -> Dict[str, Dict[str, list[dict]]]:
+    """Load optional docker cp mappings keyed by image references."""
+
+    def _normalize(entries) -> list[dict]:
+        if not isinstance(entries, list):
+            return []
+        normalized: list[dict] = []
+        for item in entries:
+            if not isinstance(item, dict):
+                continue
+            host = item.get('host') or item.get('host_path')
+            container = item.get('container') or item.get('container_path')
+            if not isinstance(host, str) or not isinstance(container, str):
+                continue
+            normalized.append({'host': host, 'container': container})
+        return normalized
+
+    config: Dict[str, Dict[str, list[dict]]] = {}
+    try:
+        if DOCKER_CP_CONFIG_FILE.is_file():
+            with open(DOCKER_CP_CONFIG_FILE, 'r', encoding='utf-8') as handle:
+                data = yaml.safe_load(handle) or {}
+            if isinstance(data, dict):
+                for key, section in data.items():
+                    if not isinstance(section, dict):
+                        continue
+                    host_to_container = _normalize(section.get('host_to_container'))
+                    container_to_host = _normalize(section.get('container_to_host'))
+                    if not host_to_container and not container_to_host:
+                        continue
+                    config[str(key)] = {
+                        'host_to_container': host_to_container,
+                        'container_to_host': container_to_host,
+                    }
+    except Exception as exc:  # pragma: no cover - defensive logging
+        print(
+            f'Warning: failed to load docker cp configuration from {DOCKER_CP_CONFIG_FILE}: {exc}',
+            file=sys.stderr,
+        )
+    return config
+
 __all__ = [
     'CONFIG',
     'CONFIG_DEFAULTS',
     'CONFIG_FILE',
+    'DOCKER_CP_CONFIG_FILE',
     'DEFAULT_YAML_PATH',
+    'load_docker_cp_config',
     'PROJECT_ROOT',
     'SCRIPT_CLEAN',
 ]

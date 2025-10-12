@@ -1,0 +1,30 @@
+# Optional docker cp mappings keyed by image reference.
+#
+# Use the "default" section to define entries that apply to all images.
+# Additional sections can be keyed by the full image reference
+# (e.g. "brean/mobipick_labs:noetic") or just the repository name.
+#
+# Each mapping requires a host path and a container path. Host paths may
+# include "~" or environment variables, which will be expanded.
+#
+# Files listed in "host_to_container" are copied automatically into the
+# container shortly after it starts. Entries under "container_to_host"
+# are copied when the "Execute Docker cp" button is pressed.
+#
+# Example:
+# brean/mobipick_labs:noetic:
+#   host_to_container:
+#     - host: ~/Downloads/nav3.rviz
+#       container: /root/catkin_ws/src/mobipick_labs/tables_demo_bringup/config/nav3.rviz
+#   container_to_host:
+#     - host: ~/Downloads/nav4.rviz
+#       container: /root/catkin_ws/src/mobipick_labs/tables_demo_bringup/config/nav4.rviz
+#
+# By default no automatic copies are performed from container to host.
+default:
+  host_to_container: # automatically copied over after container starts
+    - host: ~/Downloads/pick_n_place.rviz
+      container: /root/catkin_ws/src/mobipick_labs/tables_demo_bringup/config/pick_n_place.rviz
+  container_to_host: # need button press
+    - container: /root/catkin_ws/src/mobipick_labs/tables_demo_bringup/config/pick_n_place.rviz
+      host: ~/Downloads/pick_n_place.rviz
