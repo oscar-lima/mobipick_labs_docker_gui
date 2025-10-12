@@ -20,7 +20,11 @@
 #     - host: ~/Downloads/nav4.rviz
 #       container: /root/catkin_ws/src/mobipick_labs/tables_demo_bringup/config/nav4.rviz
 #
-# By default no automatic copies are performed.
+# By default no automatic copies are performed from container to host.
 default:
-  host_to_container: []
-  container_to_host: []
+  host_to_container: # automatically copied over after container starts
+    - host: ~/Downloads/pick_n_place.rviz
+      container: /root/catkin_ws/src/mobipick_labs/tables_demo_bringup/config/pick_n_place.rviz
+  container_to_host: # need button press
+    - container: /root/catkin_ws/src/mobipick_labs/tables_demo_bringup/config/pick_n_place.rviz
+      host: ~/Downloads/pick_n_place.rviz
