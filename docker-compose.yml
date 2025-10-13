@@ -44,6 +44,7 @@ services:
       - XDG_RUNTIME_DIR 
       - __NV_PRIME_RENDER_OFFLOAD
       - __GLX_VENDOR_LIBRARY_NAME
+      - DISABLE_ROS1_EOL_WARNINGS=1
     volumes:
       - /tmp/.X11-unix:/tmp/.X11-unix:ro  # for gazebo gui
       - /run/user:/run/user:ro  # for Gazebo GUI
