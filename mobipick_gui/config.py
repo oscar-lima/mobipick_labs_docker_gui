@@ -68,6 +68,7 @@ CONFIG_DEFAULTS: Dict[str, Dict] = {
         'dialog_message': 'Shutting down simulation and cleaning up. Please wait...',
         'log_start_message': 'Shutting down containers before exit...',
         'log_done_message': 'Shutdown complete. Exiting...',
+        'docker_stop_timeout': 3,
     },
     'images': {
         'default': 'brean/mobipick_labs:noetic',

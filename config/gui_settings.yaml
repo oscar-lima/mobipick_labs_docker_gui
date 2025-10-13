@@ -55,3 +55,4 @@ exit:
   dialog_message: "Shutting down simulation and cleaning up. Please wait..."  # body text while we tear down containers
   log_start_message: "Shutting down containers before exit..."                # console message when exit sequence begins
   log_done_message: "Shutdown complete. Exiting..."                          # console message once cleanup finishes
+  docker_stop_timeout: 3                               # seconds docker stop waits before force killing containers (lower = faster exit)
