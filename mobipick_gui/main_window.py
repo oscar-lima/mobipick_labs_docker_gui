@@ -118,6 +118,7 @@ class MainWindow(QMainWindow):
         self._cleanup_done = False
         self._exit_in_progress = False
         self._exit_dialog: Optional[QMessageBox] = None
+        self._docker_stop_timeout = self._normalize_stop_timeout(CONFIG['exit'].get('docker_stop_timeout'))
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -382,6 +383,26 @@ class MainWindow(QMainWindow):
             shell_cmd += ' >/dev/null 2>&1'
         shell_cmd += ' || true'
         return ['bash', '-lc', shell_cmd]
+
+    @staticmethod
+    def _normalize_stop_timeout(value) -> int | None:
+        try:
+            timeout = int(value)
+        except (TypeError, ValueError):
+            return None
+        if timeout < 0:
+            return None
+        return timeout
+
+    def _docker_stop_args(self, container_id: str) -> list[str]:
+        if self._docker_stop_timeout is None:
+            return ['stop', container_id]
+        return ['stop', '--time', str(self._docker_stop_timeout), container_id]
+
+    def _docker_stop_display(self, label: str) -> str:
+        if self._docker_stop_timeout is None:
+            return f'docker stop {label}'
+        return f'docker stop --time {self._docker_stop_timeout} {label}'
 
     def _ensure_network(self, *, log_key: str = 'log') -> bool:
         try:
@@ -1580,7 +1601,8 @@ class MainWindow(QMainWindow):
         if tab:
             label = name or (exec_id or 'container')
             self._append_gui_html(tab.key, f'<i>docker kill -s INT {html.escape(label)}</i>')
-            self._append_gui_html(tab.key, f'<i>docker stop {html.escape(label)}</i>')
+            stop_cmd = self._docker_stop_display(label)
+            self._append_gui_html(tab.key, f'<i>{html.escape(stop_cmd)}</i>')
         self._run_command_sequence(
             commands,
             log_key=(tab.key if tab else 'log'),
@@ -1639,16 +1661,17 @@ class MainWindow(QMainWindow):
         for cid in ids:
             if include_int:
                 commands.append(self._safe_docker_cmd('kill', '-s', 'INT', cid))
-            commands.append(self._safe_docker_cmd('stop', cid))
+            commands.append(self._safe_docker_cmd(*self._docker_stop_args(cid)))
         return commands
 
     def _docker_stop_if_exists(self, name: str | None, tab: ProcessTab | None = None, exec_id: str | None = None) -> list[list[str]]:
         commands: list[list[str]] = []
         ids = self._resolve_container_ids(name=name, exec_id=exec_id)
         for cid in ids:
-            commands.append(self._safe_docker_cmd('stop', cid))
+            commands.append(self._safe_docker_cmd(*self._docker_stop_args(cid)))
             if tab:
-                self._append_gui_html(tab.key, f'<i>docker stop {html.escape(cid)}</i>')
+                stop_cmd = self._docker_stop_display(cid)
+                self._append_gui_html(tab.key, f'<i>{html.escape(stop_cmd)}</i>')
         return commands
 
     def _collect_exit_commands(self) -> list[list[str]]:
@@ -1715,7 +1738,7 @@ class MainWindow(QMainWindow):
                         f'<i>Stopping related containers: {html.escape(" ".join(running_ids))}</i>'
                     )
                 for cid in running_ids:
-                    commands.append(self._safe_docker_cmd('stop', cid))
+                    commands.append(self._safe_docker_cmd(*self._docker_stop_args(cid)))
 
             if skipped and tab:
                 self._append_gui_html(
