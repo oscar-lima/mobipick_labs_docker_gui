@@ -2526,6 +2526,15 @@ class MainWindow(QMainWindow):
 
         sanitized = CSI_SEQ_RE.sub(_keep_sgr, sanitized)
         sanitized = sanitized.replace('\x1b7', '').replace('\x1b8', '')
+        if '\b' in sanitized:
+            out_chars: list[str] = []
+            for ch in sanitized:
+                if ch == '\b':
+                    if out_chars:
+                        out_chars.pop()
+                else:
+                    out_chars.append(ch)
+            sanitized = ''.join(out_chars)
         return sanitized
 
     def _collapse_carriage_returns(self, text: str) -> str:

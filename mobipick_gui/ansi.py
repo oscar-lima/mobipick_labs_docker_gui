@@ -4,7 +4,7 @@ from __future__ import annotations
 import html
 import re
 
-SGR_RE = re.compile(r'\x1b\[(\d+(?:;\d+)*)m')
+SGR_RE = re.compile(r'\x1b\[((?:\d+;)*\d*)m')
 OSC_SEQ_RE = re.compile(r'\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)')
 CSI_SEQ_RE = re.compile(r'\x1b\[[0-9;?]*[ -/]*[@-~]')
 
@@ -23,7 +23,7 @@ def ansi_to_html(chunk: str) -> str:
     i = 0
     for m in SGR_RE.finditer(text):
         out.append(text[i:m.start()])
-        params = m.group(1)
+        params = m.group(1) or '0'
         if params == '0':
             while span_stack:
                 out.append('</span>')
