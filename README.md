@@ -8,6 +8,8 @@ The GUI reads the bundled configuration files, runs Docker commands on your
 behalf, and streams live logs so you can follow what is happening in each
 container.
 
+![mobipick_tables_sim_and_real.png](doc/mobipick_labs_docker_gui.png)
+
 ## Repository layout
 
 ```
