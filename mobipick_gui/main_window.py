@@ -2364,6 +2364,8 @@ class MainWindow(QMainWindow):
                         container_id = container_id.split(':', 1)[1]
                     container_ref = container_id[:64] or container_ref
 
+        previous_image_id = self._image_id_for_ref(image_ref)
+
         commit_cp = self._sp_run(
             ['docker', 'commit', container_ref, image_ref],
             log_key=key,
@@ -2373,11 +2375,73 @@ class MainWindow(QMainWindow):
         if commit_cp.returncode == 0:
             message = f'Committed container {container_name} to image {image_ref}.'
             self._append_gui_html(key, html.escape(message))
+            self._cleanup_previous_image(image_ref, previous_image_id, key)
         else:
             stderr_text = self._decode_output(getattr(commit_cp, 'stderr', '')).strip()
             if stderr_text:
                 self._append_gui_html(key, html.escape(stderr_text))
             QMessageBox.warning(self, 'Commit Current Tab', 'Failed to commit the current tab container. Check the tab log for details.')
+
+    def _cleanup_previous_image(self, image_ref: str, previous_image_id: str | None, log_key: str):
+        if not previous_image_id:
+            return
+
+        new_image_id = self._image_id_for_ref(image_ref)
+        if not new_image_id or new_image_id == previous_image_id:
+            return
+
+        if self._image_has_dependent_containers(previous_image_id):
+            message = (
+                f'Skipped removing previous image for {image_ref} '
+                'because it is still used by other containers.'
+            )
+            self._append_gui_html(log_key, html.escape(message))
+            return
+
+        rm_cp = self._sp_run(
+            ['docker', 'image', 'rm', previous_image_id],
+            log_key=log_key,
+            text=True,
+            check=False,
+        )
+        if rm_cp.returncode == 0:
+            message = f'Removed previous image layer {previous_image_id} after updating {image_ref}.'
+            self._append_gui_html(log_key, html.escape(message))
+        else:
+            stderr_text = self._decode_output(getattr(rm_cp, 'stderr', '')).strip()
+            if stderr_text:
+                self._append_gui_html(log_key, html.escape(stderr_text))
+
+    def _image_has_dependent_containers(self, image_id: str) -> bool:
+        cp = self._sp_run(
+            ['docker', 'ps', '-a', '--filter', f'ancestor={image_id}', '--format', '{{.ID}}'],
+            log_stdout=False,
+            log_stderr=False,
+            text=True,
+            check=False,
+        )
+        if cp.returncode not in (0, None):
+            return False
+        output = (cp.stdout or '').strip()
+        return bool(output)
+
+    def _image_id_for_ref(self, image_ref: str) -> str | None:
+        image_ref = (image_ref or '').strip()
+        if not image_ref:
+            return None
+        cp = self._sp_run(
+            ['docker', 'image', 'inspect', '--format', '{{.Id}}', image_ref],
+            log_stdout=False,
+            log_stderr=False,
+            text=True,
+            check=False,
+        )
+        if cp.returncode not in (0, None):
+            return None
+        image_id = (cp.stdout or '').strip()
+        if image_id.startswith('sha256:'):
+            image_id = image_id.split(':', 1)[1]
+        return image_id[:64] or None
 
     def execute_docker_cp_from_container(self):
         self._log_button_click(self.execute_docker_cp_button, 'Execute Docker cp')
