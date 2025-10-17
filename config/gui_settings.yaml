@@ -1,0 +1,58 @@
+log:
+  max_block_count: 20000        # keep this many lines in each log tab before older ones are trimmed
+  flush_interval_ms: 30         # how often the log widget flushes buffered text to the screen (lower = more frequent updates)
+  background_color: "#000000"   # log tab background color
+  text_color: "#ffffff"         # default text color for plain log lines
+  gui_log_color: "#ff00ff"      # color for GUI-generated status messages
+  command_log_color: "#4da3ff"  # color for command lines emitted by the GUI
+  font_family: "monospace"      # font family used for log text
+  scroll_tolerance_min: 2       # how close (in scroll units) the user must be to the bottom for auto-scroll to stay enabled
+
+window:
+  geometry: [100, 100, 1100, 780]   # main window position (x, y) and size (width, height)
+  title: "Mobipick Labs Control"    # title displayed on the window chrome
+
+timers:
+  poll_ms: 1200                     # interval for the UI poller that updates button state, etc.
+  sigint_check_ms: 100              # how often we check for Ctrl+C from the launch terminal
+  custom_tab_sigint_delay_ms: 1000  # delay before sending docker stop after SIGINT for custom tabs
+  sim_shutdown_delay_ms: 2500       # wait time before running fallback shutdown steps for the sim
+
+buttons:
+  sim_toggle:
+    padding_px: 6                   # padding applied to the Start/Stop Sim button
+    disabled_opacity: 0.85          # visual opacity when the button is disabled
+    states:
+      green: { bg: "#28a745", fg: "white" }   # colors when sim is running (Stop Sim)
+      red:   { bg: "#dc3545", fg: "white" }   # colors when sim is stopped (Start Sim)
+      yellow: { bg: "#ffc107", fg: "black" }  # colors during transitional states (waiting)
+      grey:  { bg: "#6c757d", fg: "white" }   # fallback colors when state is unknown
+  close:
+    text: "✕"                                  # label for the small tab close buttons
+    tooltip: "Close tab"                       # hover text for close buttons
+    size: 18                                   # close button width/height in pixels
+    stylesheet: "QPushButton { border: none; padding: 0px; }"  # Qt stylesheet for close buttons
+
+process:
+  qprocess_env:
+    COMPOSE_IGNORE_ORPHANS: "1"               # environment injected into every QProcess we spawn
+  compose_run_env:
+    PYTHONUNBUFFERED: "1"                     # exported into docker compose runs to force unbuffered stdout
+    PYTHONIOENCODING: "UTF-8"                 # ensure python subprocesses emit UTF-8
+
+images:
+  default: "brean/mobipick_labs:noetic"       # image:tag selected by default when the GUI starts
+  discovery_filters: ["mobipick"]             # repository substrings used to filter docker images for the dropdown
+  include_none_tag: false                     # include dangling (<none>) tags in the image list when true
+  related_container_keywords: ["mobipick", "mobipick_cmd", "mobipick-run", "rqt", "rviz"]  # container name fragments treated as related
+  related_image_keywords: ["mobipick_labs"]  # extra image substrings treated as related for cleanup
+
+worlds:
+  default: "moelk_tables"                    # default world_config if none is selected
+
+exit:
+  dialog_title: "Shutting Down"                       # window title shown during exit cleanup
+  dialog_message: "Shutting down simulation and cleaning up. Please wait..."  # body text while we tear down containers
+  log_start_message: "Shutting down containers before exit..."                # console message when exit sequence begins
+  log_done_message: "Shutdown complete. Exiting..."                          # console message once cleanup finishes
+  docker_stop_timeout: 3                               # seconds docker stop waits before force killing containers (lower = faster exit)
