@@ -107,6 +107,11 @@ class MainWindow(QMainWindow):
         self._last_log_origin: dict[str, str] = {}
         self._gui_log_color = str(CONFIG['log'].get('gui_log_color', '#ff00ff'))
         self._command_log_color = str(CONFIG['log'].get('command_log_color', '#4da3ff'))
+        self._pending_image_cleanups: dict[str, tuple[str | None, str]] = {}
+        self._pending_image_cleanup_interval_ms = 60_000
+        self._pending_image_cleanup_timer = QTimer(self)
+        self._pending_image_cleanup_timer.setSingleShot(True)
+        self._pending_image_cleanup_timer.timeout.connect(self._on_pending_cleanup_timeout)
 
         # sim state
         self._sim_container_name = 'mobipick-run'
@@ -119,6 +124,8 @@ class MainWindow(QMainWindow):
         self._exit_in_progress = False
         self._exit_dialog: Optional[QMessageBox] = None
         self._docker_stop_timeout = self._normalize_stop_timeout(CONFIG['exit'].get('docker_stop_timeout'))
+
+        self._initialize_dangling_image_cleanup()
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -2386,17 +2393,32 @@ class MainWindow(QMainWindow):
         if not previous_image_id:
             return
 
-        new_image_id = self._image_id_for_ref(image_ref)
-        if not new_image_id or new_image_id == previous_image_id:
+        removal_succeeded = self._try_remove_unused_image(image_ref, previous_image_id, log_key)
+        if removal_succeeded:
+            self._pending_image_cleanups.pop(previous_image_id, None)
+            self._ensure_pending_cleanup_timer()
             return
 
-        if self._image_has_dependent_containers(previous_image_id):
+        already_pending = previous_image_id in self._pending_image_cleanups
+        self._pending_image_cleanups[previous_image_id] = (image_ref, log_key)
+        if not already_pending:
             message = (
                 f'Skipped removing previous image for {image_ref} '
                 'because it is still used by other containers.'
             )
-            self._append_gui_html(log_key, html.escape(message))
-            return
+            self._log_image_cleanup_message(log_key, message)
+        self._ensure_pending_cleanup_timer()
+
+    def _try_remove_unused_image(
+        self, image_ref: str | None, previous_image_id: str, log_key: str
+    ) -> bool:
+        if image_ref:
+            new_image_id = self._image_id_for_ref(image_ref)
+            if new_image_id and new_image_id == previous_image_id:
+                return True
+
+        if self._image_has_dependent_containers(previous_image_id):
+            return False
 
         rm_cp = self._sp_run(
             ['docker', 'image', 'rm', previous_image_id],
@@ -2405,12 +2427,19 @@ class MainWindow(QMainWindow):
             check=False,
         )
         if rm_cp.returncode == 0:
-            message = f'Removed previous image layer {previous_image_id} after updating {image_ref}.'
-            self._append_gui_html(log_key, html.escape(message))
-        else:
-            stderr_text = self._decode_output(getattr(rm_cp, 'stderr', '')).strip()
-            if stderr_text:
-                self._append_gui_html(log_key, html.escape(stderr_text))
+            context = image_ref or previous_image_id
+            message = f'Removed previous image layer {previous_image_id} after updating {context}.'
+            self._log_image_cleanup_message(log_key, message)
+            return True
+
+        stderr_text = self._decode_output(getattr(rm_cp, 'stderr', '')).strip()
+        if stderr_text:
+            self._log_image_cleanup_message(log_key, stderr_text)
+
+        lowered = stderr_text.lower()
+        if 'image is being used by' in lowered or 'conflict: unable to delete' in lowered:
+            return False
+        return True
 
     def _image_has_dependent_containers(self, image_id: str) -> bool:
         cp = self._sp_run(
@@ -2442,6 +2471,53 @@ class MainWindow(QMainWindow):
         if image_id.startswith('sha256:'):
             image_id = image_id.split(':', 1)[1]
         return image_id[:64] or None
+
+    def _initialize_dangling_image_cleanup(self):
+        cp = self._sp_run(
+            ['docker', 'image', 'ls', '--filter', 'dangling=true', '--format', '{{.ID}}'],
+            log_stdout=False,
+            log_stderr=False,
+            text=True,
+            check=False,
+        )
+        if cp.returncode not in (0, None):
+            return
+
+        ids = [line.strip() for line in (cp.stdout or '').splitlines() if line.strip()]
+        if not ids:
+            return
+
+        for image_id in ids:
+            if image_id in self._pending_image_cleanups:
+                continue
+            removed = self._try_remove_unused_image(None, image_id, 'log')
+            if not removed:
+                self._pending_image_cleanups[image_id] = (None, 'log')
+
+        self._ensure_pending_cleanup_timer()
+
+    def _on_pending_cleanup_timeout(self):
+        if not self._pending_image_cleanups:
+            return
+
+        pending_items = list(self._pending_image_cleanups.items())
+        for image_id, (image_ref, log_key) in pending_items:
+            removed = self._try_remove_unused_image(image_ref, image_id, log_key)
+            if removed:
+                self._pending_image_cleanups.pop(image_id, None)
+
+        self._ensure_pending_cleanup_timer()
+
+    def _ensure_pending_cleanup_timer(self):
+        if self._pending_image_cleanups:
+            if not self._pending_image_cleanup_timer.isActive():
+                self._pending_image_cleanup_timer.start(self._pending_image_cleanup_interval_ms)
+        elif self._pending_image_cleanup_timer.isActive():
+            self._pending_image_cleanup_timer.stop()
+
+    def _log_image_cleanup_message(self, log_key: str, message: str):
+        key = log_key if log_key in self.tasks else 'log'
+        self._append_gui_html(key, html.escape(message))
 
     def execute_docker_cp_from_container(self):
         self._log_button_click(self.execute_docker_cp_button, 'Execute Docker cp')
