@@ -41,7 +41,7 @@ process:
     PYTHONIOENCODING: "UTF-8"                 # ensure python subprocesses emit UTF-8
 
 images:
-  default: "brean/mobipick_labs:noetic"       # image:tag selected by default when the GUI starts
+  default: "ozkrelo/mobipick_labs:noetic"       # image:tag selected by default when the GUI starts
   discovery_filters: ["mobipick"]             # repository substrings used to filter docker images for the dropdown
   include_none_tag: false                     # include dangling (<none>) tags in the image list when true
   related_container_keywords: ["mobipick", "mobipick_cmd", "mobipick-run", "rqt", "rviz"]  # container name fragments treated as related

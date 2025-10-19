@@ -29,7 +29,7 @@ and performing cleanup logic when you close the application.
 * Python 3.8+ with PyQt5 available (e.g. `pip install PyQt5`).
 * Docker Engine and the Docker Compose plugin accessible to your user.
 * Access to the Mobipick Labs image repository (for example
-  `brean/mobipick_labs:noetic`).
+  `ozkrelo/mobipick_labs:noetic`).
 * An X11 server that allows the containers to create GUI windows. The GUI
   issues the required `xhost` commands automatically when needed.
 

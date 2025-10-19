@@ -71,7 +71,7 @@ CONFIG_DEFAULTS: Dict[str, Dict] = {
         'docker_stop_timeout': 3,
     },
     'images': {
-        'default': 'brean/mobipick_labs:noetic',
+        'default': 'ozkrelo/mobipick_labs:noetic',
         'discovery_filters': ['mobipick'],
         'include_none_tag': False,
         'related_container_keywords': ['mobipick', 'mobipick_cmd', 'mobipick-run', 'rqt', 'rviz'],

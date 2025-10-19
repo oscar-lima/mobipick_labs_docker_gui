@@ -2,7 +2,7 @@ services:
   mobipick:
     hostname: mobipick
     # gazebo server
-    image: ${MOBIPICK_IMAGE:-brean/mobipick_labs:noetic}
+    image: ${MOBIPICK_IMAGE:-ozkrelo/mobipick_labs:noetic}
     build:
       context: ./
       dockerfile: ./docker/mobipick_labs/Dockerfile
@@ -31,7 +31,7 @@ services:
 
   mobipick_cmd:
     # gazebo server
-    image: ${MOBIPICK_IMAGE:-brean/mobipick_labs:noetic}
+    image: ${MOBIPICK_IMAGE:-ozkrelo/mobipick_labs:noetic}
     working_dir: /root/catkin_ws/
     entrypoint: /entrypoint.sh
     environment: 

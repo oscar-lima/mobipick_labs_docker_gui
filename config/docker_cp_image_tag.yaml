@@ -2,7 +2,7 @@
 #
 # Use the "default" section to define entries that apply to all images.
 # Additional sections can be keyed by the full image reference
-# (e.g. "brean/mobipick_labs:noetic") or just the repository name.
+# (e.g. "ozkrelo/mobipick_labs:noetic") or just the repository name.
 #
 # Each mapping requires a host path and a container path. Host paths may
 # include "~" or environment variables, which will be expanded.
@@ -12,7 +12,7 @@
 # are copied when the "Execute Docker cp" button is pressed.
 #
 # Example:
-# brean/mobipick_labs:noetic:
+# ozkrelo/mobipick_labs:noetic:
 #   host_to_container:
 #     - host: ~/Downloads/nav3.rviz
 #       container: /root/catkin_ws/src/mobipick_labs/tables_demo_bringup/config/nav3.rviz
