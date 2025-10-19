@@ -1391,7 +1391,16 @@ class MainWindow(QMainWindow):
         except Exception:
             return 1000
 
-    def _ensure_roscore_ready(self, callback: Callable[[], None], *, attempt: int = 0):
+    def _ensure_roscore_ready(
+        self,
+        callback: Callable[[], None],
+        *,
+        attempt: int = 0,
+        require: bool = True,
+    ):
+        if not require:
+            callback()
+            return
         delay_ms = self._roscore_delay_ms()
         last_start = self._roscore_last_start_ts
 
@@ -2105,7 +2114,7 @@ class MainWindow(QMainWindow):
             self._append_gui_html('log', f'<i>Launching terminal: {html.escape(command_str)}</i>')
             self.set_terminal_visual('green', 'Close Terminal', True)
 
-        self._ensure_roscore_ready(_start_terminal)
+        self._ensure_roscore_ready(_start_terminal, require=False)
 
     def stop_terminal(self):
         if self._terminal_stopping and self._terminal_proc is None:
@@ -2382,12 +2391,73 @@ class MainWindow(QMainWindow):
         if commit_cp.returncode == 0:
             message = f'Committed container {container_name} to image {image_ref}.'
             self._append_gui_html(key, html.escape(message))
-            self._cleanup_previous_image(image_ref, previous_image_id, key)
+
+            self._stop_containers_after_commit(
+                tab,
+                container_name,
+                image_ref,
+                previous_image_id,
+                key,
+            )
         else:
             stderr_text = self._decode_output(getattr(commit_cp, 'stderr', '')).strip()
             if stderr_text:
                 self._append_gui_html(key, html.escape(stderr_text))
             QMessageBox.warning(self, 'Commit Current Tab', 'Failed to commit the current tab container. Check the tab log for details.')
+
+    def _stop_containers_after_commit(
+        self,
+        tab: ProcessTab,
+        container_name: str,
+        image_ref: str,
+        previous_image_id: str | None,
+        log_key: str,
+    ):
+        self._append_gui_html(
+            log_key,
+            '<i>Stopping running containers to finalize commit and clean up images...</i>',
+        )
+
+        if self._terminal_is_active():
+            self.stop_terminal()
+
+        commands: list[list[str]] = []
+        exec_id = getattr(tab, 'exec_id', None)
+        commands += self._collect_container_commands(
+            container_name,
+            exec_id=exec_id,
+            log_key=log_key,
+        )
+
+        roscore_tab = self.tasks.get('roscore')
+        roscore_exec = getattr(roscore_tab, 'exec_id', None) if roscore_tab else None
+        commands += self._collect_container_commands(
+            self._roscore_container_name,
+            exec_id=roscore_exec,
+            log_key=log_key,
+        )
+
+        exclude = {name for name in (container_name, self._roscore_container_name) if name}
+        commands += self._stop_all_related(tab, exclude=exclude)
+
+        def _after_stops():
+            self._roscore_running_cached = False
+            self._roscore_stopping = False
+            self._roscore_last_start_ts = None
+            self.set_roscore_visual('red', 'Start Roscore', True)
+            tab.exec_id = None
+            tab.container_name = None
+            if roscore_tab:
+                roscore_tab.exec_id = None
+                roscore_tab.container_name = None
+            self._cleanup_previous_image(image_ref, previous_image_id, log_key)
+            self._flush_pending_image_cleanups()
+            self.update_sim_status_from_poll(force=True)
+
+        if commands:
+            self._run_command_sequence(commands, on_finished=_after_stops, log_key=log_key)
+        else:
+            _after_stops()
 
     def _cleanup_previous_image(self, image_ref: str, previous_image_id: str | None, log_key: str):
         if not previous_image_id:
@@ -2494,6 +2564,16 @@ class MainWindow(QMainWindow):
             if not removed:
                 self._pending_image_cleanups[image_id] = (None, 'log')
 
+        self._ensure_pending_cleanup_timer()
+
+    def _flush_pending_image_cleanups(self):
+        pending_items = list(self._pending_image_cleanups.items())
+        for image_id, (image_ref, log_key) in pending_items:
+            removed = self._try_remove_unused_image(image_ref, image_id, log_key)
+            if removed:
+                self._pending_image_cleanups.pop(image_id, None)
+
+        self._initialize_dangling_image_cleanup()
         self._ensure_pending_cleanup_timer()
 
     def _on_pending_cleanup_timeout(self):
@@ -2867,6 +2947,10 @@ class MainWindow(QMainWindow):
             self._exit_dialog = None
 
         self._revoke_x()
+
+        self._flush_pending_image_cleanups()
+        if self._pending_image_cleanup_timer.isActive():
+            self._pending_image_cleanup_timer.stop()
 
         if not self._cleanup_done and not self._cleanup_script_available():
             self._cleanup_done = True
