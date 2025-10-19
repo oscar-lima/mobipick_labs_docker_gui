@@ -26,6 +26,7 @@ and performing cleanup logic when you close the application.
 
 ## Prerequisites
 
+* Ubuntu Linux (tested on versions 20.04, 22.04, and 24.04)
 * Python 3.8+ with PyQt5 available (e.g. `pip install PyQt5`).
 * Docker Engine and the Docker Compose plugin accessible to your user.
 * Access to the Mobipick Labs image repository (for example
@@ -33,15 +34,49 @@ and performing cleanup logic when you close the application.
 * An X11 server that allows the containers to create GUI windows. The GUI
   issues the required `xhost` commands automatically when needed.
 
+## Installation
+
+- Install Docker Engine (`docker.io`) and ensure it is running.
+```bash
+sudo apt update && sudo apt install docker.io
+sudo systemctl enable docker
+sudo systemctl start docker
+```
+
+- Configure Docker to run without sudo:
+
+```bash
+sudo usermod -aG docker $USER
+```
+
+Then log out and back in.
+
+- Install the Docker Compose plugin and pull the Mobipick Labs image.
+
+```bash
+sudo apt install docker-compose-plugin
+# Verify that the Compose plugin is available
+docker compose version
+# pull mobipick labs docker image from docker hub
+docker pull ozkrelo/mobipick_labs:noetic
+```
+
+- Optional but strongly recommended if you have an NVIDIA graphics card: install [nvidia-docker2](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/nvidia-docker.html). After installation, restart Docker and test with:
+
+```bash
+docker run --rm --gpus all nvidia/cuda:12.4.1-base nvidia-smi
+```
+
+Note: If you run Mobipick Labs on the CPU, the simulation will be very slow.
+
 ## Launching the GUI
 
 1. Clone the repository.
-2. Install Python dependencies if PyQt5 is not already present.
-3. Start the application:
+1. Start the application:
    ```bash
    python gui.py
    ```
-4. When the window opens, use the top row of buttons to bring up ROS core,
+1. When the window opens, use the top row of buttons to bring up ROS core,
    start or stop the simulator, toggle RViz/RQt, or open a Docker-backed
    terminal. The GUI ensures the correct container sequence is followed.
 
