@@ -31,6 +31,7 @@ from PyQt5.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
     QTabBar,
     QTabWidget,
@@ -115,6 +116,7 @@ class MainWindow(QMainWindow):
         self._image_owner_label = str(self._images_cfg.get('owner_label', 'gui.owner'))
         self._image_owner_value = str(self._images_cfg.get('owner_value', 'mobipick-gui'))
         self._image_created_label = str(self._images_cfg.get('created_label', 'gui.created'))
+        self._image_snapshot_label = str(self._images_cfg.get('snapshot_label', 'gui.snapshot'))
         self._image_convenience_tag = str(self._images_cfg.get('convenience_tag', 'latest')) or 'latest'
         self._image_overwrite_tags = self._normalize_tag_list(
             self._images_cfg.get('overwrite_tags')
@@ -569,6 +571,15 @@ class MainWindow(QMainWindow):
         return result
 
     @staticmethod
+    def _sanitize_tag_component(value: str) -> str:
+        value = (value or '').strip()
+        if not value:
+            return 'snapshot'
+        sanitized = re.sub(r'[^A-Za-z0-9_.-]+', '-', value)
+        sanitized = re.sub(r'-{2,}', '-', sanitized).strip('-')
+        return sanitized or 'snapshot'
+
+    @staticmethod
     def _format_image_id_for_cli(image_id: str) -> str:
         image_id = (image_id or '').strip()
         if not image_id:
@@ -591,7 +602,15 @@ class MainWindow(QMainWindow):
     @staticmethod
     def _is_snapshot_tag(tag: str) -> bool:
         tag = (tag or '').strip()
-        return bool(re.fullmatch(r'\d{8}T\d{6}Z(?:_\d+)?', tag))
+        if not tag:
+            return False
+        legacy_match = re.fullmatch(r'\d{8}T\d{6}Z(?:_\d+)?', tag)
+        timestamp_match = re.fullmatch(
+            r'.+-\d{2}-\d{2}-\d{4}-\d{2}-\d{2}-[a-z0-9]{2}',
+            tag,
+            flags=re.IGNORECASE,
+        )
+        return bool(legacy_match or timestamp_match)
 
     def _tag_matches_overwrite(self, full_ref: str) -> bool:
         if not full_ref:
@@ -599,11 +618,17 @@ class MainWindow(QMainWindow):
         _, tag = self._split_image_ref(full_ref)
         return bool(tag and tag in self._image_overwrite_tags)
 
-    def _build_overwrite_refs(self, repository: str) -> list[str]:
+    def _build_overwrite_refs(self, repository: str, base_tag: str) -> list[str]:
         repository = (repository or '').strip()
         if not repository:
             return []
-        refs = [f'{repository}:{tag}' for tag in self._image_overwrite_tags if tag]
+        tags: list[str] = list(self._image_overwrite_tags)
+        base_tag = (base_tag or '').strip()
+        if base_tag and base_tag not in tags:
+            tags.insert(0, base_tag)
+        if base_tag and not base_tag.endswith('-latest'):
+            tags.append(f'{base_tag}-latest')
+        refs = [f'{repository}:{tag}' for tag in tags if tag]
         return self._dedupe_preserve(refs)
 
     @staticmethod
@@ -2569,8 +2594,8 @@ class MainWindow(QMainWindow):
         if not prompt_result:
             return
 
-        commit_target, is_snapshot = prompt_result
-        commit_target = commit_target.strip()
+        commit_target = str(prompt_result.get('target_ref', '')).strip()
+        is_snapshot = bool(prompt_result.get('is_snapshot'))
         if not commit_target:
             QMessageBox.warning(self, 'Commit Current Tab', 'No commit target was provided.')
             return
@@ -2582,6 +2607,11 @@ class MainWindow(QMainWindow):
                 'Commit requires repo plus tag. Please choose a repository and a tag.',
             )
             return
+
+        base_repo = prompt_result.get('base_repo') or repo_selected or repo_commit
+        base_tag = prompt_result.get('base_tag') or tag_selected or tag_commit
+        base_repo = (base_repo or '').strip()
+        base_tag = (base_tag or '').strip()
 
         container_ref = container_name
         try:
@@ -2601,7 +2631,7 @@ class MainWindow(QMainWindow):
                         container_id = container_id.split(':', 1)[1]
                     container_ref = container_id[:64] or container_ref
 
-        repo_for_actions = repo_commit.strip()
+        repo_for_actions = base_repo or repo_commit.strip()
         if not repo_for_actions:
             QMessageBox.warning(
                 self,
@@ -2613,7 +2643,7 @@ class MainWindow(QMainWindow):
         timestamp = datetime.utcnow().replace(microsecond=0)
         created_label_value = f"{timestamp.isoformat()}Z"
 
-        moving_refs = self._build_overwrite_refs(repo_for_actions)
+        moving_refs = self._build_overwrite_refs(repo_for_actions, base_tag)
         if not is_snapshot and commit_target not in moving_refs:
             moving_refs.insert(0, commit_target)
         moving_refs = self._dedupe_preserve(moving_refs)
@@ -2630,6 +2660,8 @@ class MainWindow(QMainWindow):
             if previous_id:
                 previous_details = self._inspect_image_by_id(previous_id)
 
+        snapshot_label_value = 'true' if is_snapshot else 'false'
+
         commit_args = [
             'docker',
             'commit',
@@ -2638,6 +2670,8 @@ class MainWindow(QMainWindow):
             f'LABEL {self._image_owner_label}={self._image_owner_value}',
             '--change',
             f'LABEL {self._image_created_label}={created_label_value}',
+            '--change',
+            f'LABEL {self._image_snapshot_label}={snapshot_label_value}',
             container_ref,
         ]
 
@@ -2761,7 +2795,7 @@ class MainWindow(QMainWindow):
                     message_lines.append(f'Failed to remove previous image {old_id[:12]}.')
 
         if is_snapshot:
-            retention_messages = self._apply_snapshot_retention(repo_for_actions, log_key=key)
+            retention_messages = self._apply_snapshot_retention(repo_commit, log_key=key)
             message_lines.extend(retention_messages)
 
         summary_html = '<br/>'.join(html.escape(line) for line in message_lines)
@@ -2825,8 +2859,23 @@ class MainWindow(QMainWindow):
         self,
         image_ref: str,
         container_name: str,
-    ) -> tuple[str, bool] | None:
-        suggested_snapshot = self._suggest_snapshot_ref(image_ref)
+    ) -> dict | None:
+        base_repo, base_tag = self._split_image_ref(image_ref)
+        base_repo = base_repo.strip()
+        base_tag = base_tag.strip()
+
+        timestamp_tag = ''
+        timestamp_ref = ''
+        if base_repo and base_tag:
+            timestamp_tag = self._suggest_timestamp_snapshot_tag(base_repo, base_tag)
+            if timestamp_tag:
+                timestamp_ref = f'{base_repo}:{timestamp_tag}'
+
+        custom_repo_default = base_repo
+        custom_tag_default = self._suggest_custom_snapshot_tag(base_repo, base_tag) if base_repo and base_tag else ''
+        alias_ref = ''
+        if base_repo and base_tag and not base_tag.endswith('-latest'):
+            alias_ref = f'{base_repo}:{base_tag}-latest'
 
         dialog = QDialog(self)
         dialog.setWindowTitle('Commit Container')
@@ -2843,17 +2892,6 @@ class MainWindow(QMainWindow):
         )
         caveat.setWordWrap(True)
         layout.addWidget(caveat)
-
-        tag_label = QLabel('Snapshot tag (auto-generated):')
-        tag_input = QLineEdit(dialog)
-        tag_input.setReadOnly(True)
-        tag_input.setText(suggested_snapshot)
-        tag_label.setBuddy(tag_input)
-
-        tag_row = QHBoxLayout()
-        tag_row.addWidget(tag_label)
-        tag_row.addWidget(tag_input)
-        layout.addLayout(tag_row)
 
         show_mounts_button = QPushButton('Show Mounts', dialog)
 
@@ -2915,70 +2953,220 @@ class MainWindow(QMainWindow):
         inspect_row.addWidget(show_mounts_button)
         layout.addLayout(inspect_row)
 
-        buttons_row = QHBoxLayout()
-        overwrite_button = QPushButton('Overwrite Existing Tag', dialog)
-        snapshot_button = QPushButton('Create Snapshot (timestamp)', dialog)
-        cancel_button = QPushButton('Cancel', dialog)
-        overwrite_button.setDefault(True)
+        options_layout = QVBoxLayout()
+        layout.addLayout(options_layout)
 
-        buttons_row.addWidget(overwrite_button)
-        buttons_row.addWidget(snapshot_button)
-        buttons_row.addWidget(cancel_button)
-        layout.addLayout(buttons_row)
+        overwrite_row = QHBoxLayout()
+        overwrite_label = QLabel(image_ref or 'No target selected')
+        overwrite_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        overwrite_row.addWidget(overwrite_label)
+        overwrite_row.addStretch(1)
+        overwrite_button = QPushButton('Overwrite Existing Tag', dialog)
+        overwrite_button.setDefault(True)
+        overwrite_row.addWidget(overwrite_button)
+        options_layout.addLayout(overwrite_row)
+
+        timestamp_row = QHBoxLayout()
+        timestamp_display = timestamp_ref or 'Snapshot tag unavailable'
+        timestamp_label = QLabel(timestamp_display)
+        timestamp_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        timestamp_row.addWidget(timestamp_label)
+        timestamp_row.addStretch(1)
+        snapshot_button = QPushButton('Create Snapshot (timestamp)', dialog)
+        snapshot_button.setEnabled(bool(timestamp_ref))
+        timestamp_row.addWidget(snapshot_button)
+        options_layout.addLayout(timestamp_row)
+
+        custom_row = QHBoxLayout()
+        custom_preview = QLabel()
+        custom_preview.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        custom_row.addWidget(custom_preview)
+        custom_row.addStretch(1)
+        custom_image_input = QLineEdit(dialog)
+        custom_image_input.setPlaceholderText('repository/image')
+        custom_image_input.setText(custom_repo_default)
+        custom_tag_input = QLineEdit(dialog)
+        custom_tag_input.setPlaceholderText('tag')
+        custom_tag_input.setText(custom_tag_default)
+        colon_label = QLabel(':')
+        colon_label.setAlignment(Qt.AlignCenter)
+        custom_row.addWidget(custom_image_input)
+        custom_row.addWidget(colon_label)
+        custom_row.addWidget(custom_tag_input)
+        snapshot_custom_button = QPushButton('Create Snapshot (custom tag)', dialog)
+        custom_row.addWidget(snapshot_custom_button)
+        options_layout.addLayout(custom_row)
+
+        alias_row = QHBoxLayout()
+        alias_label = QLabel(alias_ref or 'No alias derived from base tag')
+        alias_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        alias_row.addWidget(alias_label)
+        alias_row.addStretch(1)
+        alias_button = QPushButton('Alias auto-updates', dialog)
+        alias_button.setEnabled(False)
+        alias_button.setToolTip('The GUI updates this alias to the latest image automatically after commit.')
+        alias_row.addWidget(alias_button)
+        options_layout.addLayout(alias_row)
+
+        cancel_row = QHBoxLayout()
+        cancel_row.addStretch(1)
+        cancel_button = QPushButton('Cancel', dialog)
+        cancel_row.addWidget(cancel_button)
+        layout.addLayout(cancel_row)
 
         selection: dict[str, str] = {}
 
-        def _refresh_snapshot_preview() -> str:
-            snapshot_ref = self._suggest_snapshot_ref(image_ref)
-            if snapshot_ref:
-                tag_input.setText(snapshot_ref)
-            return snapshot_ref
+        def _update_custom_preview() -> None:
+            repo_text = custom_image_input.text().strip()
+            tag_text = custom_tag_input.text().strip()
+            if repo_text and tag_text:
+                custom_preview.setText(f'{repo_text}:{tag_text}')
+            else:
+                custom_preview.setText('Provide repository and tag for custom snapshot')
+
+        _update_custom_preview()
 
         def _choose_overwrite():
             selection['mode'] = 'overwrite'
-            selection['ref'] = image_ref
+            selection['target_ref'] = image_ref
+            selection['base_repo'] = base_repo
+            selection['base_tag'] = base_tag
+            selection['is_snapshot'] = False
             dialog.accept()
 
-        def _choose_snapshot():
-            snapshot_ref = _refresh_snapshot_preview()
-            if not snapshot_ref:
+        def _choose_snapshot_timestamp():
+            if not timestamp_ref:
                 QMessageBox.warning(
                     dialog,
                     'Snapshot Tag Unavailable',
-                    'Unable to generate a snapshot tag automatically.',
+                    'Unable to generate a timestamped snapshot tag automatically.',
                 )
                 return
-            selection['mode'] = 'snapshot'
-            selection['ref'] = snapshot_ref
+            selection['mode'] = 'snapshot_timestamp'
+            selection['target_ref'] = timestamp_ref
+            selection['snapshot_tag'] = timestamp_tag
+            selection['base_repo'] = base_repo
+            selection['base_tag'] = base_tag
+            selection['is_snapshot'] = True
+            dialog.accept()
+
+        def _choose_snapshot_custom():
+            repo_text = custom_image_input.text().strip()
+            tag_text = custom_tag_input.text().strip()
+            if not repo_text or not tag_text:
+                QMessageBox.warning(
+                    dialog,
+                    'Snapshot Tag Required',
+                    'Provide both repository and tag for the custom snapshot.',
+                )
+                return
+            if ' ' in repo_text or ' ' in tag_text:
+                QMessageBox.warning(
+                    dialog,
+                    'Invalid Snapshot Tag',
+                    'Repository and tag must not contain spaces.',
+                )
+                return
+            selection['mode'] = 'snapshot_custom'
+            selection['target_ref'] = f'{repo_text}:{tag_text}'
+            selection['snapshot_tag'] = tag_text
+            selection['snapshot_repo'] = repo_text
+            selection['base_repo'] = base_repo
+            selection['base_tag'] = base_tag
+            selection['is_snapshot'] = True
             dialog.accept()
 
         overwrite_button.clicked.connect(_choose_overwrite)
-        snapshot_button.clicked.connect(_choose_snapshot)
+        snapshot_button.clicked.connect(_choose_snapshot_timestamp)
+        snapshot_custom_button.clicked.connect(_choose_snapshot_custom)
         cancel_button.clicked.connect(dialog.reject)
+        custom_image_input.textChanged.connect(lambda _: _update_custom_preview())
+        custom_tag_input.textChanged.connect(lambda _: _update_custom_preview())
 
         if dialog.exec_() != QDialog.Accepted:
             return None
 
-        commit_ref = selection.get('ref', '').strip()
-        if not commit_ref:
+        if not selection.get('target_ref'):
             return None
-        is_snapshot = selection.get('mode') == 'snapshot' and commit_ref != image_ref
-        return commit_ref, is_snapshot
+        if 'base_repo' not in selection:
+            selection['base_repo'] = base_repo
+        if 'base_tag' not in selection:
+            selection['base_tag'] = base_tag
+        selection.setdefault('is_snapshot', False)
+        return selection
 
     def _suggest_snapshot_ref(self, image_ref: str) -> str:
-        repo, _ = self._split_image_ref(image_ref)
+        repo, base_tag = self._split_image_ref(image_ref)
         repo = repo.strip()
-        if not repo:
+        base_tag = base_tag.strip()
+        if not repo or not base_tag:
             return ''
-        timestamp_tag = datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')
-        base_ref = f'{repo}:{timestamp_tag}'
-        if not self._image_id_for_ref(base_ref):
-            return base_ref
-        for suffix in range(1, 10):
-            candidate = f'{base_ref}_{suffix}'
-            if not self._image_id_for_ref(candidate):
+        tag = self._suggest_timestamp_snapshot_tag(repo, base_tag)
+        return f'{repo}:{tag}' if tag else ''
+
+    def _list_repository_tags(self, repository: str) -> list[str]:
+        repository = (repository or '').strip()
+        if not repository:
+            return []
+        args = [
+            'docker',
+            'image',
+            'ls',
+            '--filter',
+            f'reference={repository}:*',
+            '--format',
+            '{{.Repository}}:{{.Tag}}',
+        ]
+        cp = self._sp_run(
+            args,
+            log_stdout=False,
+            log_stderr=False,
+            text=True,
+            check=False,
+        )
+        if cp.returncode not in (0, None):
+            return []
+        tags: list[str] = []
+        for line in (cp.stdout or '').splitlines():
+            ref = line.strip()
+            if not ref or '<none>' in ref:
+                continue
+            _, tag = self._split_image_ref(ref)
+            if tag:
+                tags.append(tag)
+        return tags
+
+    def _suggest_timestamp_snapshot_tag(self, repository: str, base_tag: str) -> str:
+        repository = (repository or '').strip()
+        base_tag = self._sanitize_tag_component(base_tag)
+        if not repository or not base_tag:
+            return ''
+        stamp = datetime.utcnow().strftime('%d-%m-%Y-%H-%M')
+        prefix = f'{base_tag}-{stamp}'
+        for _ in range(12):
+            suffix = uuid.uuid4().hex[:2].lower()
+            candidate = f'{prefix}-{suffix}'
+            if not self._image_id_for_ref(f'{repository}:{candidate}'):
                 return candidate
-        return base_ref
+        fallback = uuid.uuid4().hex[:6].lower()
+        return f'{prefix}-{fallback}'
+
+    def _suggest_custom_snapshot_tag(self, repository: str, base_tag: str) -> str:
+        repository = (repository or '').strip()
+        base_tag = self._sanitize_tag_component(base_tag)
+        if not repository or not base_tag:
+            return ''
+        existing_tags = self._list_repository_tags(repository)
+        pattern = re.compile(rf'^{re.escape(base_tag)}-v(\d+)$', re.IGNORECASE)
+        highest = 0
+        for name in existing_tags:
+            match = pattern.match(name)
+            if match:
+                try:
+                    highest = max(highest, int(match.group(1)))
+                except ValueError:
+                    continue
+        return f'{base_tag}-v{highest + 1}'
 
     def _image_id_for_ref(self, image_ref: str) -> str | None:
         image_ref = (image_ref or '').strip()
@@ -3252,16 +3440,21 @@ class MainWindow(QMainWindow):
                 if labels and not isinstance(labels, dict):
                     labels = {}
             owner_value = ''
+            snapshot_flag = ''
             if isinstance(labels, dict):
                 owner_value = str(labels.get(self._image_owner_label, '') or '')
+                snapshot_flag = str(labels.get(self._image_snapshot_label, '') or '').strip().lower()
             project_owned = owner_value == self._image_owner_value
             containers = self._list_containers_for_image(image_id)
             tag_names = [self._split_image_ref(tag)[1] for tag in tags]
-            is_snapshot = any(self._is_snapshot_tag(name) for name in tag_names)
+            is_snapshot = snapshot_flag == 'true' or any(
+                self._is_snapshot_tag(name) for name in tag_names
+            )
             moving_target = any(name in self._image_overwrite_tags for name in tag_names)
             images.append(
                 {
                     'id': image_id[:64],
+                    'full_id': image_id,
                     'repo_tags': repo_tags,
                     'created': created_raw,
                     'created_dt': created_dt,
@@ -3297,6 +3490,240 @@ class MainWindow(QMainWindow):
                     info['protected'] = index < retention_limit
 
         return images
+
+    def _lookup_owned_image_info(self, image_id: str) -> dict | None:
+        image_id = (image_id or '').strip()
+        if not image_id:
+            return None
+        normalized = image_id.split(':')[-1][:64]
+        images = self._collect_owned_image_metadata()
+        for info in images:
+            current_id = (info.get('full_id') or info.get('id') or '').strip()
+            if not current_id:
+                continue
+            current_norm = current_id.split(':')[-1][:64]
+            if current_norm == normalized:
+                return info
+        return None
+
+    def _format_owned_image_label(self, info: dict) -> str:
+        tags = info.get('repo_tags') or []
+        tag_display = ', '.join(tags) if tags else '<untagged>'
+        size = info.get('size_human') or ''
+        created = info.get('created_display') or ''
+        containers = info.get('containers') or []
+        flags: list[str] = []
+        if info.get('is_snapshot'):
+            flags.append('snapshot')
+        if info.get('moving_target'):
+            flags.append('moving tag')
+        if info.get('protected'):
+            flags.append('retained')
+        if info.get('dangling'):
+            flags.append('dangling')
+        if not info.get('project_owned'):
+            flags.append('external')
+        if containers:
+            flags.append(f'{len(containers)} container(s)')
+        details = ' | '.join(part for part in [tag_display, size, created] if part)
+        if flags:
+            details = f"{details} | {'; '.join(flags)}" if details else '; '.join(flags)
+        return details or tag_display
+
+    def _image_delete_blockers(self, info: dict) -> list[dict]:
+        blockers: list[dict] = []
+        containers = info.get('containers') or []
+        if containers:
+            blockers.append({'type': 'containers', 'containers': list(containers)})
+        repo_tags = info.get('repo_tags') or []
+        removable_tags = [tag for tag in repo_tags if not self._tag_matches_overwrite(tag)]
+        if len(repo_tags) > 1 and removable_tags:
+            blockers.append(
+                {
+                    'type': 'tags',
+                    'tags': list(repo_tags),
+                    'removable': removable_tags,
+                }
+            )
+        if info.get('moving_target'):
+            blockers.append({'type': 'moving'})
+        if info.get('protected'):
+            blockers.append({'type': 'protected'})
+        if not info.get('project_owned'):
+            blockers.append({'type': 'external'})
+        return blockers
+
+    def _stop_containers_for_image(self, containers: list[str], parent: QWidget | None = None) -> None:
+        if not containers:
+            return
+        failures: list[str] = []
+        for cid in containers:
+            stop_args = ['docker'] + self._docker_stop_args(cid)
+            cp = self._sp_run(stop_args, log_key='log', text=True, check=False)
+            if cp.returncode not in (0, None):
+                stderr = self._decode_output(getattr(cp, 'stderr', '')).strip()
+                message = stderr or f'Failed to stop {cid}'
+                failures.append(message)
+        if failures and parent:
+            QMessageBox.warning(
+                parent,
+                'Stop Containers',
+                '\n'.join(failures),
+            )
+
+    def _schedule_image_removal_retry(
+        self,
+        image_id: str,
+        parent: QWidget,
+        refresh_callback: Callable[[], None],
+        delay_ms: int = 5000,
+    ) -> None:
+        image_id = (image_id or '').strip()
+        if not image_id:
+            return
+
+        def _retry():
+            latest = self._lookup_owned_image_info(image_id)
+            if latest:
+                self._confirm_remove_owned_image(latest, parent, refresh_callback)
+            else:
+                refresh_callback()
+
+        QTimer.singleShot(delay_ms, _retry)
+
+    def _show_image_blockers_dialog(
+        self,
+        image_info: dict,
+        blockers: list[dict],
+        parent: QWidget,
+        refresh_callback: Callable[[], None],
+        retry_callback: Callable[[], None] | None,
+    ) -> None:
+        if not blockers:
+            QMessageBox.information(parent, 'Resolve Image', 'No blockers detected for this image.')
+            return
+
+        dialog = QDialog(parent)
+        dialog.setWindowTitle('Resolve Image Dependencies')
+
+        layout = QVBoxLayout(dialog)
+        summary_label = QLabel('Removal is blocked for the following reasons:')
+        summary_label.setWordWrap(True)
+        layout.addWidget(summary_label)
+
+        for blocker in blockers:
+            btype = blocker.get('type')
+            if btype == 'containers':
+                containers = blocker.get('containers') or []
+                text = (
+                    'Containers still reference this image: '
+                    + ', '.join(containers)
+                    if containers
+                    else 'Containers still reference this image.'
+                )
+            elif btype == 'tags':
+                tags = blocker.get('tags') or []
+                text = 'Multiple tags point to this image: ' + ', '.join(tags)
+            elif btype == 'moving':
+                text = 'This image is tagged with a moving reference (e.g. overwrite alias).'
+            elif btype == 'protected':
+                text = 'The retention policy protects this image. Adjust retention before removing it.'
+            elif btype == 'external':
+                text = 'This image is not owned by the GUI. Proceed with caution.'
+            else:
+                text = 'Unknown blocker prevents removal.'
+            label = QLabel(text)
+            label.setWordWrap(True)
+            layout.addWidget(label)
+
+        button_row = QHBoxLayout()
+        containers_blocker = next((b for b in blockers if b.get('type') == 'containers'), None)
+        tags_blocker = next((b for b in blockers if b.get('type') == 'tags'), None)
+
+        stop_button = None
+        wait_button = None
+        remove_tag_button = None
+        if containers_blocker:
+            stop_button = QPushButton('Stop containers', dialog)
+            wait_button = QPushButton('Wait and retry', dialog)
+            button_row.addWidget(stop_button)
+            button_row.addWidget(wait_button)
+        if tags_blocker:
+            remove_tag_button = QPushButton('Remove tag…', dialog)
+            button_row.addWidget(remove_tag_button)
+
+        button_row.addStretch(1)
+        close_button = QPushButton('Close', dialog)
+        button_row.addWidget(close_button)
+        layout.addLayout(button_row)
+
+        def _after_action(retry: bool = False, wait: bool = False) -> None:
+            refresh_callback()
+            if retry_callback and retry:
+                if wait:
+                    self._schedule_image_removal_retry(
+                        image_info.get('full_id') or image_info.get('id') or '',
+                        parent,
+                        refresh_callback,
+                    )
+                else:
+                    QTimer.singleShot(250, retry_callback)
+
+        def _stop():
+            containers = containers_blocker.get('containers') if containers_blocker else []
+            self._stop_containers_for_image(containers or [], parent)
+            dialog.close()
+            _after_action(retry=True)
+
+        def _wait():
+            dialog.close()
+            QMessageBox.information(
+                parent,
+                'Waiting on Containers',
+                'The GUI will retry removal after a short delay once containers exit.',
+            )
+            _after_action(retry=True, wait=True)
+
+        def _remove_tag():
+            removable = tags_blocker.get('removable') if tags_blocker else []
+            if not removable:
+                QMessageBox.information(parent, 'Remove Tag', 'No removable tags are available.')
+                return
+            tag_ref, ok = QInputDialog.getItem(
+                parent,
+                'Remove Tag',
+                'Select a tag to remove:',
+                removable,
+                0,
+                False,
+            )
+            if not ok or not tag_ref:
+                return
+            self._confirm_remove_image_tag(tag_ref, image_info, parent, refresh_callback)
+            dialog.close()
+            _after_action(retry=True)
+
+        if stop_button:
+            stop_button.clicked.connect(_stop)
+        if wait_button:
+            wait_button.clicked.connect(_wait)
+        if remove_tag_button:
+            remove_tag_button.clicked.connect(_remove_tag)
+        close_button.clicked.connect(dialog.close)
+
+        dialog.exec_()
+
+    def _resolve_image_blockers_interactive(
+        self,
+        image_info: dict,
+        parent: QWidget,
+        refresh_callback: Callable[[], None],
+    ) -> None:
+        blockers = self._image_delete_blockers(image_info)
+        if not blockers:
+            QMessageBox.information(parent, 'Resolve Image', 'No blockers detected for the selected image.')
+            return
+        self._show_image_blockers_dialog(image_info, blockers, parent, refresh_callback, None)
 
     def _open_dangling_images_dialog(self):
         self._log_button_click(self.dangling_images_button, 'Dangling Images')
@@ -3529,219 +3956,149 @@ class MainWindow(QMainWindow):
 
         summary_box = QTextEdit(dialog)
         summary_box.setReadOnly(True)
-        summary_box.setMaximumHeight(120)
+        summary_box.setMaximumHeight(140)
         layout.addWidget(summary_box)
 
-        list_widget = QListWidget(dialog)
-        layout.addWidget(list_widget)
+        scroll_area = QScrollArea(dialog)
+        scroll_area.setWidgetResizable(True)
+        layout.addWidget(scroll_area)
 
-        details_box = QTextEdit(dialog)
-        details_box.setReadOnly(True)
-        details_box.setMinimumHeight(160)
-        layout.addWidget(details_box)
+        list_container = QWidget()
+        rows_layout = QVBoxLayout(list_container)
+        rows_layout.setContentsMargins(0, 0, 0, 0)
+        rows_layout.setSpacing(6)
+        scroll_area.setWidget(list_container)
 
-        if self._prune_avoid_recent_hours > 0:
-            checkbox_label = (
-                f'Skip images newer than {self._prune_avoid_recent_hours}h during prune'
-            )
-        else:
-            checkbox_label = 'Skip very recent images during prune'
-        prune_checkbox = QCheckBox(checkbox_label, dialog)
-        prune_checkbox.setChecked(self._prune_avoid_recent_hours > 0)
-        prune_checkbox.setEnabled(self._prune_avoid_recent_hours > 0)
-        layout.addWidget(prune_checkbox)
-
-        button_row = QHBoxLayout()
+        controls_row = QHBoxLayout()
         prune_button = QPushButton('Prune Dangling Owned Layers', dialog)
-        remove_tag_button = QPushButton('Remove Tag…', dialog)
-        remove_button = QPushButton('Remove Selected Image', dialog)
+        delete_selected_button = QPushButton('Delete Selected', dialog)
+        resolve_selected_button = QPushButton('Resolve Selected', dialog)
         refresh_button = QPushButton('Refresh', dialog)
         close_button = QPushButton('Close', dialog)
-        remove_tag_button.setEnabled(False)
-        remove_button.setEnabled(False)
-        button_row.addWidget(prune_button)
-        button_row.addWidget(remove_tag_button)
-        button_row.addWidget(remove_button)
-        button_row.addStretch(1)
-        button_row.addWidget(refresh_button)
-        button_row.addWidget(close_button)
-        layout.addLayout(button_row)
+        controls_row.addWidget(prune_button)
+        controls_row.addWidget(delete_selected_button)
+        controls_row.addWidget(resolve_selected_button)
+        controls_row.addStretch(1)
+        controls_row.addWidget(refresh_button)
+        controls_row.addWidget(close_button)
+        layout.addLayout(controls_row)
 
-        state: dict[str, list[dict]] = {'images': []}
+        state: dict[str, list[dict]] = {'rows': []}
 
-        def _prune_candidates(images: list[dict]) -> list[dict]:
-            threshold = None
-            if prune_checkbox.isChecked() and self._prune_avoid_recent_hours > 0:
-                threshold = datetime.utcnow() - timedelta(hours=self._prune_avoid_recent_hours)
-            candidates: list[dict] = []
-            for info in images:
-                if not info.get('dangling'):
-                    continue
-                if info.get('containers'):
-                    continue
-                if info.get('protected'):
-                    continue
-                created_dt = info.get('created_dt')
-                if threshold and created_dt and created_dt > threshold:
-                    continue
-                candidates.append(info)
-            return candidates
+        def _clear_rows() -> None:
+            while rows_layout.count():
+                item = rows_layout.takeAt(0)
+                widget = item.widget()
+                if widget is not None:
+                    widget.deleteLater()
 
-        def _update_details():
-            item = list_widget.currentItem()
-            if not item:
-                details_box.clear()
-                remove_button.setEnabled(False)
-                remove_tag_button.setEnabled(False)
+        def _update_summary(images: list[dict]) -> None:
+            if not images:
+                summary_box.setPlainText('No managed images were found.')
                 return
-            info = item.data(Qt.UserRole) or {}
-            removable = (
-                bool(info)
-                and not info.get('containers')
-                and not info.get('protected')
-                and not info.get('moving_target')
-            )
-            remove_button.setEnabled(removable)
-            removable_tags = [
-                tag for tag in (info.get('repo_tags') or []) if not self._tag_matches_overwrite(tag)
-            ]
-            remove_tag_button.setEnabled(bool(removable_tags))
-            payload = {
-                'image_id': info.get('id'),
-                'tags': info.get('repo_tags') or [],
-                'labels': info.get('labels') or {},
-                'created': info.get('created'),
-                'created_display': info.get('created_display'),
-                'size_bytes': info.get('size'),
-                'size_human': info.get('size_human'),
-                'dangling': info.get('dangling'),
-                'protected_by_retention': info.get('protected'),
-                'referencing_containers': info.get('containers') or [],
-                'project_owned': info.get('project_owned'),
-                'moving_reference': info.get('moving_target'),
-                'snapshot': info.get('is_snapshot'),
-            }
-            details_box.setPlainText(json.dumps(payload, indent=2))
-
-        def _update_summary():
-            images = state['images']
             dangling_count = sum(1 for info in images if info.get('dangling'))
             in_use_count = sum(1 for info in images if info.get('containers'))
             protected_count = sum(1 for info in images if info.get('protected'))
-            moving_count = sum(1 for info in images if info.get('moving_target'))
             snapshot_count = sum(1 for info in images if info.get('is_snapshot'))
-            prune_count = len(_prune_candidates(images))
-            moving_label = ', '.join(self._image_overwrite_tags) or 'none'
-            summary_lines = [
+            moving_count = sum(1 for info in images if info.get('moving_target'))
+            lines = [
                 f'Owned images: {len(images)}',
                 f'Dangling: {dangling_count}',
                 f'In use by containers: {in_use_count}',
                 f'Protected by retention: {protected_count}',
-                f'Moving references ({moving_label}): {moving_count}',
                 f'Snapshots: {snapshot_count}',
-                f'Prune candidates: {prune_count}',
-                f'Retention limit per repository: {self._image_retention_limit}',
-                f'Owner label: {self._image_owner_label}={self._image_owner_value}',
+                f'Moving references: {moving_count}',
+                f'Retention limit: {self._image_retention_limit}',
             ]
-            summary_box.setPlainText('\n'.join(summary_lines))
-            prune_button.setEnabled(prune_count > 0)
+            summary_box.setPlainText('\n'.join(lines))
 
-        def _refresh():
-            state['images'] = self._collect_owned_image_metadata()
-            list_widget.blockSignals(True)
-            list_widget.clear()
-            for info in state['images']:
-                tags_display = ', '.join(info['repo_tags']) if info['repo_tags'] else '<none>:<none>'
-                label_parts = [
-                    info['id'][:12],
-                    tags_display,
-                    info['size_human'],
-                    info['created_display'],
-                    f"containers:{len(info['containers'])}",
-                ]
-                if info.get('protected'):
-                    label_parts.append('protected')
-                if info.get('dangling'):
-                    label_parts.append('dangling')
-                if info.get('moving_target'):
-                    label_parts.append('moving')
-                if info.get('is_snapshot'):
-                    label_parts.append('snapshot')
-                item = QListWidgetItem(' | '.join(label_parts))
-                item.setData(Qt.UserRole, info)
-                list_widget.addItem(item)
-            list_widget.blockSignals(False)
-            if list_widget.count() > 0:
-                list_widget.setCurrentRow(0)
-            else:
-                details_box.clear()
-                remove_button.setEnabled(False)
-                remove_tag_button.setEnabled(False)
-            _update_summary()
+        def _refresh() -> None:
+            images = self._collect_owned_image_metadata()
+            _clear_rows()
+            state['rows'] = []
+            _update_summary(images)
+            for info in images:
+                row_widget = QWidget(list_container)
+                row_layout = QHBoxLayout(row_widget)
+                row_layout.setContentsMargins(0, 0, 0, 0)
+                checkbox = QCheckBox(row_widget)
+                row_layout.addWidget(checkbox)
+                label = QLabel(self._format_owned_image_label(info), row_widget)
+                label.setWordWrap(True)
+                label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+                row_layout.addWidget(label, 1)
+                blockers = self._image_delete_blockers(info)
+                resolve_button = QPushButton('Resolve…', row_widget)
+                resolve_button.setEnabled(bool(blockers))
+                delete_button = QPushButton('Delete', row_widget)
+                row_layout.addWidget(resolve_button)
+                row_layout.addWidget(delete_button)
+                rows_layout.addWidget(row_widget)
 
-        def _on_selection_changed():
-            _update_details()
-            _update_summary()
+                def _make_delete(image_info: dict):
+                    def _handler():
+                        self._confirm_remove_owned_image(image_info, dialog, _refresh)
 
-        def _on_prune_clicked():
+                    return _handler
+
+                def _make_resolve(image_info: dict):
+                    def _handler():
+                        self._resolve_image_blockers_interactive(image_info, dialog, _refresh)
+
+                    return _handler
+
+                delete_button.clicked.connect(_make_delete(info))
+                resolve_button.clicked.connect(_make_resolve(info))
+                state['rows'].append(
+                    {
+                        'info': info,
+                        'checkbox': checkbox,
+                        'delete': delete_button,
+                        'resolve': resolve_button,
+                        'label': label,
+                    }
+                )
+
+            rows_layout.addStretch(1)
+
+        def _selected_infos() -> list[dict]:
+            selected: list[dict] = []
+            for entry in state['rows']:
+                checkbox = entry.get('checkbox')
+                if isinstance(checkbox, QCheckBox) and checkbox.isChecked():
+                    selected.append(entry.get('info') or {})
+            return [info for info in selected if info]
+
+        def _delete_selected() -> None:
+            infos = _selected_infos()
+            if not infos:
+                QMessageBox.information(dialog, 'Delete Images', 'Select at least one image to delete.')
+                return
+            for info in infos:
+                self._confirm_remove_owned_image(info, dialog, _refresh)
+
+        def _resolve_selected() -> None:
+            infos = _selected_infos()
+            if not infos:
+                QMessageBox.information(dialog, 'Resolve Images', 'Select at least one image to inspect.')
+                return
+            for info in infos:
+                self._resolve_image_blockers_interactive(info, dialog, _refresh)
+
+        def _on_prune() -> None:
             self._confirm_prune_owned_dangling_images(
                 dialog,
-                avoid_recent=prune_checkbox.isChecked(),
+                avoid_recent=self._prune_avoid_recent_hours > 0,
                 refresh_callback=_refresh,
             )
 
-        def _on_remove_clicked():
-            item = list_widget.currentItem()
-            if not item:
-                QMessageBox.information(dialog, 'Remove Image', 'Select an image to remove.')
-                return
-            info = item.data(Qt.UserRole)
-            if not info:
-                QMessageBox.information(dialog, 'Remove Image', 'Select an image to remove.')
-                return
-            self._confirm_remove_owned_image(info, dialog, _refresh)
-
-        def _on_remove_tag_clicked():
-            item = list_widget.currentItem()
-            if not item:
-                QMessageBox.information(dialog, 'Remove Tag', 'Select an image before removing a tag.')
-                return
-            info = item.data(Qt.UserRole) or {}
-            if not info:
-                QMessageBox.information(dialog, 'Remove Tag', 'Select an image before removing a tag.')
-                return
-            candidates = [
-                tag for tag in (info.get('repo_tags') or []) if not self._tag_matches_overwrite(tag)
-            ]
-            if not candidates:
-                QMessageBox.information(
-                    dialog,
-                    'Remove Tag',
-                    'No removable tags are available for the selected image.',
-                )
-                return
-            tag_ref, ok = QInputDialog.getItem(
-                dialog,
-                'Remove Tag',
-                'Select a tag to remove:',
-                candidates,
-                0,
-                False,
-            )
-            if not ok or not tag_ref:
-                return
-            self._confirm_remove_image_tag(tag_ref, info, dialog, _refresh)
-
-        prune_checkbox.stateChanged.connect(lambda _: _update_summary())
-        list_widget.currentItemChanged.connect(lambda current, previous: _on_selection_changed())
+        prune_button.clicked.connect(_on_prune)
+        delete_selected_button.clicked.connect(_delete_selected)
+        resolve_selected_button.clicked.connect(_resolve_selected)
         refresh_button.clicked.connect(_refresh)
         close_button.clicked.connect(dialog.close)
-        prune_button.clicked.connect(_on_prune_clicked)
-        remove_tag_button.clicked.connect(_on_remove_tag_clicked)
-        remove_button.clicked.connect(_on_remove_clicked)
 
         _refresh()
-        _on_selection_changed()
 
         dialog.exec_()
 
@@ -3848,30 +4205,46 @@ class MainWindow(QMainWindow):
         parent: QWidget,
         refresh_callback: Callable[[], None],
     ) -> None:
-        image_id = (image_info or {}).get('id')
-        if not image_id:
+        image_record = image_info or {}
+        raw_id = image_record.get('full_id') or image_record.get('id')
+        if not raw_id:
             QMessageBox.warning(parent, 'Remove Image', 'No image is selected for removal.')
             return
 
-        if image_info.get('protected'):
-            QMessageBox.information(
+        raw_id = str(raw_id).strip()
+        if not raw_id:
+            QMessageBox.warning(parent, 'Remove Image', 'No image is selected for removal.')
+            return
+
+        current_info = self._lookup_owned_image_info(raw_id) or image_record
+        blockers = self._image_delete_blockers(current_info)
+        if blockers:
+            self._show_image_blockers_dialog(
+                current_info,
+                blockers,
                 parent,
-                'Remove Image',
-                'This image is retained by the rollback policy and cannot be removed.',
+                refresh_callback,
+                lambda: self._confirm_remove_owned_image(current_info, parent, refresh_callback),
             )
             return
 
-        current_details = self._inspect_image_by_id(image_id)
+        full_id = (current_info.get('full_id') or raw_id).strip()
+        current_details = self._inspect_image_by_id(full_id)
         if not current_details:
-            QMessageBox.warning(parent, 'Remove Image', 'The selected image could not be inspected. Refreshing list.')
+            QMessageBox.warning(
+                parent,
+                'Remove Image',
+                'The selected image could not be inspected. Refreshing list.',
+            )
             refresh_callback()
             return
 
         current_id = current_details.get('Id') or ''
         if current_id.startswith('sha256:'):
             current_id = current_id.split(':', 1)[1]
-        current_id = current_id[:64]
-        if current_id != image_id:
+        short_id = current_id[:64]
+        expected_id = (current_info.get('id') or raw_id.split(':')[-1])[:64]
+        if expected_id and short_id != expected_id:
             QMessageBox.warning(
                 parent,
                 'Remove Image',
@@ -3880,26 +4253,31 @@ class MainWindow(QMainWindow):
             refresh_callback()
             return
 
-        containers = self._list_containers_for_image(image_id)
+        containers = self._list_containers_for_image(short_id)
         if containers:
-            QMessageBox.information(
+            updated_info = dict(current_info)
+            updated_info['containers'] = containers
+            self._show_image_blockers_dialog(
+                updated_info,
+                [{'type': 'containers', 'containers': containers}],
                 parent,
-                'Remove Image',
-                'The selected image is still referenced by containers and cannot be removed.',
+                refresh_callback,
+                lambda: self._confirm_remove_owned_image(updated_info, parent, refresh_callback),
             )
-            refresh_callback()
             return
 
         repo_tags = current_details.get('RepoTags') or []
         moving_reference = any(self._tag_matches_overwrite(tag) for tag in repo_tags)
         if moving_reference:
-            QMessageBox.information(
+            self._show_image_blockers_dialog(
+                current_info,
+                [{'type': 'moving'}],
                 parent,
-                'Remove Image',
-                'This image is still tagged as a moving reference. Update those tags before removing the image.',
+                refresh_callback,
+                None,
             )
-            refresh_callback()
             return
+
         created_raw = current_details.get('Created') or ''
         created_dt = self._parse_docker_datetime(created_raw)
         created_display = (
@@ -3914,8 +4292,8 @@ class MainWindow(QMainWindow):
                 labels = {}
 
         payload = {
-            'action': self._fmt_args(['docker', 'rmi', image_id]),
-            'image_id': image_id,
+            'action': self._fmt_args(['docker', 'rmi', full_id]),
+            'image_id': short_id,
             'tags': repo_tags,
             'labels': labels or {},
             'created': created_display,
@@ -3936,7 +4314,7 @@ class MainWindow(QMainWindow):
             return
 
         rm_cp = self._sp_run(
-            ['docker', 'rmi', image_id],
+            ['docker', 'rmi', full_id],
             log_key='log',
             text=True,
             check=False,
@@ -3946,7 +4324,7 @@ class MainWindow(QMainWindow):
             if stderr:
                 QMessageBox.warning(parent, 'Removal Failed', stderr)
         else:
-            QMessageBox.information(parent, 'Image Removed', f'Removed image {image_id}.')
+            QMessageBox.information(parent, 'Image Removed', f'Removed image {short_id}.')
 
         refresh_callback()
         self._check_for_dangling_images()
@@ -3963,7 +4341,6 @@ class MainWindow(QMainWindow):
             ],
             log_key='log',
         )
-
     def _confirm_remove_image_tag(
         self,
         tag_ref: str,

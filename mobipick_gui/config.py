@@ -79,6 +79,7 @@ CONFIG_DEFAULTS: Dict[str, Dict] = {
         'owner_label': 'gui.owner',
         'owner_value': 'mobipick-gui',
         'created_label': 'gui.created',
+        'snapshot_label': 'gui.snapshot',
         'convenience_tag': 'latest',
         'overwrite_tags': ['oscar-env', 'latest'],
         'retention_limit': 5,
