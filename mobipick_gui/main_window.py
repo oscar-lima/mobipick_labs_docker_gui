@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+import json
 import os
 import re
 import shlex
@@ -9,7 +10,7 @@ import sys
 import time
 import uuid
 from collections import deque
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable, Match, Optional
 
@@ -20,19 +21,21 @@ from PyQt5.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDialog,
+    QFileDialog,
     QHBoxLayout,
     QLabel,
+    QListWidget,
+    QListWidgetItem,
     QLineEdit,
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QSizePolicy,
     QTabBar,
     QTabWidget,
     QTextEdit,
     QVBoxLayout,
     QWidget,
-    QFileDialog,
-    QSizePolicy,
 )
 
 from .ansi import CSI_SEQ_RE, OSC_SEQ_RE, ansi_to_html
@@ -108,11 +111,18 @@ class MainWindow(QMainWindow):
         self._last_log_origin: dict[str, str] = {}
         self._gui_log_color = str(CONFIG['log'].get('gui_log_color', '#ff00ff'))
         self._command_log_color = str(CONFIG['log'].get('command_log_color', '#4da3ff'))
-        self._pending_image_cleanups: dict[str, tuple[str | None, str]] = {}
-        self._pending_image_cleanup_interval_ms = 60_000
-        self._pending_image_cleanup_timer = QTimer(self)
-        self._pending_image_cleanup_timer.setSingleShot(True)
-        self._pending_image_cleanup_timer.timeout.connect(self._on_pending_cleanup_timeout)
+        self._image_owner_label = str(self._images_cfg.get('owner_label', 'gui.owner'))
+        self._image_owner_value = str(self._images_cfg.get('owner_value', 'mobipick-gui'))
+        self._image_created_label = str(self._images_cfg.get('created_label', 'gui.created'))
+        self._image_convenience_tag = str(self._images_cfg.get('convenience_tag', 'latest')) or 'latest'
+        self._image_retention_limit = self._coerce_non_negative_int(
+            self._images_cfg.get('retention_limit'),
+            default=5,
+        )
+        self._prune_avoid_recent_hours = self._coerce_non_negative_int(
+            self._images_cfg.get('prune_avoid_recent_hours'),
+            default=24,
+        )
 
         # sim state
         self._sim_container_name = 'mobipick-run'
@@ -170,6 +180,10 @@ class MainWindow(QMainWindow):
         self.commit_current_tab_button = QPushButton('Commit Current Tab')
         self.commit_current_tab_button.setToolTip('Create a docker image from the container backing the current tab')
         self.commit_current_tab_button.clicked.connect(self.commit_current_tab)
+
+        self.manage_images_button = QPushButton('Manage Images')
+        self.manage_images_button.setToolTip('Review and remove docker images owned by this GUI')
+        self.manage_images_button.clicked.connect(self._open_image_management_dialog)
 
         self.execute_docker_cp_button = QPushButton('Execute Docker cp')
         self.execute_docker_cp_button.setToolTip('Copy configured paths from the active container to the host')
@@ -263,6 +277,7 @@ class MainWindow(QMainWindow):
         controls_row.addWidget(self.clear_button)
         controls_row.addWidget(self.clear_all_button)
         controls_row.addWidget(self.commit_current_tab_button)
+        controls_row.addWidget(self.manage_images_button)
         controls_row.addWidget(self.execute_docker_cp_button)
 
         spacer_controls = QWidget()
@@ -298,8 +313,6 @@ class MainWindow(QMainWindow):
         self._ensure_tab('rqt', 'RQt Tables', closable=False)
         # central log tab
         self._ensure_tab('log', 'Log', closable=False)
-
-        self._initialize_dangling_image_cleanup()
 
         self._apply_env_to_all_tabs()
         self._refresh_script_options()
@@ -439,6 +452,42 @@ class MainWindow(QMainWindow):
             repo, tag = image_ref.rsplit(':', 1)
             return repo, tag
         return image_ref, ''
+
+    @staticmethod
+    def _coerce_non_negative_int(value, default: int = 0) -> int:
+        try:
+            coerced = int(value)
+        except (TypeError, ValueError):
+            return max(0, default)
+        return coerced if coerced >= 0 else max(0, default)
+
+    @staticmethod
+    def _human_size(num) -> str:
+        try:
+            value = float(num)
+        except (TypeError, ValueError):
+            return '0 B'
+        units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB']
+        for unit in units:
+            if abs(value) < 1024 or unit == units[-1]:
+                return f'{value:.2f} {unit}'
+            value /= 1024
+        return f'{value:.2f} PB'
+
+    @staticmethod
+    def _parse_docker_datetime(value: str) -> datetime | None:
+        if not value:
+            return None
+        patterns = ['%Y-%m-%dT%H:%M:%S.%fZ', '%Y-%m-%dT%H:%M:%SZ']
+        for pattern in patterns:
+            try:
+                return datetime.strptime(value, pattern)
+            except ValueError:
+                continue
+        try:
+            return datetime.fromisoformat(value.replace('Z', '+00:00'))
+        except ValueError:
+            return None
 
     def _docker_cp_entries(self, direction: str) -> list[dict[str, str]]:
         config = getattr(self, '_docker_cp_config', {}) or {}
@@ -2363,7 +2412,7 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, 'Commit Current Tab', 'Choose a target image from the image list before committing.')
             return
 
-        prompt_result = self._prompt_commit_action(image_ref)
+        prompt_result = self._prompt_commit_action(image_ref, container_name)
         if not prompt_result:
             return
 
@@ -2391,52 +2440,101 @@ class MainWindow(QMainWindow):
                         container_id = container_id.split(':', 1)[1]
                     container_ref = container_id[:64] or container_ref
 
-        previous_image_id = self._image_id_for_ref(commit_target)
-
-        commit_cp = self._sp_run(
-            ['docker', 'commit', container_ref, commit_target],
-            log_key=key,
-            text=True,
-        )
-
-        if commit_cp.returncode == 0:
-            if is_snapshot:
-                message = f'Committed container {container_name} to new snapshot image {commit_target}.'
-            else:
-                message = f'Committed container {container_name} to image {commit_target}.'
-            self._append_gui_html(key, html.escape(message))
-
-            if commit_target != self._selected_image:
-                self._selected_image = commit_target
-                self.image_combo.blockSignals(True)
-                if commit_target not in self._image_choices:
-                    self._image_choices.append(commit_target)
-                    self.image_combo.addItem(commit_target)
-                try:
-                    index = self._image_choices.index(commit_target)
-                except ValueError:
-                    index = -1
-                if index >= 0:
-                    self.image_combo.setCurrentIndex(index)
-                    self.image_combo.setToolTip(commit_target)
-                self.image_combo.blockSignals(False)
-                self._update_related_patterns()
-                self._apply_env_to_all_tabs()
-
-            self._stop_containers_after_commit(
-                tab,
-                container_name,
-                commit_target,
-                previous_image_id,
-                key,
+        repo_for_timestamp, _ = self._split_image_ref(commit_target or image_ref)
+        repo_for_timestamp = repo_for_timestamp.strip()
+        if not repo_for_timestamp:
+            QMessageBox.warning(
+                self,
+                'Commit Current Tab',
+                'Unable to determine an image repository for the commit target.',
             )
-        else:
+            return
+
+        timestamp = datetime.utcnow().replace(microsecond=0)
+        timestamp_tag = timestamp.strftime('%Y%m%dT%H%M%SZ')
+        immutable_ref = f'{repo_for_timestamp}:{timestamp_tag}'
+        created_label_value = f"{timestamp.isoformat()}Z"
+
+        commit_args = [
+            'docker',
+            'commit',
+            '-p',
+            '--change',
+            f'LABEL {self._image_owner_label}={self._image_owner_value}',
+            '--change',
+            f'LABEL {self._image_created_label}={created_label_value}',
+            container_ref,
+            immutable_ref,
+        ]
+
+        commit_cp = self._sp_run(commit_args, log_key=key, text=True)
+
+        if commit_cp.returncode != 0:
             stderr_text = self._decode_output(getattr(commit_cp, 'stderr', '')).strip()
             if stderr_text:
                 self._append_gui_html(key, html.escape(stderr_text))
-            QMessageBox.warning(self, 'Commit Current Tab', 'Failed to commit the current tab container. Check the tab log for details.')
+            QMessageBox.warning(
+                self,
+                'Commit Current Tab',
+                'Failed to commit the current tab container. Check the tab log for details.',
+            )
+            return
 
-    def _prompt_commit_action(self, image_ref: str) -> tuple[str, bool] | None:
+        message_lines = [
+            f'Committed container {container_name} to immutable image {immutable_ref}.',
+            (
+                f'Applied labels {self._image_owner_label}={self._image_owner_value} '
+                f'and {self._image_created_label}={created_label_value}.'
+            ),
+        ]
+
+        retag_targets: list[str] = []
+        convenience_ref = ''
+        if commit_target and commit_target != immutable_ref:
+            retag_targets.append(commit_target)
+        if self._image_convenience_tag:
+            convenience_ref = f'{repo_for_timestamp}:{self._image_convenience_tag}'
+            if convenience_ref not in retag_targets and convenience_ref != immutable_ref:
+                retag_targets.append(convenience_ref)
+
+        for dest_ref in retag_targets:
+            success = self._retag_image(immutable_ref, dest_ref, key)
+            if success:
+                message_lines.append(f'Updated tag {dest_ref}.')
+            else:
+                message_lines.append(f'Failed to update tag {dest_ref}.')
+
+        summary_html = '<br/>'.join(html.escape(line) for line in message_lines)
+        self._append_gui_html(key, summary_html)
+
+        if commit_target and commit_target not in self._image_choices:
+            self._image_choices.append(commit_target)
+            self.image_combo.addItem(commit_target)
+
+        if is_snapshot and commit_target:
+            desired_selection = commit_target
+        else:
+            desired_selection = commit_target or self._selected_image
+
+        if desired_selection:
+            self._selected_image = desired_selection
+            self.image_combo.blockSignals(True)
+            try:
+                index = self._image_choices.index(desired_selection)
+            except ValueError:
+                index = -1
+            if index >= 0:
+                self.image_combo.setCurrentIndex(index)
+                self.image_combo.setToolTip(desired_selection)
+            self.image_combo.blockSignals(False)
+            self._update_related_patterns()
+            self._apply_env_to_all_tabs()
+
+    def _prompt_commit_action(
+        self,
+        image_ref: str,
+        container_name: str,
+    ) -> tuple[str, bool] | None:
         suggested_snapshot = self._suggest_snapshot_ref(image_ref)
 
         dialog = QDialog(self)
@@ -2449,6 +2547,12 @@ class MainWindow(QMainWindow):
         description.setWordWrap(True)
         layout.addWidget(description)
 
+        caveat = QLabel(
+            'Volumes and bind mounts are not captured by docker commit. Review mounts before continuing.'
+        )
+        caveat.setWordWrap(True)
+        layout.addWidget(caveat)
+
         tag_label = QLabel('Snapshot tag:')
         tag_input = QLineEdit(dialog)
         tag_input.setText(suggested_snapshot)
@@ -2459,6 +2563,66 @@ class MainWindow(QMainWindow):
         tag_row.addWidget(tag_label)
         tag_row.addWidget(tag_input)
         layout.addLayout(tag_row)
+
+        show_mounts_button = QPushButton('Show Mounts', dialog)
+
+        def _show_mounts():
+            if not container_name:
+                QMessageBox.information(dialog, 'Container Mounts', 'No container is associated with this tab.')
+                return
+            inspect_args = [
+                'docker',
+                'container',
+                'inspect',
+                '--format',
+                '{{json .Mounts}}',
+                container_name,
+            ]
+            cp = self._sp_run(
+                inspect_args,
+                log_key='log',
+                log_stdout=False,
+                log_stderr=False,
+                text=True,
+                check=False,
+            )
+            mounts_text = 'No mounts detected.'
+            if cp.returncode in (0, None):
+                output = (cp.stdout or '').strip()
+                if output:
+                    try:
+                        mounts = json.loads(output)
+                    except json.JSONDecodeError:
+                        mounts_text = output
+                    else:
+                        if isinstance(mounts, list) and mounts:
+                            lines: list[str] = []
+                            for mount in mounts:
+                                if not isinstance(mount, dict):
+                                    continue
+                                source = str(mount.get('Source', '') or '')
+                                destination = str(mount.get('Destination', '') or '')
+                                mode = str(mount.get('Mode', '') or '')
+                                rw = 'rw' if mount.get('RW', True) else 'ro'
+                                details = f'{source} → {destination}' if source or destination else json.dumps(mount)
+                                if mode:
+                                    details = f'{details} ({mode}, {rw})'
+                                else:
+                                    details = f'{details} ({rw})'
+                                lines.append(details)
+                            mounts_text = '\n'.join(lines) if lines else 'No mounts detected.'
+                        else:
+                            mounts_text = 'No mounts detected.'
+            else:
+                mounts_text = self._decode_output(getattr(cp, 'stderr', '')).strip() or 'Failed to inspect mounts.'
+            QMessageBox.information(dialog, 'Container Mounts', mounts_text or 'No mounts detected.')
+
+        show_mounts_button.clicked.connect(_show_mounts)
+
+        inspect_row = QHBoxLayout()
+        inspect_row.addStretch(1)
+        inspect_row.addWidget(show_mounts_button)
+        layout.addLayout(inspect_row)
 
         buttons_row = QHBoxLayout()
         overwrite_button = QPushButton('Overwrite Existing Tag', dialog)
@@ -2565,125 +2729,6 @@ class MainWindow(QMainWindow):
             return f'{repo}:{snapshot_tag}'
         return snapshot_tag
 
-    def _stop_containers_after_commit(
-        self,
-        tab: ProcessTab,
-        container_name: str,
-        image_ref: str,
-        previous_image_id: str | None,
-        log_key: str,
-    ):
-        self._append_gui_html(
-            log_key,
-            '<i>Stopping running containers to finalize commit and clean up images...</i>',
-        )
-
-        if self._terminal_is_active():
-            self.stop_terminal()
-
-        commands: list[list[str]] = []
-        exec_id = getattr(tab, 'exec_id', None)
-        commands += self._collect_container_commands(
-            container_name,
-            exec_id=exec_id,
-            log_key=log_key,
-        )
-
-        roscore_tab = self.tasks.get('roscore')
-        roscore_exec = getattr(roscore_tab, 'exec_id', None) if roscore_tab else None
-        commands += self._collect_container_commands(
-            self._roscore_container_name,
-            exec_id=roscore_exec,
-            log_key=log_key,
-        )
-
-        exclude = {name for name in (container_name, self._roscore_container_name) if name}
-        commands += self._stop_all_related(tab, exclude=exclude)
-
-        def _after_stops():
-            self._roscore_running_cached = False
-            self._roscore_stopping = False
-            self._roscore_last_start_ts = None
-            self.set_roscore_visual('red', 'Start Roscore', True)
-            tab.exec_id = None
-            tab.container_name = None
-            if roscore_tab:
-                roscore_tab.exec_id = None
-                roscore_tab.container_name = None
-            self._cleanup_previous_image(image_ref, previous_image_id, log_key)
-            self._flush_pending_image_cleanups()
-            self.update_sim_status_from_poll(force=True)
-
-        if commands:
-            self._run_command_sequence(commands, on_finished=_after_stops, log_key=log_key)
-        else:
-            _after_stops()
-
-    def _cleanup_previous_image(self, image_ref: str, previous_image_id: str | None, log_key: str):
-        if not previous_image_id:
-            return
-
-        removal_succeeded = self._try_remove_unused_image(image_ref, previous_image_id, log_key)
-        if removal_succeeded:
-            self._pending_image_cleanups.pop(previous_image_id, None)
-            self._ensure_pending_cleanup_timer()
-            return
-
-        already_pending = previous_image_id in self._pending_image_cleanups
-        self._pending_image_cleanups[previous_image_id] = (image_ref, log_key)
-        if not already_pending:
-            message = (
-                f'Skipped removing previous image for {image_ref} '
-                'because it is still used by other containers.'
-            )
-            self._log_image_cleanup_message(log_key, message)
-        self._ensure_pending_cleanup_timer()
-
-    def _try_remove_unused_image(
-        self, image_ref: str | None, previous_image_id: str, log_key: str
-    ) -> bool:
-        if image_ref:
-            new_image_id = self._image_id_for_ref(image_ref)
-            if new_image_id and new_image_id == previous_image_id:
-                return True
-
-        if self._image_has_dependent_containers(previous_image_id):
-            return False
-
-        rm_cp = self._sp_run(
-            ['docker', 'image', 'rm', previous_image_id],
-            log_key=log_key,
-            text=True,
-            check=False,
-        )
-        if rm_cp.returncode == 0:
-            context = image_ref or previous_image_id
-            message = f'Removed previous image layer {previous_image_id} after updating {context}.'
-            self._log_image_cleanup_message(log_key, message)
-            return True
-
-        stderr_text = self._decode_output(getattr(rm_cp, 'stderr', '')).strip()
-        if stderr_text:
-            self._log_image_cleanup_message(log_key, stderr_text)
-
-        lowered = stderr_text.lower()
-        if 'image is being used by' in lowered or 'conflict: unable to delete' in lowered:
-            return False
-        return True
-
-    def _image_has_dependent_containers(self, image_id: str) -> bool:
-        cp = self._sp_run(
-            ['docker', 'ps', '-a', '--filter', f'ancestor={image_id}', '--format', '{{.ID}}'],
-            log_stdout=False,
-            log_stderr=False,
-            text=True,
-            check=False,
-        )
-        if cp.returncode not in (0, None):
-            return False
-        output = (cp.stdout or '').strip()
-        return bool(output)
-
     def _image_id_for_ref(self, image_ref: str) -> str | None:
         image_ref = (image_ref or '').strip()
         if not image_ref:
@@ -2702,62 +2747,515 @@ class MainWindow(QMainWindow):
             image_id = image_id.split(':', 1)[1]
         return image_id[:64] or None
 
-    def _initialize_dangling_image_cleanup(self):
+    def _retag_image(self, source_ref: str, target_ref: str, log_key: str) -> bool:
+        target_ref = (target_ref or '').strip()
+        if not target_ref or target_ref == source_ref:
+            return True
+        tag_cp = self._sp_run(
+            ['docker', 'tag', source_ref, target_ref],
+            log_key=log_key,
+            text=True,
+            check=False,
+        )
+        if tag_cp.returncode in (0, None):
+            return True
+        stderr_text = self._decode_output(getattr(tag_cp, 'stderr', '')).strip()
+        if stderr_text:
+            self._append_gui_html(log_key, html.escape(stderr_text))
+        return False
+
+    def _list_containers_for_image(self, image_id: str) -> list[str]:
+        image_id = (image_id or '').strip()
+        if not image_id:
+            return []
         cp = self._sp_run(
-            ['docker', 'image', 'ls', '--filter', 'dangling=true', '--format', '{{.ID}}'],
+            [
+                'docker',
+                'container',
+                'ls',
+                '-a',
+                '--filter',
+                f'ancestor={image_id}',
+                '--format',
+                '{{.ID}}',
+            ],
             log_stdout=False,
             log_stderr=False,
             text=True,
             check=False,
         )
         if cp.returncode not in (0, None):
-            return
+            return []
+        return [line.strip() for line in (cp.stdout or '').splitlines() if line.strip()]
 
-        ids = [line.strip() for line in (cp.stdout or '').splitlines() if line.strip()]
-        if not ids:
-            return
+    def _inspect_image_by_id(self, image_id: str) -> dict | None:
+        image_id = (image_id or '').strip()
+        if not image_id:
+            return None
+        cp = self._sp_run(
+            ['docker', 'image', 'inspect', '--format', '{{json .}}', image_id],
+            log_stdout=False,
+            log_stderr=False,
+            text=True,
+            check=False,
+        )
+        if cp.returncode not in (0, None):
+            return None
+        output = (cp.stdout or '').strip()
+        if not output:
+            return None
+        try:
+            data = json.loads(output)
+        except json.JSONDecodeError:
+            return None
+        if isinstance(data, list):
+            data = data[0] if data else None
+        return data if isinstance(data, dict) else None
 
+    def _collect_owned_image_metadata(self) -> list[dict]:
+        list_args = [
+            'docker',
+            'image',
+            'ls',
+            '--filter',
+            f'label={self._image_owner_label}={self._image_owner_value}',
+            '--format',
+            '{{.ID}}',
+            '--no-trunc',
+        ]
+        cp = self._sp_run(
+            list_args,
+            log_stdout=False,
+            log_stderr=False,
+            text=True,
+            check=False,
+        )
+        if cp.returncode not in (0, None):
+            return []
+
+        ids: list[str] = []
+        seen: set[str] = set()
+        for line in (cp.stdout or '').splitlines():
+            image_id = line.strip()
+            if image_id and image_id not in seen:
+                seen.add(image_id)
+                ids.append(image_id)
+
+        images: list[dict] = []
         for image_id in ids:
-            if image_id in self._pending_image_cleanups:
+            inspected = self._inspect_image_by_id(image_id)
+            if not inspected:
                 continue
-            removed = self._try_remove_unused_image(None, image_id, 'log')
-            if not removed:
-                self._pending_image_cleanups[image_id] = (None, 'log')
+            repo_tags = inspected.get('RepoTags') or []
+            tags = [tag for tag in repo_tags if tag and '<none>' not in tag]
+            first_tag = tags[0] if tags else ''
+            repository, _ = self._split_image_ref(first_tag)
+            repository = repository or first_tag or '<none>'
+            created_raw = inspected.get('Created') or ''
+            created_dt = self._parse_docker_datetime(created_raw)
+            created_display = (
+                created_dt.strftime('%Y-%m-%d %H:%M:%S UTC') if created_dt else created_raw
+            )
+            size = inspected.get('Size') or 0
+            config = inspected.get('Config') or {}
+            labels = {}
+            if isinstance(config, dict):
+                labels = config.get('Labels') or {}
+                if labels and not isinstance(labels, dict):
+                    labels = {}
+            owner_value = ''
+            if isinstance(labels, dict):
+                owner_value = str(labels.get(self._image_owner_label, '') or '')
+            project_owned = owner_value == self._image_owner_value
+            containers = self._list_containers_for_image(image_id)
+            images.append(
+                {
+                    'id': image_id[:64],
+                    'repo_tags': repo_tags,
+                    'created': created_raw,
+                    'created_dt': created_dt,
+                    'created_display': created_display,
+                    'size': size,
+                    'size_human': self._human_size(size),
+                    'labels': labels or {},
+                    'repository': repository,
+                    'dangling': not tags,
+                    'project_owned': project_owned,
+                    'containers': containers,
+                }
+            )
 
-        self._ensure_pending_cleanup_timer()
+        retention_limit = self._image_retention_limit
+        if retention_limit > 0:
+            by_repo: dict[str, list[dict]] = {}
+            for info in images:
+                by_repo.setdefault(info['repository'], []).append(info)
+            for repo_images in by_repo.values():
+                repo_images.sort(
+                    key=lambda item: item.get('created_dt') or datetime.min,
+                    reverse=True,
+                )
+                for index, info in enumerate(repo_images):
+                    info['protected'] = index < retention_limit
+        else:
+            for info in images:
+                info['protected'] = False
 
-    def _flush_pending_image_cleanups(self):
-        pending_items = list(self._pending_image_cleanups.items())
-        for image_id, (image_ref, log_key) in pending_items:
-            removed = self._try_remove_unused_image(image_ref, image_id, log_key)
-            if removed:
-                self._pending_image_cleanups.pop(image_id, None)
+        return images
 
-        self._initialize_dangling_image_cleanup()
-        self._ensure_pending_cleanup_timer()
+    def _open_image_management_dialog(self):
+        self._log_button_click(self.manage_images_button, 'Manage Images')
 
-    def _on_pending_cleanup_timeout(self):
-        if not self._pending_image_cleanups:
+        dialog = QDialog(self)
+        dialog.setWindowTitle('Manage Owned Docker Images')
+
+        layout = QVBoxLayout(dialog)
+        description = QLabel(
+            f"Images labeled with {self._image_owner_label}={self._image_owner_value} are managed by this GUI."
+        )
+        description.setWordWrap(True)
+        layout.addWidget(description)
+
+        summary_box = QTextEdit(dialog)
+        summary_box.setReadOnly(True)
+        summary_box.setMaximumHeight(120)
+        layout.addWidget(summary_box)
+
+        list_widget = QListWidget(dialog)
+        layout.addWidget(list_widget)
+
+        details_box = QTextEdit(dialog)
+        details_box.setReadOnly(True)
+        details_box.setMinimumHeight(160)
+        layout.addWidget(details_box)
+
+        if self._prune_avoid_recent_hours > 0:
+            checkbox_label = (
+                f'Skip images newer than {self._prune_avoid_recent_hours}h during prune'
+            )
+        else:
+            checkbox_label = 'Skip very recent images during prune'
+        prune_checkbox = QCheckBox(checkbox_label, dialog)
+        prune_checkbox.setChecked(self._prune_avoid_recent_hours > 0)
+        prune_checkbox.setEnabled(self._prune_avoid_recent_hours > 0)
+        layout.addWidget(prune_checkbox)
+
+        button_row = QHBoxLayout()
+        prune_button = QPushButton('Prune Dangling Owned Layers', dialog)
+        remove_button = QPushButton('Remove Selected Image', dialog)
+        refresh_button = QPushButton('Refresh', dialog)
+        close_button = QPushButton('Close', dialog)
+        button_row.addWidget(prune_button)
+        button_row.addWidget(remove_button)
+        button_row.addStretch(1)
+        button_row.addWidget(refresh_button)
+        button_row.addWidget(close_button)
+        layout.addLayout(button_row)
+
+        state: dict[str, list[dict]] = {'images': []}
+
+        def _prune_candidates(images: list[dict]) -> list[dict]:
+            threshold = None
+            if prune_checkbox.isChecked() and self._prune_avoid_recent_hours > 0:
+                threshold = datetime.utcnow() - timedelta(hours=self._prune_avoid_recent_hours)
+            candidates: list[dict] = []
+            for info in images:
+                if not info.get('dangling'):
+                    continue
+                if info.get('containers'):
+                    continue
+                if info.get('protected'):
+                    continue
+                created_dt = info.get('created_dt')
+                if threshold and created_dt and created_dt > threshold:
+                    continue
+                candidates.append(info)
+            return candidates
+
+        def _update_details():
+            item = list_widget.currentItem()
+            if not item:
+                details_box.clear()
+                remove_button.setEnabled(False)
+                return
+            info = item.data(Qt.UserRole) or {}
+            removable = bool(info) and not info.get('containers') and not info.get('protected')
+            remove_button.setEnabled(removable)
+            payload = {
+                'image_id': info.get('id'),
+                'tags': info.get('repo_tags') or [],
+                'labels': info.get('labels') or {},
+                'created': info.get('created'),
+                'created_display': info.get('created_display'),
+                'size_bytes': info.get('size'),
+                'size_human': info.get('size_human'),
+                'dangling': info.get('dangling'),
+                'protected_by_retention': info.get('protected'),
+                'referencing_containers': info.get('containers') or [],
+                'project_owned': info.get('project_owned'),
+            }
+            details_box.setPlainText(json.dumps(payload, indent=2))
+
+        def _update_summary():
+            images = state['images']
+            dangling_count = sum(1 for info in images if info.get('dangling'))
+            in_use_count = sum(1 for info in images if info.get('containers'))
+            protected_count = sum(1 for info in images if info.get('protected'))
+            prune_count = len(_prune_candidates(images))
+            summary_lines = [
+                f'Owned images: {len(images)}',
+                f'Dangling: {dangling_count}',
+                f'In use by containers: {in_use_count}',
+                f'Protected by retention: {protected_count}',
+                f'Prune candidates: {prune_count}',
+                f'Retention limit per repository: {self._image_retention_limit}',
+                f'Owner label: {self._image_owner_label}={self._image_owner_value}',
+            ]
+            summary_box.setPlainText('\n'.join(summary_lines))
+            prune_button.setEnabled(prune_count > 0)
+
+        def _refresh():
+            state['images'] = self._collect_owned_image_metadata()
+            list_widget.blockSignals(True)
+            list_widget.clear()
+            for info in state['images']:
+                tags_display = ', '.join(info['repo_tags']) if info['repo_tags'] else '<none>:<none>'
+                label_parts = [
+                    info['id'][:12],
+                    tags_display,
+                    info['size_human'],
+                    info['created_display'],
+                    f"containers:{len(info['containers'])}",
+                ]
+                if info.get('protected'):
+                    label_parts.append('protected')
+                if info.get('dangling'):
+                    label_parts.append('dangling')
+                item = QListWidgetItem(' | '.join(label_parts))
+                item.setData(Qt.UserRole, info)
+                list_widget.addItem(item)
+            list_widget.blockSignals(False)
+            if list_widget.count() > 0:
+                list_widget.setCurrentRow(0)
+            else:
+                details_box.clear()
+                remove_button.setEnabled(False)
+            _update_summary()
+
+        def _on_selection_changed():
+            _update_details()
+            _update_summary()
+
+        def _on_prune_clicked():
+            self._confirm_prune_owned_dangling_images(
+                dialog,
+                avoid_recent=prune_checkbox.isChecked(),
+                refresh_callback=_refresh,
+            )
+
+        def _on_remove_clicked():
+            item = list_widget.currentItem()
+            if not item:
+                QMessageBox.information(dialog, 'Remove Image', 'Select an image to remove.')
+                return
+            info = item.data(Qt.UserRole)
+            if not info:
+                QMessageBox.information(dialog, 'Remove Image', 'Select an image to remove.')
+                return
+            self._confirm_remove_owned_image(info, dialog, _refresh)
+
+        prune_checkbox.stateChanged.connect(lambda _: _update_summary())
+        list_widget.currentItemChanged.connect(lambda current, previous: _on_selection_changed())
+        refresh_button.clicked.connect(_refresh)
+        close_button.clicked.connect(dialog.close)
+        prune_button.clicked.connect(_on_prune_clicked)
+        remove_button.clicked.connect(_on_remove_clicked)
+
+        _refresh()
+        _on_selection_changed()
+
+        dialog.exec_()
+
+    def _confirm_prune_owned_dangling_images(
+        self,
+        parent: QWidget,
+        *,
+        avoid_recent: bool,
+        refresh_callback: Callable[[], None],
+    ) -> None:
+        images = self._collect_owned_image_metadata()
+        threshold = None
+        if avoid_recent and self._prune_avoid_recent_hours > 0:
+            threshold = datetime.utcnow() - timedelta(hours=self._prune_avoid_recent_hours)
+
+        candidates: list[dict] = []
+        for info in images:
+            if not info.get('dangling'):
+                continue
+            if info.get('containers'):
+                continue
+            if info.get('protected'):
+                continue
+            created_dt = info.get('created_dt')
+            if threshold and created_dt and created_dt > threshold:
+                continue
+            candidates.append(info)
+
+        if not candidates:
+            QMessageBox.information(
+                parent,
+                'Prune Dangling Images',
+                'No owned dangling images are eligible for pruning.',
+            )
+            refresh_callback()
             return
 
-        pending_items = list(self._pending_image_cleanups.items())
-        for image_id, (image_ref, log_key) in pending_items:
-            removed = self._try_remove_unused_image(image_ref, image_id, log_key)
-            if removed:
-                self._pending_image_cleanups.pop(image_id, None)
+        total_size = sum(info.get('size') or 0 for info in candidates)
+        summary_lines = [
+            {
+                'image_id': info['id'],
+                'tags': info.get('repo_tags') or [],
+                'created': info.get('created_display'),
+                'size_human': info.get('size_human'),
+            }
+            for info in candidates
+        ]
 
-        self._ensure_pending_cleanup_timer()
+        command = [
+            'docker',
+            'image',
+            'prune',
+            '-f',
+            '--filter',
+            f'label={self._image_owner_label}={self._image_owner_value}',
+        ]
+        if avoid_recent and self._prune_avoid_recent_hours > 0:
+            command.extend(['--filter', f'until={self._prune_avoid_recent_hours}h'])
 
-    def _ensure_pending_cleanup_timer(self):
-        if self._pending_image_cleanups:
-            if not self._pending_image_cleanup_timer.isActive():
-                self._pending_image_cleanup_timer.start(self._pending_image_cleanup_interval_ms)
-        elif self._pending_image_cleanup_timer.isActive():
-            self._pending_image_cleanup_timer.stop()
+        payload = {
+            'action': self._fmt_args(command),
+            'candidate_count': len(candidates),
+            'total_reclaim_bytes': total_size,
+            'total_reclaim_human': self._human_size(total_size),
+            'candidates': summary_lines,
+        }
+        if avoid_recent and self._prune_avoid_recent_hours > 0:
+            payload['filters'] = {'until': f'{self._prune_avoid_recent_hours}h'}
 
-    def _log_image_cleanup_message(self, log_key: str, message: str):
-        key = log_key if log_key in self.tasks else 'log'
-        self._append_gui_html(key, html.escape(message))
+        message = json.dumps(payload, indent=2)
+        confirm = QMessageBox.question(
+            parent,
+            'Confirm Prune',
+            f'{message}\n\nProceed with prune?',
+        )
+        if confirm != QMessageBox.Yes:
+            return
+
+        prune_cp = self._sp_run(command, log_key='log', text=True, check=False)
+        if prune_cp.returncode not in (0, None):
+            stderr = self._decode_output(getattr(prune_cp, 'stderr', '')).strip()
+            if stderr:
+                QMessageBox.warning(parent, 'Prune Failed', stderr)
+
+        refresh_callback()
+
+    def _confirm_remove_owned_image(
+        self,
+        image_info: dict,
+        parent: QWidget,
+        refresh_callback: Callable[[], None],
+    ) -> None:
+        image_id = (image_info or {}).get('id')
+        if not image_id:
+            QMessageBox.warning(parent, 'Remove Image', 'No image is selected for removal.')
+            return
+
+        if image_info.get('protected'):
+            QMessageBox.information(
+                parent,
+                'Remove Image',
+                'This image is retained by the rollback policy and cannot be removed.',
+            )
+            return
+
+        current_details = self._inspect_image_by_id(image_id)
+        if not current_details:
+            QMessageBox.warning(parent, 'Remove Image', 'The selected image could not be inspected. Refreshing list.')
+            refresh_callback()
+            return
+
+        current_id = current_details.get('Id') or ''
+        if current_id.startswith('sha256:'):
+            current_id = current_id.split(':', 1)[1]
+        current_id = current_id[:64]
+        if current_id != image_id:
+            QMessageBox.warning(
+                parent,
+                'Remove Image',
+                'The image ID changed while preparing the removal. Refreshing list.',
+            )
+            refresh_callback()
+            return
+
+        containers = self._list_containers_for_image(image_id)
+        if containers:
+            QMessageBox.information(
+                parent,
+                'Remove Image',
+                'The selected image is still referenced by containers and cannot be removed.',
+            )
+            refresh_callback()
+            return
+
+        repo_tags = current_details.get('RepoTags') or []
+        created_raw = current_details.get('Created') or ''
+        created_dt = self._parse_docker_datetime(created_raw)
+        created_display = (
+            created_dt.strftime('%Y-%m-%d %H:%M:%S UTC') if created_dt else created_raw
+        )
+        size = current_details.get('Size') or 0
+        config = current_details.get('Config') or {}
+        labels = {}
+        if isinstance(config, dict):
+            labels = config.get('Labels') or {}
+            if labels and not isinstance(labels, dict):
+                labels = {}
+
+        payload = {
+            'action': self._fmt_args(['docker', 'rmi', image_id]),
+            'image_id': image_id,
+            'tags': repo_tags,
+            'labels': labels or {},
+            'created': created_display,
+            'size_bytes': size,
+            'size_human': self._human_size(size),
+            'referencing_containers': containers,
+            'estimated_reclaim_mb': round((size or 0) / (1024 * 1024), 2),
+        }
+
+        message = json.dumps(payload, indent=2)
+        confirm = QMessageBox.question(
+            parent,
+            'Confirm Image Removal',
+            f'{message}\n\nRemove this image?',
+        )
+        if confirm != QMessageBox.Yes:
+            return
+
+        rm_cp = self._sp_run(
+            ['docker', 'rmi', image_id],
+            log_key='log',
+            text=True,
+            check=False,
+        )
+        if rm_cp.returncode not in (0, None):
+            stderr = self._decode_output(getattr(rm_cp, 'stderr', '')).strip()
+            if stderr:
+                QMessageBox.warning(parent, 'Removal Failed', stderr)
+        else:
+            QMessageBox.information(parent, 'Image Removed', f'Removed image {image_id}.')
+
+        refresh_callback()
 
     def execute_docker_cp_from_container(self):
         self._log_button_click(self.execute_docker_cp_button, 'Execute Docker cp')
@@ -3107,10 +3605,6 @@ class MainWindow(QMainWindow):
             self._exit_dialog = None
 
         self._revoke_x()
-
-        self._flush_pending_image_cleanups()
-        if self._pending_image_cleanup_timer.isActive():
-            self._pending_image_cleanup_timer.stop()
 
         if not self._cleanup_done and not self._cleanup_script_available():
             self._cleanup_done = True

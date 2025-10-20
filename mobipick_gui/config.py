@@ -76,6 +76,12 @@ CONFIG_DEFAULTS: Dict[str, Dict] = {
         'include_none_tag': False,
         'related_container_keywords': ['mobipick', 'mobipick_cmd', 'mobipick-run', 'rqt', 'rviz'],
         'related_image_keywords': ['mobipick_labs'],
+        'owner_label': 'gui.owner',
+        'owner_value': 'mobipick-gui',
+        'created_label': 'gui.created',
+        'convenience_tag': 'latest',
+        'retention_limit': 5,
+        'prune_avoid_recent_hours': 24,
     },
     'worlds': {
         'default': 'moelk_tables',
