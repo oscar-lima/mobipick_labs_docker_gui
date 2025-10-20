@@ -2721,9 +2721,36 @@ class MainWindow(QMainWindow):
                 list_layout.addStretch(1)
                 return
             for record in records:
-                checkbox = QCheckBox(_format_entry_text(record))
+                checkbox = QCheckBox()
                 checkbox.setChecked(False)
-                list_layout.addWidget(checkbox)
+
+                row_widget = QWidget()
+                row_layout = QHBoxLayout(row_widget)
+                row_layout.setContentsMargins(0, 0, 0, 0)
+                row_layout.setSpacing(8)
+
+                row_layout.addWidget(checkbox, 0, Qt.AlignTop)
+
+                label = QLabel(_format_entry_text(record))
+                label.setTextFormat(Qt.RichText)
+                label.setWordWrap(True)
+                label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+
+                original_mouse_release = label.mouseReleaseEvent
+
+                def _label_mouse_release(event, *, cb=checkbox, original=original_mouse_release, lbl=label):
+                    if event.button() == Qt.LeftButton:
+                        cb.toggle()
+                    if original is not None:
+                        original(event)
+                    else:
+                        QLabel.mouseReleaseEvent(lbl, event)
+
+                label.mouseReleaseEvent = _label_mouse_release  # type: ignore[method-assign]
+
+                row_layout.addWidget(label, 1)
+                list_layout.addWidget(row_widget)
+
                 entries.append(
                     {
                         'checkbox': checkbox,
