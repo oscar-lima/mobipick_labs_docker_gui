@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+import json
 import os
 import re
 import shlex
@@ -19,19 +20,20 @@ from PyQt5.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
+    QDialog,
+    QFileDialog,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QSizePolicy,
     QTabBar,
     QTabWidget,
     QTextEdit,
     QVBoxLayout,
     QWidget,
-    QFileDialog,
-    QSizePolicy,
 )
 
 from .ansi import CSI_SEQ_RE, OSC_SEQ_RE, ansi_to_html
@@ -2364,20 +2366,166 @@ class MainWindow(QMainWindow):
                         container_id = container_id.split(':', 1)[1]
                     container_ref = container_id[:64] or container_ref
 
-        commit_cp = self._sp_run(
-            ['docker', 'commit', container_ref, image_ref],
-            log_key=key,
-            text=True,
-        )
+        base_image, base_tag = self._split_image_ref(image_ref)
+        if not base_image:
+            QMessageBox.warning(
+                self,
+                'Commit Current Tab',
+                'Unable to determine the repository for the selected image.',
+            )
+            return
 
-        if commit_cp.returncode == 0:
-            message = f'Committed container {container_name} to image {image_ref}.'
-            self._append_gui_html(key, html.escape(message))
-        else:
-            stderr_text = self._decode_output(getattr(commit_cp, 'stderr', '')).strip()
-            if stderr_text:
-                self._append_gui_html(key, html.escape(stderr_text))
-            QMessageBox.warning(self, 'Commit Current Tab', 'Failed to commit the current tab container. Check the tab log for details.')
+        display_base_tag = base_tag or 'latest'
+        timestamp = datetime.now().strftime('%d-%m-%Y-%H-%M-%S')
+        timestamp_tag = f'{display_base_tag}--{timestamp}'
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle('Commit Current Tab')
+
+        layout = QVBoxLayout(dialog)
+        intro = QLabel('Choose how you want to create the new image tag:')
+        layout.addWidget(intro)
+
+        overwrite_row = QHBoxLayout()
+        overwrite_label = QLabel(f'{base_image}:{display_base_tag}')
+        overwrite_row.addWidget(overwrite_label)
+        overwrite_button = QPushButton('Overwrite existing tag')
+        overwrite_row.addWidget(overwrite_button)
+        layout.addLayout(overwrite_row)
+
+        timestamp_row = QHBoxLayout()
+        timestamp_label = QLabel(f'{base_image}:{timestamp_tag}')
+        timestamp_row.addWidget(timestamp_label)
+        timestamp_button = QPushButton('Create snapshot (timestamp)')
+        timestamp_row.addWidget(timestamp_button)
+        layout.addLayout(timestamp_row)
+
+        custom_row = QHBoxLayout()
+        custom_image_edit = QLineEdit(base_image)
+        custom_tag_prefill = f'{display_base_tag}-' if display_base_tag else ''
+        custom_tag_edit = QLineEdit(custom_tag_prefill)
+        custom_row.addWidget(custom_image_edit)
+        colon_label = QLabel(':')
+        colon_label.setAlignment(Qt.AlignCenter)
+        custom_row.addWidget(colon_label)
+        custom_row.addWidget(custom_tag_edit)
+        custom_button = QPushButton('Create snapshot (custom tag)')
+        custom_row.addWidget(custom_button)
+        layout.addLayout(custom_row)
+
+        buttons_row = QHBoxLayout()
+        buttons_row.addStretch(1)
+        show_mounts_button = QPushButton('Show Mounts')
+        buttons_row.addWidget(show_mounts_button)
+        cancel_button = QPushButton('Cancel')
+        buttons_row.addWidget(cancel_button)
+        layout.addLayout(buttons_row)
+
+        def _run_commit(target_repo: str, target_tag: str):
+            repo = (target_repo or '').strip()
+            tag = (target_tag or '').strip()
+            if not repo:
+                QMessageBox.warning(dialog, 'Commit Current Tab', 'Image name is required to commit the container.')
+                return
+            if not tag:
+                QMessageBox.warning(dialog, 'Commit Current Tab', 'Tag name is required to commit the container.')
+                return
+            target_ref = f'{repo}:{tag}'
+            commit_cp = self._sp_run(
+                ['docker', 'commit', container_ref, target_ref],
+                log_key=key,
+                text=True,
+            )
+
+            if commit_cp.returncode == 0:
+                message = f'Committed container {container_name} to image {target_ref}.'
+                self._append_gui_html(key, html.escape(message))
+                dialog.accept()
+            else:
+                stderr_text = self._decode_output(getattr(commit_cp, 'stderr', '')).strip()
+                if stderr_text:
+                    self._append_gui_html(key, html.escape(stderr_text))
+                QMessageBox.warning(dialog, 'Commit Current Tab', 'Failed to commit the current tab container. Check the tab log for details.')
+
+        def _show_mounts_dialog():
+            mounts_dialog = QDialog(dialog)
+            mounts_dialog.setWindowTitle('Container Mounts')
+            mounts_layout = QVBoxLayout(mounts_dialog)
+            mounts_text = QTextEdit(mounts_dialog)
+            mounts_text.setReadOnly(True)
+
+            mounts_output = 'No mount information available.'
+            try:
+                mounts_cp = self._sp_run(
+                    [
+                        'docker',
+                        'container',
+                        'inspect',
+                        '--format',
+                        '{{json .Mounts}}',
+                        container_ref,
+                    ],
+                    log_stdout=False,
+                    log_stderr=False,
+                    text=True,
+                )
+            except Exception as exc:  # pragma: no cover - defensive logging
+                mounts_output = f'Failed to inspect container mounts: {exc}'
+            else:
+                if mounts_cp.returncode == 0:
+                    data = (mounts_cp.stdout or '').strip()
+                    if data:
+                        try:
+                            mounts = json.loads(data)
+                        except json.JSONDecodeError:
+                            mounts_output = data
+                        else:
+                            if isinstance(mounts, list) and mounts:
+                                lines = []
+                                for mount in mounts:
+                                    if isinstance(mount, dict):
+                                        source = mount.get('Source', '')
+                                        destination = mount.get('Destination', '')
+                                        mode = mount.get('Mode', '')
+                                        rw = mount.get('RW', '')
+                                        details = [
+                                            value
+                                            for value in (
+                                                f'Source: {source}' if source else '',
+                                                f'Destination: {destination}' if destination else '',
+                                                f'Mode: {mode}' if mode else '',
+                                                f'Read/Write: {rw}' if rw != '' else '',
+                                            )
+                                            if value
+                                        ]
+                                        if details:
+                                            lines.append('\n'.join(details))
+                                mounts_output = '\n\n'.join(lines) or mounts_output
+                            else:
+                                mounts_output = 'No mount information available.'
+                else:
+                    stderr_text = self._decode_output(getattr(mounts_cp, 'stderr', '')).strip()
+                    mounts_output = stderr_text or mounts_output
+
+            mounts_text.setPlainText(mounts_output)
+            mounts_layout.addWidget(mounts_text)
+
+            ok_button = QPushButton('OK')
+            ok_button.clicked.connect(mounts_dialog.accept)
+            ok_row = QHBoxLayout()
+            ok_row.addStretch(1)
+            ok_row.addWidget(ok_button)
+            mounts_layout.addLayout(ok_row)
+
+            mounts_dialog.exec_()
+
+        overwrite_button.clicked.connect(lambda: _run_commit(base_image, display_base_tag))
+        timestamp_button.clicked.connect(lambda: _run_commit(base_image, timestamp_tag))
+        custom_button.clicked.connect(lambda: _run_commit(custom_image_edit.text(), custom_tag_edit.text()))
+        cancel_button.clicked.connect(dialog.reject)
+        show_mounts_button.clicked.connect(_show_mounts_dialog)
+
+        dialog.exec_()
 
     def execute_docker_cp_from_container(self):
         self._log_button_click(self.execute_docker_cp_button, 'Execute Docker cp')
