@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+import json
 import os
 import re
 import shlex
@@ -19,19 +20,21 @@ from PyQt5.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
+    QDialog,
+    QFileDialog,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QScrollArea,
+    QSizePolicy,
     QTabBar,
     QTabWidget,
     QTextEdit,
     QVBoxLayout,
     QWidget,
-    QFileDialog,
-    QSizePolicy,
 )
 
 from .ansi import CSI_SEQ_RE, OSC_SEQ_RE, ansi_to_html
@@ -165,6 +168,10 @@ class MainWindow(QMainWindow):
         self.commit_current_tab_button.setToolTip('Create a docker image from the container backing the current tab')
         self.commit_current_tab_button.clicked.connect(self.commit_current_tab)
 
+        self.manage_images_button = QPushButton('Manage Images')
+        self.manage_images_button.setToolTip('Remove docker images that match the configured filters')
+        self.manage_images_button.clicked.connect(self.manage_images)
+
         self.execute_docker_cp_button = QPushButton('Execute Docker cp')
         self.execute_docker_cp_button.setToolTip('Copy configured paths from the active container to the host')
         self.execute_docker_cp_button.clicked.connect(self.execute_docker_cp_from_container)
@@ -257,6 +264,7 @@ class MainWindow(QMainWindow):
         controls_row.addWidget(self.clear_button)
         controls_row.addWidget(self.clear_all_button)
         controls_row.addWidget(self.commit_current_tab_button)
+        controls_row.addWidget(self.manage_images_button)
         controls_row.addWidget(self.execute_docker_cp_button)
 
         spacer_controls = QWidget()
@@ -576,35 +584,65 @@ class MainWindow(QMainWindow):
     def _reload_images(self):
         self._load_available_images(show_feedback=True)
 
-    def _load_available_images(self, show_feedback: bool = False):
+    def _discover_filtered_image_records(self) -> tuple[list[dict[str, str]], str | None]:
         images_cfg = self._images_cfg
         filters = [f.lower() for f in images_cfg.get('discovery_filters', []) if f]
         include_none = bool(images_cfg.get('include_none_tag', False))
-        choices: list[str] = []
+        records: list[dict[str, str]] = []
+        error_message: str | None = None
+
         try:
             run_kwargs = {'stdout': subprocess.PIPE, 'stderr': subprocess.PIPE, 'text': True, 'check': False}
             run_kwargs = self._prepare_run_env(run_kwargs)
-            cp = subprocess.run(['docker', 'images', '--format', '{{.Repository}}:{{.Tag}}'], **run_kwargs)
-            output_lines = (cp.stdout or '').splitlines() if isinstance(cp.stdout, str) else []
-            if cp.returncode not in (0, None):
-                self._console_log(1, f'docker images returned {cp.returncode}')
+            cp = subprocess.run(['docker', 'images', '--format', '{{json .}}'], **run_kwargs)
         except Exception as exc:
-            output_lines = []
-            self._console_log(1, f'Failed to list docker images: {exc}')
+            error_message = f'Failed to list docker images: {exc}'
+            self._console_log(1, error_message)
+            return [], error_message
 
+        if cp.returncode not in (0, None):
+            error_message = f'docker images returned {cp.returncode}'
+            self._console_log(1, error_message)
+
+        output_lines = (cp.stdout or '').splitlines() if isinstance(cp.stdout, str) else []
         for line in output_lines:
             line = line.strip()
             if not line:
                 continue
-            if ':' in line:
-                repo, tag = line.rsplit(':', 1)
-            else:
-                repo, tag = line, ''
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(entry, dict):
+                continue
+            repo = str(entry.get('Repository', '') or '')
+            tag = str(entry.get('Tag', '') or '')
             if not include_none and ('<none>' in (repo.strip(), tag.strip())):
                 continue
-            if filters and not any(f in line.lower() for f in filters):
+            ref = f'{repo}:{tag}' if tag else repo
+            if not ref:
                 continue
-            choices.append(line)
+            if filters and not any(f in ref.lower() for f in filters):
+                continue
+            normalized_entry = {key: ('' if value is None else str(value)) for key, value in entry.items()}
+            normalized_entry['ref'] = ref
+            identifier = normalized_entry.get('ID') or normalized_entry.get('Id') or ref
+            normalized_entry['identifier'] = identifier
+            records.append(normalized_entry)
+
+        return records, error_message
+
+    def _manage_images_detail_level(self) -> str:
+        value = str(self._images_cfg.get('manage_dialog_detail', 'simple') or '').strip().lower()
+        if value in {'simple', 'medium', 'full'}:
+            return value
+        return 'simple'
+
+    def _load_available_images(self, show_feedback: bool = False):
+        images_cfg = self._images_cfg
+        records, error_message = self._discover_filtered_image_records()
+
+        choices = [record.get('ref', '') for record in records if record.get('ref')]
 
         default_image = images_cfg.get('default', '')
         if default_image:
@@ -636,6 +674,9 @@ class MainWindow(QMainWindow):
             self.image_combo.setEnabled(False)
         self.image_combo.blockSignals(False)
         self.image_combo.setToolTip(self._selected_image or 'No image selected')
+
+        if show_feedback and error_message:
+            QMessageBox.warning(self, 'Images', error_message)
 
         if show_feedback:
             if choices:
@@ -1384,37 +1425,80 @@ class MainWindow(QMainWindow):
         except Exception:
             return 1000
 
-    def _ensure_roscore_ready(self, callback: Callable[[], None], *, attempt: int = 0):
+    def _ensure_roscore_ready(
+        self,
+        callback: Callable[[], None],
+        *,
+        attempt: int = 0,
+        allow_autostart: bool = True,
+    ):
         delay_ms = self._roscore_delay_ms()
         last_start = self._roscore_last_start_ts
 
-        if self._roscore_running_cached or self.tasks['roscore'].is_running():
+        roscore_tab = self.tasks.get('roscore')
+        roscore_active = self._roscore_running_cached or (
+            roscore_tab.is_running() if roscore_tab else False
+        )
+
+        if roscore_active:
             if delay_ms > 0 and last_start is not None:
                 elapsed_ms = int((time.monotonic() - last_start) * 1000)
                 remaining = delay_ms - elapsed_ms
                 if remaining > 0:
-                    QTimer.singleShot(remaining, lambda: self._ensure_roscore_ready(callback, attempt=attempt + 1))
+                    QTimer.singleShot(
+                        remaining,
+                        lambda: self._ensure_roscore_ready(
+                            callback,
+                            attempt=attempt + 1,
+                            allow_autostart=allow_autostart,
+                        ),
+                    )
                     return
+            callback()
+            return
+
+        if not allow_autostart:
             callback()
             return
 
         if self._roscore_stopping:
             self._log_info('roscore is shutting down; retrying shortly...')
-            QTimer.singleShot(delay_ms or 1000, lambda: self._ensure_roscore_ready(callback, attempt=attempt + 1))
+            QTimer.singleShot(
+                delay_ms or 1000,
+                lambda: self._ensure_roscore_ready(
+                    callback,
+                    attempt=attempt + 1,
+                    allow_autostart=allow_autostart,
+                ),
+            )
             return
 
         try:
             if self.is_roscore_running():
                 self._roscore_running_cached = True
                 self.set_roscore_visual('green', 'Stop Roscore', enabled=True)
-                QTimer.singleShot(delay_ms or 0, lambda: self._ensure_roscore_ready(callback, attempt=attempt + 1))
+                QTimer.singleShot(
+                    delay_ms or 0,
+                    lambda: self._ensure_roscore_ready(
+                        callback,
+                        attempt=attempt + 1,
+                        allow_autostart=allow_autostart,
+                    ),
+                )
                 return
         except Exception:
             pass
 
         self._log_info('roscore not running; starting automatically')
         self.bring_up_roscore()
-        QTimer.singleShot(delay_ms or 1000, lambda: self._ensure_roscore_ready(callback, attempt=attempt + 1))
+        QTimer.singleShot(
+            delay_ms or 1000,
+            lambda: self._ensure_roscore_ready(
+                callback,
+                attempt=attempt + 1,
+                allow_autostart=allow_autostart,
+            ),
+        )
 
     def bring_up_roscore(self):
         if self._roscore_stopping:
@@ -2098,7 +2182,7 @@ class MainWindow(QMainWindow):
             self._append_gui_html('log', f'<i>Launching terminal: {html.escape(command_str)}</i>')
             self.set_terminal_visual('green', 'Close Terminal', True)
 
-        self._ensure_roscore_ready(_start_terminal)
+        self._ensure_roscore_ready(_start_terminal, allow_autostart=False)
 
     def stop_terminal(self):
         if self._terminal_stopping and self._terminal_proc is None:
@@ -2364,20 +2448,367 @@ class MainWindow(QMainWindow):
                         container_id = container_id.split(':', 1)[1]
                     container_ref = container_id[:64] or container_ref
 
-        commit_cp = self._sp_run(
-            ['docker', 'commit', container_ref, image_ref],
-            log_key=key,
-            text=True,
-        )
+        base_image, base_tag = self._split_image_ref(image_ref)
+        if not base_image:
+            QMessageBox.warning(
+                self,
+                'Commit Current Tab',
+                'Unable to determine the repository for the selected image.',
+            )
+            return
 
-        if commit_cp.returncode == 0:
-            message = f'Committed container {container_name} to image {image_ref}.'
-            self._append_gui_html(key, html.escape(message))
-        else:
-            stderr_text = self._decode_output(getattr(commit_cp, 'stderr', '')).strip()
-            if stderr_text:
-                self._append_gui_html(key, html.escape(stderr_text))
-            QMessageBox.warning(self, 'Commit Current Tab', 'Failed to commit the current tab container. Check the tab log for details.')
+        display_base_tag = base_tag or 'latest'
+        timestamp = datetime.now().strftime('%d-%m-%Y-%H-%M-%S')
+        timestamp_tag = f'{display_base_tag}--{timestamp}'
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle('Commit Current Tab')
+
+        layout = QVBoxLayout(dialog)
+        intro = QLabel('Choose how you want to create the new image tag:')
+        layout.addWidget(intro)
+
+        overwrite_row = QHBoxLayout()
+        overwrite_label = QLabel(f'{base_image}:{display_base_tag}')
+        overwrite_row.addWidget(overwrite_label)
+        overwrite_button = QPushButton('Overwrite existing tag')
+        overwrite_row.addWidget(overwrite_button)
+        layout.addLayout(overwrite_row)
+
+        timestamp_row = QHBoxLayout()
+        timestamp_label = QLabel(f'{base_image}:{timestamp_tag}')
+        timestamp_row.addWidget(timestamp_label)
+        timestamp_button = QPushButton('Create snapshot (timestamp)')
+        timestamp_row.addWidget(timestamp_button)
+        layout.addLayout(timestamp_row)
+
+        custom_row = QHBoxLayout()
+        custom_image_edit = QLineEdit(base_image)
+        custom_tag_prefill = f'{display_base_tag}-' if display_base_tag else ''
+        custom_tag_edit = QLineEdit(custom_tag_prefill)
+        custom_row.addWidget(custom_image_edit)
+        colon_label = QLabel(':')
+        colon_label.setAlignment(Qt.AlignCenter)
+        custom_row.addWidget(colon_label)
+        custom_row.addWidget(custom_tag_edit)
+        custom_button = QPushButton('Create snapshot (custom tag)')
+        custom_row.addWidget(custom_button)
+        layout.addLayout(custom_row)
+
+        buttons_row = QHBoxLayout()
+        buttons_row.addStretch(1)
+        show_mounts_button = QPushButton('Show Mounts')
+        buttons_row.addWidget(show_mounts_button)
+        cancel_button = QPushButton('Cancel')
+        buttons_row.addWidget(cancel_button)
+        layout.addLayout(buttons_row)
+
+        def _run_commit(target_repo: str, target_tag: str):
+            repo = (target_repo or '').strip()
+            tag = (target_tag or '').strip()
+            if not repo:
+                QMessageBox.warning(dialog, 'Commit Current Tab', 'Image name is required to commit the container.')
+                return
+            if not tag:
+                QMessageBox.warning(dialog, 'Commit Current Tab', 'Tag name is required to commit the container.')
+                return
+            target_ref = f'{repo}:{tag}'
+            commit_cp = self._sp_run(
+                ['docker', 'commit', container_ref, target_ref],
+                log_key=key,
+                text=True,
+            )
+
+            if commit_cp.returncode == 0:
+                message = f'Committed container {container_name} to image {target_ref}.'
+                self._append_gui_html(key, html.escape(message))
+                dialog.accept()
+            else:
+                stderr_text = self._decode_output(getattr(commit_cp, 'stderr', '')).strip()
+                if stderr_text:
+                    self._append_gui_html(key, html.escape(stderr_text))
+                QMessageBox.warning(dialog, 'Commit Current Tab', 'Failed to commit the current tab container. Check the tab log for details.')
+
+        def _show_mounts_dialog():
+            mounts_dialog = QDialog(dialog)
+            mounts_dialog.setWindowTitle('Container Mounts')
+            mounts_layout = QVBoxLayout(mounts_dialog)
+            mounts_text = QTextEdit(mounts_dialog)
+            mounts_text.setReadOnly(True)
+
+            mounts_output = 'No mount information available.'
+            try:
+                mounts_cp = self._sp_run(
+                    [
+                        'docker',
+                        'container',
+                        'inspect',
+                        '--format',
+                        '{{json .Mounts}}',
+                        container_ref,
+                    ],
+                    log_stdout=False,
+                    log_stderr=False,
+                    text=True,
+                )
+            except Exception as exc:  # pragma: no cover - defensive logging
+                mounts_output = f'Failed to inspect container mounts: {exc}'
+            else:
+                if mounts_cp.returncode == 0:
+                    data = (mounts_cp.stdout or '').strip()
+                    if data:
+                        try:
+                            mounts = json.loads(data)
+                        except json.JSONDecodeError:
+                            mounts_output = data
+                        else:
+                            if isinstance(mounts, list) and mounts:
+                                lines = []
+                                for mount in mounts:
+                                    if isinstance(mount, dict):
+                                        source = mount.get('Source', '')
+                                        destination = mount.get('Destination', '')
+                                        mode = mount.get('Mode', '')
+                                        rw = mount.get('RW', '')
+                                        details = [
+                                            value
+                                            for value in (
+                                                f'Source: {source}' if source else '',
+                                                f'Destination: {destination}' if destination else '',
+                                                f'Mode: {mode}' if mode else '',
+                                                f'Read/Write: {rw}' if rw != '' else '',
+                                            )
+                                            if value
+                                        ]
+                                        if details:
+                                            lines.append('\n'.join(details))
+                                mounts_output = '\n\n'.join(lines) or mounts_output
+                            else:
+                                mounts_output = 'No mount information available.'
+                else:
+                    stderr_text = self._decode_output(getattr(mounts_cp, 'stderr', '')).strip()
+                    mounts_output = stderr_text or mounts_output
+
+            mounts_text.setPlainText(mounts_output)
+            mounts_layout.addWidget(mounts_text)
+
+            ok_button = QPushButton('OK')
+            ok_button.clicked.connect(mounts_dialog.accept)
+            ok_row = QHBoxLayout()
+            ok_row.addStretch(1)
+            ok_row.addWidget(ok_button)
+            mounts_layout.addLayout(ok_row)
+
+            mounts_dialog.exec_()
+
+        overwrite_button.clicked.connect(lambda: _run_commit(base_image, display_base_tag))
+        timestamp_button.clicked.connect(lambda: _run_commit(base_image, timestamp_tag))
+        custom_button.clicked.connect(lambda: _run_commit(custom_image_edit.text(), custom_tag_edit.text()))
+        cancel_button.clicked.connect(dialog.reject)
+        show_mounts_button.clicked.connect(_show_mounts_dialog)
+
+        dialog.exec_()
+
+    def manage_images(self):
+        self._log_button_click(self.manage_images_button, 'Manage Images')
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle('Manage Images')
+        dialog.setModal(True)
+
+        layout = QVBoxLayout(dialog)
+        intro_label = QLabel(
+            'Select the images you would like to remove and click Apply. '
+            'Only images that match the configured discovery filters are shown.'
+        )
+        intro_label.setWordWrap(True)
+        layout.addWidget(intro_label)
+
+        status_label = QLabel()
+        status_label.setWordWrap(True)
+        status_label.setStyleSheet('color: #ff6b6b;')
+        status_label.hide()
+        layout.addWidget(status_label)
+
+        scroll_area = QScrollArea(dialog)
+        scroll_area.setWidgetResizable(True)
+        layout.addWidget(scroll_area, 1)
+
+        list_container = QWidget()
+        scroll_area.setWidget(list_container)
+        list_layout = QVBoxLayout(list_container)
+        list_layout.setContentsMargins(0, 0, 0, 0)
+        list_layout.setSpacing(6)
+
+        force_checkbox = QCheckBox('Force removal (-f)')
+        layout.addWidget(force_checkbox)
+
+        button_row = QHBoxLayout()
+        button_row.addStretch(1)
+        apply_button = QPushButton('Apply')
+        close_button = QPushButton('Close')
+        button_row.addWidget(apply_button)
+        button_row.addWidget(close_button)
+        layout.addLayout(button_row)
+
+        detail_level = self._manage_images_detail_level()
+        entries: list[dict[str, object]] = []
+
+        def _format_entry_text(record: dict[str, str]) -> str:
+            repo = record.get('Repository', '') or ''
+            tag = record.get('Tag', '') or ''
+            if not repo and not tag:
+                repo, tag = self._split_image_ref(record.get('ref', ''))
+            repo_html = html.escape(repo) if repo else ''
+            tag_html = html.escape(tag) if tag else ''
+            if tag_html:
+                tag_html = f'<span style="font-weight:600;">{tag_html}</span>'
+            if repo_html and tag_html:
+                ref_html = f'{repo_html}:{tag_html}'
+            elif tag_html:
+                ref_html = tag_html
+            elif repo_html:
+                ref_html = repo_html
+            else:
+                ref_html = html.escape(record.get('ref', '') or '')
+            if not ref_html:
+                ref_html = 'Unnamed image'
+
+            if detail_level == 'simple':
+                return ref_html
+
+            parts: list[str] = [ref_html]
+            created = record.get('CreatedSince', '') or record.get('CreatedAt', '')
+            if created:
+                parts.append(f'Created {html.escape(created)}')
+
+            if detail_level == 'medium':
+                return ' | '.join(parts)
+
+            identifier = record.get('identifier', '')
+            if identifier:
+                short_id = identifier.split(':', 1)[-1]
+                if short_id:
+                    parts.append(f'ID {html.escape(short_id[:12])}')
+            size = record.get('Size', '')
+            if size:
+                parts.append(f'Size {html.escape(size)}')
+
+            return ' | '.join(parts)
+
+        def _clear_list_layout():
+            while list_layout.count():
+                item = list_layout.takeAt(0)
+                widget = item.widget()
+                if widget is not None:
+                    widget.deleteLater()
+
+        def _populate_images():
+            nonlocal entries
+            entries = []
+            _clear_list_layout()
+            records, error_message = self._discover_filtered_image_records()
+            if error_message:
+                status_label.setText(error_message)
+                status_label.show()
+            else:
+                status_label.hide()
+                status_label.clear()
+            if not records:
+                placeholder = QLabel('No images match the configured filters.')
+                placeholder.setWordWrap(True)
+                list_layout.addWidget(placeholder)
+                list_layout.addStretch(1)
+                return
+            for record in records:
+                checkbox = QCheckBox()
+                checkbox.setChecked(False)
+
+                row_widget = QWidget()
+                row_layout = QHBoxLayout(row_widget)
+                row_layout.setContentsMargins(0, 0, 0, 0)
+                row_layout.setSpacing(8)
+
+                row_layout.addWidget(checkbox, 0, Qt.AlignTop)
+
+                label = QLabel(_format_entry_text(record))
+                label.setTextFormat(Qt.RichText)
+                label.setWordWrap(True)
+                label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+
+                original_mouse_release = label.mouseReleaseEvent
+
+                def _label_mouse_release(event, *, cb=checkbox, original=original_mouse_release, lbl=label):
+                    if event.button() == Qt.LeftButton:
+                        cb.toggle()
+                    if original is not None:
+                        original(event)
+                    else:
+                        QLabel.mouseReleaseEvent(lbl, event)
+
+                label.mouseReleaseEvent = _label_mouse_release  # type: ignore[method-assign]
+
+                row_layout.addWidget(label, 1)
+                list_layout.addWidget(row_widget)
+
+                entries.append(
+                    {
+                        'checkbox': checkbox,
+                        'target': record.get('identifier') or record.get('ref', ''),
+                        'ref': record.get('ref', ''),
+                    }
+                )
+            list_layout.addStretch(1)
+
+        def _apply_removal():
+            selected_targets: list[str] = []
+            selected_refs: list[str] = []
+            for entry in entries:
+                checkbox = entry.get('checkbox')
+                if not isinstance(checkbox, QCheckBox) or not checkbox.isChecked():
+                    continue
+                target = str(entry.get('target') or '').strip()
+                if not target:
+                    continue
+                selected_targets.append(target)
+                ref = str(entry.get('ref') or target)
+                selected_refs.append(ref)
+            if not selected_targets:
+                QMessageBox.information(dialog, 'Manage Images', 'Select at least one image to remove.')
+                return
+
+            args = ['docker', 'rmi']
+            if force_checkbox.isChecked():
+                args.append('-f')
+            args.extend(selected_targets)
+
+            try:
+                cp = self._sp_run(args, log_key='log', text=True)
+            except Exception as exc:  # pragma: no cover - defensive
+                QMessageBox.warning(dialog, 'Manage Images', f'Failed to remove images: {exc}')
+                return
+
+            if cp.returncode not in (0, None):
+                QMessageBox.warning(
+                    dialog,
+                    'Manage Images',
+                    'Failed to remove one or more images. Check the Log tab for details.',
+                )
+            else:
+                removed = ', '.join(selected_refs)
+                if removed:
+                    self._log_info(f'Removed images: {removed}')
+                QMessageBox.information(dialog, 'Manage Images', 'Selected images were removed.')
+
+            self._load_available_images()
+            _populate_images()
+
+        _populate_images()
+
+        apply_button.clicked.connect(_apply_removal)
+        close_button.clicked.connect(dialog.reject)
+
+        dialog.exec_()
 
     def execute_docker_cp_from_container(self):
         self._log_button_click(self.execute_docker_cp_button, 'Execute Docker cp')
