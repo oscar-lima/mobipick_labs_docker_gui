@@ -19,6 +19,7 @@ from PyQt5.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
+    QDialog,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -2362,6 +2363,16 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, 'Commit Current Tab', 'Choose a target image from the image list before committing.')
             return
 
+        prompt_result = self._prompt_commit_action(image_ref)
+        if not prompt_result:
+            return
+
+        commit_target, is_snapshot = prompt_result
+        commit_target = commit_target.strip()
+        if not commit_target:
+            QMessageBox.warning(self, 'Commit Current Tab', 'No commit target was provided.')
+            return
+
         container_ref = container_name
         try:
             inspect_cp = self._sp_run(
@@ -2380,22 +2391,42 @@ class MainWindow(QMainWindow):
                         container_id = container_id.split(':', 1)[1]
                     container_ref = container_id[:64] or container_ref
 
-        previous_image_id = self._image_id_for_ref(image_ref)
+        previous_image_id = self._image_id_for_ref(commit_target)
 
         commit_cp = self._sp_run(
-            ['docker', 'commit', container_ref, image_ref],
+            ['docker', 'commit', container_ref, commit_target],
             log_key=key,
             text=True,
         )
 
         if commit_cp.returncode == 0:
-            message = f'Committed container {container_name} to image {image_ref}.'
+            if is_snapshot:
+                message = f'Committed container {container_name} to new snapshot image {commit_target}.'
+            else:
+                message = f'Committed container {container_name} to image {commit_target}.'
             self._append_gui_html(key, html.escape(message))
+
+            if commit_target != self._selected_image:
+                self._selected_image = commit_target
+                self.image_combo.blockSignals(True)
+                if commit_target not in self._image_choices:
+                    self._image_choices.append(commit_target)
+                    self.image_combo.addItem(commit_target)
+                try:
+                    index = self._image_choices.index(commit_target)
+                except ValueError:
+                    index = -1
+                if index >= 0:
+                    self.image_combo.setCurrentIndex(index)
+                    self.image_combo.setToolTip(commit_target)
+                self.image_combo.blockSignals(False)
+                self._update_related_patterns()
+                self._apply_env_to_all_tabs()
 
             self._stop_containers_after_commit(
                 tab,
                 container_name,
-                image_ref,
+                commit_target,
                 previous_image_id,
                 key,
             )
@@ -2404,6 +2435,135 @@ class MainWindow(QMainWindow):
             if stderr_text:
                 self._append_gui_html(key, html.escape(stderr_text))
             QMessageBox.warning(self, 'Commit Current Tab', 'Failed to commit the current tab container. Check the tab log for details.')
+
+    def _prompt_commit_action(self, image_ref: str) -> tuple[str, bool] | None:
+        suggested_snapshot = self._suggest_snapshot_ref(image_ref)
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle('Commit Container')
+
+        layout = QVBoxLayout(dialog)
+        description = QLabel(
+            'Choose whether to overwrite the selected image tag or save the container as a new snapshot.'
+        )
+        description.setWordWrap(True)
+        layout.addWidget(description)
+
+        tag_label = QLabel('Snapshot tag:')
+        tag_input = QLineEdit(dialog)
+        tag_input.setText(suggested_snapshot)
+        tag_input.selectAll()
+        tag_label.setBuddy(tag_input)
+
+        tag_row = QHBoxLayout()
+        tag_row.addWidget(tag_label)
+        tag_row.addWidget(tag_input)
+        layout.addLayout(tag_row)
+
+        buttons_row = QHBoxLayout()
+        overwrite_button = QPushButton('Overwrite Existing Tag', dialog)
+        snapshot_button = QPushButton('Create Snapshot', dialog)
+        cancel_button = QPushButton('Cancel', dialog)
+        overwrite_button.setDefault(True)
+
+        buttons_row.addWidget(overwrite_button)
+        buttons_row.addWidget(snapshot_button)
+        buttons_row.addWidget(cancel_button)
+        layout.addLayout(buttons_row)
+
+        selection: dict[str, str] = {}
+
+        def _normalized_snapshot_ref() -> str:
+            raw_value = tag_input.text().strip()
+            if not raw_value:
+                return ''
+            if ':' not in raw_value:
+                repo, _ = self._split_image_ref(image_ref)
+                if repo:
+                    return f'{repo}:{raw_value}'
+            return raw_value
+
+        def _choose_overwrite():
+            selection['mode'] = 'overwrite'
+            selection['ref'] = image_ref
+            dialog.accept()
+
+        def _choose_snapshot():
+            snapshot_ref = _normalized_snapshot_ref()
+            if not snapshot_ref:
+                QMessageBox.warning(dialog, 'Snapshot Tag Required', 'Enter a tag name for the snapshot image.')
+                return
+            selection['mode'] = 'snapshot'
+            selection['ref'] = snapshot_ref
+            dialog.accept()
+
+        overwrite_button.clicked.connect(_choose_overwrite)
+        snapshot_button.clicked.connect(_choose_snapshot)
+        tag_input.returnPressed.connect(_choose_snapshot)
+        cancel_button.clicked.connect(dialog.reject)
+
+        if dialog.exec_() != QDialog.Accepted:
+            return None
+
+        commit_ref = selection.get('ref', '').strip()
+        if not commit_ref:
+            return None
+        is_snapshot = selection.get('mode') == 'snapshot' and commit_ref != image_ref
+        return commit_ref, is_snapshot
+
+    def _suggest_snapshot_ref(self, image_ref: str) -> str:
+        repo, tag = self._split_image_ref(image_ref)
+        base_tag = (tag or '').strip() or 'latest'
+        base_root = re.sub(r'_v\d+$', '', base_tag)
+        if not base_root:
+            base_root = base_tag or 'snapshot'
+
+        existing_versions: list[int] = []
+        args = ['docker', 'image', 'ls']
+        if repo:
+            args.append(repo)
+        args.extend(['--format', '{{.Repository}}:{{.Tag}}'])
+        run_kwargs = {'stdout': subprocess.PIPE, 'stderr': subprocess.PIPE, 'text': True, 'check': False}
+        run_kwargs = self._prepare_run_env(run_kwargs)
+        try:
+            cp = subprocess.run(args, **run_kwargs)
+        except Exception:
+            cp = None
+        else:
+            if cp.returncode not in (0, None):
+                cp = None
+
+        if cp and isinstance(cp.stdout, str):
+            for line in cp.stdout.splitlines():
+                line = line.strip()
+                if not line or '<none>' in line:
+                    continue
+                if ':' not in line:
+                    continue
+                repo_part, tag_part = line.rsplit(':', 1)
+                repo_part = repo_part.strip()
+                tag_part = tag_part.strip()
+                if repo:
+                    if repo_part != repo:
+                        continue
+                else:
+                    if repo_part:
+                        continue
+                if not tag_part or '<none>' in tag_part:
+                    continue
+                match = re.fullmatch(rf'{re.escape(base_root)}_v(\d+)', tag_part)
+                if not match:
+                    continue
+                try:
+                    existing_versions.append(int(match.group(1)))
+                except (TypeError, ValueError):
+                    continue
+
+        next_version = (max(existing_versions) + 1) if existing_versions else 1
+        snapshot_tag = f'{base_root}_v{next_version}'
+        if repo:
+            return f'{repo}:{snapshot_tag}'
+        return snapshot_tag
 
     def _stop_containers_after_commit(
         self,
