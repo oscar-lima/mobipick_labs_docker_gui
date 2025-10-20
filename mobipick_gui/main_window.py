@@ -123,6 +123,8 @@ class MainWindow(QMainWindow):
             self._images_cfg.get('prune_avoid_recent_hours'),
             default=24,
         )
+        self._dangling_image_cache: list[dict] = []
+        self._dangling_notice_label: QLabel | None = None
 
         # sim state
         self._sim_container_name = 'mobipick-run'
@@ -184,6 +186,10 @@ class MainWindow(QMainWindow):
         self.manage_images_button = QPushButton('Manage Images')
         self.manage_images_button.setToolTip('Review and remove docker images owned by this GUI')
         self.manage_images_button.clicked.connect(self._open_image_management_dialog)
+
+        self.dangling_images_button = QPushButton('Dangling Images')
+        self.dangling_images_button.setToolTip('Inspect dangling docker layers and prune them safely')
+        self.dangling_images_button.clicked.connect(self._open_dangling_images_dialog)
 
         self.execute_docker_cp_button = QPushButton('Execute Docker cp')
         self.execute_docker_cp_button.setToolTip('Copy configured paths from the active container to the host')
@@ -278,6 +284,7 @@ class MainWindow(QMainWindow):
         controls_row.addWidget(self.clear_all_button)
         controls_row.addWidget(self.commit_current_tab_button)
         controls_row.addWidget(self.manage_images_button)
+        controls_row.addWidget(self.dangling_images_button)
         controls_row.addWidget(self.execute_docker_cp_button)
 
         spacer_controls = QWidget()
@@ -289,6 +296,15 @@ class MainWindow(QMainWindow):
         controls_row.addWidget(self.save_all_button)
         controls_row.addWidget(self.refresh_sim_button)
         root.addLayout(controls_row)
+
+        self.dangling_notice_label = QLabel('', self)
+        self.dangling_notice_label.setWordWrap(True)
+        self.dangling_notice_label.setVisible(False)
+        self.dangling_notice_label.setTextFormat(Qt.RichText)
+        self.dangling_notice_label.setOpenExternalLinks(False)
+        self.dangling_notice_label.setStyleSheet('color: #ffc107;')
+        self.dangling_notice_label.linkActivated.connect(self._on_dangling_notice_clicked)
+        root.addWidget(self.dangling_notice_label)
 
         # search row (bottom)
         search = QHBoxLayout()
@@ -330,6 +346,8 @@ class MainWindow(QMainWindow):
         self._update_buttons()
         self.update_sim_status_from_poll(force=True)
 
+        self._check_for_dangling_images()
+
         self._console_log(1, f'Mobipick Labs Control ready (verbosity {self._verbosity})')
 
         app_instance = QApplication.instance()
@@ -342,6 +360,60 @@ class MainWindow(QMainWindow):
         if isinstance(args_or_str, str):
             return args_or_str
         return ' '.join(shlex.quote(s) for s in args_or_str)
+
+    def _log_verification_command(self, title: str, args: list[str], *, log_key: str) -> list[str]:
+        cp = self._sp_run(
+            args,
+            log_key=None,
+            log_stdout=False,
+            log_stderr=False,
+            text=True,
+            check=False,
+        )
+        stdout_text = self._decode_output(getattr(cp, 'stdout', '')).strip()
+        stderr_text = self._decode_output(getattr(cp, 'stderr', '')).strip()
+        lines = [line for line in stdout_text.splitlines() if line.strip()] if stdout_text else []
+        parts: list[str] = [
+            f"<b>{html.escape(title)}</b>",
+            f"<code>$ {html.escape(self._fmt_args(args))}</code>",
+        ]
+        if lines:
+            parts.append(f"<pre>{html.escape('\n'.join(lines))}</pre>")
+        else:
+            parts.append('<i>No output.</i>')
+        return_code = getattr(cp, 'returncode', None)
+        if return_code not in (0, None):
+            parts.append(f"<span style='color:#ff5555'>Exit code: {return_code}</span>")
+        if stderr_text:
+            parts.append(f"<span style='color:#ff5555'>{html.escape(stderr_text)}</span>")
+        self._append_gui_html(log_key, '<br/>'.join(parts))
+        return lines
+
+    def _on_dangling_notice_clicked(self, _link: str):
+        self._open_dangling_images_dialog()
+
+    def _check_for_dangling_images(self, *, update_notice: bool = True) -> list[dict]:
+        images = self._collect_dangling_images_metadata()
+        self._dangling_image_cache = images
+        if update_notice:
+            self._update_dangling_notice(images)
+        return images
+
+    def _update_dangling_notice(self, images: list[dict]):
+        if not self.dangling_notice_label:
+            return
+        count = len(images or [])
+        if count:
+            self.dangling_notice_label.setText(
+                (
+                    "<a href='open-dangling'>Dangling images detected "
+                    f'({count}). Click to review in Dangling Images.</a>'
+                )
+            )
+            self.dangling_notice_label.setVisible(True)
+        else:
+            self.dangling_notice_label.clear()
+            self.dangling_notice_label.setVisible(False)
 
     def _compose_env_args(self) -> list[str]:
         env_args: list[str] = []
@@ -2411,6 +2483,14 @@ class MainWindow(QMainWindow):
         if not image_ref:
             QMessageBox.information(self, 'Commit Current Tab', 'Choose a target image from the image list before committing.')
             return
+        repo_selected, tag_selected = self._split_image_ref(image_ref)
+        if not repo_selected or not tag_selected:
+            QMessageBox.warning(
+                self,
+                'Commit Current Tab',
+                'Commit requires repo plus tag. Please choose a repository and a tag.',
+            )
+            return
 
         prompt_result = self._prompt_commit_action(image_ref, container_name)
         if not prompt_result:
@@ -2420,6 +2500,14 @@ class MainWindow(QMainWindow):
         commit_target = commit_target.strip()
         if not commit_target:
             QMessageBox.warning(self, 'Commit Current Tab', 'No commit target was provided.')
+            return
+        repo_commit, tag_commit = self._split_image_ref(commit_target)
+        if not repo_commit or not tag_commit:
+            QMessageBox.warning(
+                self,
+                'Commit Current Tab',
+                'Commit requires repo plus tag. Please choose a repository and a tag.',
+            )
             return
 
         container_ref = container_name
@@ -2449,6 +2537,13 @@ class MainWindow(QMainWindow):
                 'Unable to determine an image repository for the commit target.',
             )
             return
+
+        previous_details = None
+        if not is_snapshot:
+            previous_details = self._inspect_image_by_id(commit_target)
+        previous_tags = []
+        if isinstance(previous_details, dict):
+            previous_tags = previous_details.get('RepoTags') or []
 
         timestamp = datetime.utcnow().replace(microsecond=0)
         timestamp_tag = timestamp.strftime('%Y%m%dT%H%M%SZ')
@@ -2486,7 +2581,12 @@ class MainWindow(QMainWindow):
                 f'Applied labels {self._image_owner_label}={self._image_owner_value} '
                 f'and {self._image_created_label}={created_label_value}.'
             ),
+            f'New immutable tag: {immutable_ref}.',
         ]
+        if previous_tags:
+            joined_prev = ', '.join(previous_tags)
+            if joined_prev:
+                message_lines.append(f'Previous immutable tag(s): {joined_prev}.')
 
         retag_targets: list[str] = []
         convenience_ref = ''
@@ -2506,6 +2606,37 @@ class MainWindow(QMainWindow):
 
         summary_html = '<br/>'.join(html.escape(line) for line in message_lines)
         self._append_gui_html(key, summary_html)
+
+        if not is_snapshot:
+            reference_filter = f'{repo_for_timestamp}:*'
+            self._log_verification_command(
+                'Post-commit repository listing (expect new and previous immutable tags)',
+                [
+                    'docker',
+                    'images',
+                    '--filter',
+                    f'reference={reference_filter}',
+                    '--format',
+                    '{{.Repository}}:{{.Tag}}\t{{.ID}}\t{{.CreatedSince}}',
+                    '--no-trunc',
+                ],
+                log_key=key,
+            )
+
+        self._log_verification_command(
+            'Post-commit dangling check (expect zero results)',
+            [
+                'docker',
+                'images',
+                '-f',
+                'dangling=true',
+                '--format',
+                '{{.Repository}}:{{.Tag}}\t{{.ID}}\t{{.Size}}',
+                '--no-trunc',
+            ],
+            log_key=key,
+        )
+        self._check_for_dangling_images()
 
         if commit_target and commit_target not in self._image_choices:
             self._image_choices.append(commit_target)
@@ -2812,6 +2943,93 @@ class MainWindow(QMainWindow):
             data = data[0] if data else None
         return data if isinstance(data, dict) else None
 
+    def _collect_dangling_images_metadata(self) -> list[dict]:
+        list_args = [
+            'docker',
+            'images',
+            '-f',
+            'dangling=true',
+            '--format',
+            '{{json .}}',
+            '--no-trunc',
+        ]
+        cp = self._sp_run(
+            list_args,
+            log_stdout=False,
+            log_stderr=False,
+            text=True,
+            check=False,
+        )
+        if cp.returncode not in (0, None):
+            return []
+
+        images: list[dict] = []
+        for line in (cp.stdout or '').splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            image_id = str(entry.get('ID') or entry.get('Id') or '').strip()
+            if not image_id:
+                continue
+            inspected = self._inspect_image_by_id(image_id)
+            if not inspected:
+                continue
+            repo_tags = inspected.get('RepoTags') or []
+            created_raw = inspected.get('Created') or ''
+            created_dt = self._parse_docker_datetime(created_raw)
+            created_display = (
+                created_dt.strftime('%Y-%m-%d %H:%M:%S UTC') if created_dt else created_raw
+            )
+            size = inspected.get('Size') or 0
+            config = inspected.get('Config') or {}
+            labels = {}
+            if isinstance(config, dict):
+                labels = config.get('Labels') or {}
+                if labels and not isinstance(labels, dict):
+                    labels = {}
+            owner_value = ''
+            if isinstance(labels, dict):
+                owner_value = str(labels.get(self._image_owner_label, '') or '')
+            project_owned = owner_value == self._image_owner_value
+            containers = self._list_containers_for_image(image_id)
+            repo = ''
+            first_tag = ''
+            if repo_tags:
+                first_tag = next((tag for tag in repo_tags if tag and '<none>' not in tag), repo_tags[0])
+                repo, _ = self._split_image_ref(first_tag)
+            short_id = image_id
+            if short_id.startswith('sha256:'):
+                short_id = short_id.split(':', 1)[1]
+            short_id = short_id[:64]
+            images.append(
+                {
+                    'id': short_id,
+                    'full_id': image_id,
+                    'repo_tags': repo_tags,
+                    'first_tag': first_tag,
+                    'repository': repo or '<none>',
+                    'created': created_raw,
+                    'created_dt': created_dt,
+                    'created_display': created_display,
+                    'size': size,
+                    'size_human': self._human_size(size),
+                    'labels': labels or {},
+                    'project_owned': project_owned,
+                    'containers': containers,
+                    'dangling': True,
+                }
+            )
+
+        images.sort(
+            key=lambda item: item.get('created_dt') or datetime.min,
+            reverse=True,
+        )
+        return images
+
     def _collect_owned_image_metadata(self) -> list[dict]:
         list_args = [
             'docker',
@@ -2902,6 +3120,222 @@ class MainWindow(QMainWindow):
                 info['protected'] = False
 
         return images
+
+    def _open_dangling_images_dialog(self):
+        self._log_button_click(self.dangling_images_button, 'Dangling Images')
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle('Dangling Docker Images')
+
+        layout = QVBoxLayout(dialog)
+        description = QLabel(
+            'Review all dangling Docker images. Owned layers are labeled with '
+            f"{self._image_owner_label}={self._image_owner_value}."
+        )
+        description.setWordWrap(True)
+        layout.addWidget(description)
+
+        summary_box = QTextEdit(dialog)
+        summary_box.setReadOnly(True)
+        summary_box.setMaximumHeight(120)
+        layout.addWidget(summary_box)
+
+        list_widget = QListWidget(dialog)
+        layout.addWidget(list_widget)
+
+        details_box = QTextEdit(dialog)
+        details_box.setReadOnly(True)
+        details_box.setMinimumHeight(160)
+        layout.addWidget(details_box)
+
+        warning_label = QLabel(
+            'Warning: This can remove layers that improve future build speed.'
+        )
+        warning_label.setWordWrap(True)
+        warning_label.setStyleSheet('color: #ff5555;')
+        layout.addWidget(warning_label)
+
+        button_row = QHBoxLayout()
+        prune_owned_button = QPushButton('Prune Owned Dangling', dialog)
+        prune_all_button = QPushButton('Prune All Dangling', dialog)
+        refresh_button = QPushButton('Refresh', dialog)
+        close_button = QPushButton('Close', dialog)
+        button_row.addWidget(prune_owned_button)
+        button_row.addWidget(prune_all_button)
+        button_row.addStretch(1)
+        button_row.addWidget(refresh_button)
+        button_row.addWidget(close_button)
+        layout.addLayout(button_row)
+
+        state: dict[str, list[dict]] = {'images': []}
+
+        def _update_summary():
+            images = state['images']
+            total = len(images)
+            owned = sum(1 for info in images if info.get('project_owned'))
+            referencing = sum(1 for info in images if info.get('containers'))
+            summary_lines = [
+                f'Dangling images: {total}',
+                f'Owned: {owned}',
+                f'Referenced by containers: {referencing}',
+            ]
+            summary_box.setPlainText('\n'.join(summary_lines))
+            prune_owned_button.setEnabled(
+                any(info.get('project_owned') and not info.get('containers') for info in images)
+            )
+            prune_all_button.setEnabled(bool(images))
+
+        def _update_details():
+            item = list_widget.currentItem()
+            if not item:
+                details_box.clear()
+                return
+            info = item.data(Qt.UserRole) or {}
+            payload = {
+                'image_id': info.get('full_id'),
+                'short_id': info.get('id'),
+                'tags': info.get('repo_tags') or [],
+                'labels': info.get('labels') or {},
+                'created': info.get('created'),
+                'created_display': info.get('created_display'),
+                'size_bytes': info.get('size'),
+                'size_human': info.get('size_human'),
+                'owned': info.get('project_owned'),
+                'referencing_containers': info.get('containers') or [],
+            }
+            details_box.setPlainText(json.dumps(payload, indent=2))
+
+        def _refresh():
+            images = self._check_for_dangling_images()
+            state['images'] = images
+            list_widget.blockSignals(True)
+            list_widget.clear()
+            for info in images:
+                label_parts = [
+                    info.get('id', '')[:12],
+                    info.get('size_human', ''),
+                    info.get('created_display', ''),
+                    f"containers:{len(info.get('containers') or [])}",
+                ]
+                if info.get('project_owned'):
+                    label_parts.append('owned')
+                else:
+                    label_parts.append('external')
+                item = QListWidgetItem(' | '.join(part for part in label_parts if part))
+                item.setData(Qt.UserRole, info)
+                list_widget.addItem(item)
+            list_widget.blockSignals(False)
+            if list_widget.count() > 0:
+                list_widget.setCurrentRow(0)
+            else:
+                details_box.clear()
+            _update_summary()
+
+        def _on_selection_changed():
+            _update_details()
+
+        def _run_post_cleanup_verification(context: str):
+            self._log_verification_command(
+                context,
+                [
+                    'docker',
+                    'images',
+                    '-f',
+                    'dangling=true',
+                    '--format',
+                    '{{.Repository}}:{{.Tag}}\t{{.ID}}\t{{.Size}}',
+                    '--no-trunc',
+                ],
+                log_key='log',
+            )
+
+        def _on_prune_owned():
+            images = state['images']
+            candidates = [
+                info for info in images if info.get('project_owned') and not info.get('containers')
+            ]
+            if not candidates:
+                QMessageBox.information(
+                    dialog,
+                    'Prune Owned Dangling',
+                    'No owned dangling images are eligible for pruning.',
+                )
+                return
+            command = [
+                'docker',
+                'image',
+                'prune',
+                '-f',
+                '--filter',
+                f'label={self._image_owner_label}={self._image_owner_value}',
+            ]
+            payload = {
+                'action': self._fmt_args(command),
+                'candidate_count': len(candidates),
+                'candidates': [
+                    {
+                        'image_id': info.get('full_id'),
+                        'size_human': info.get('size_human'),
+                        'created': info.get('created_display'),
+                    }
+                    for info in candidates
+                ],
+            }
+            confirm = QMessageBox.question(
+                dialog,
+                'Prune Owned Dangling',
+                f'{json.dumps(payload, indent=2)}\n\nProceed with prune?',
+            )
+            if confirm != QMessageBox.Yes:
+                return
+            prune_cp = self._sp_run(command, log_key='log', text=True, check=False)
+            if prune_cp.returncode not in (0, None):
+                stderr = self._decode_output(getattr(prune_cp, 'stderr', '')).strip()
+                if stderr:
+                    QMessageBox.warning(dialog, 'Prune Failed', stderr)
+            _refresh()
+            _run_post_cleanup_verification('Post-cleanup dangling check (owned)')
+
+        def _on_prune_all():
+            images = state['images']
+            if not images:
+                QMessageBox.information(
+                    dialog,
+                    'Prune All Dangling',
+                    'No dangling images are available to prune.',
+                )
+                return
+            command = ['docker', 'image', 'prune', '-f']
+            message = {
+                'warning': 'This removes all dangling layers, including build cache.',
+                'action': self._fmt_args(command),
+                'dangling_count': len(images),
+            }
+            confirm = QMessageBox.question(
+                dialog,
+                'Prune All Dangling',
+                f"{json.dumps(message, indent=2)}\n\nProceed with prune?",
+            )
+            if confirm != QMessageBox.Yes:
+                return
+            prune_cp = self._sp_run(command, log_key='log', text=True, check=False)
+            if prune_cp.returncode not in (0, None):
+                stderr = self._decode_output(getattr(prune_cp, 'stderr', '')).strip()
+                if stderr:
+                    QMessageBox.warning(dialog, 'Prune Failed', stderr)
+            _refresh()
+            _run_post_cleanup_verification('Post-cleanup dangling check (all)')
+
+        list_widget.currentItemChanged.connect(lambda current, previous: _on_selection_changed())
+        refresh_button.clicked.connect(_refresh)
+        close_button.clicked.connect(dialog.close)
+        prune_owned_button.clicked.connect(_on_prune_owned)
+        prune_all_button.clicked.connect(_on_prune_all)
+
+        _refresh()
+        _on_selection_changed()
+
+        dialog.exec_()
 
     def _open_image_management_dialog(self):
         self._log_button_click(self.manage_images_button, 'Manage Images')
@@ -3158,6 +3592,20 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(parent, 'Prune Failed', stderr)
 
         refresh_callback()
+        self._check_for_dangling_images()
+        self._log_verification_command(
+            'Post-cleanup dangling check (owned prune)',
+            [
+                'docker',
+                'images',
+                '-f',
+                'dangling=true',
+                '--format',
+                '{{.Repository}}:{{.Tag}}\t{{.ID}}\t{{.Size}}',
+                '--no-trunc',
+            ],
+            log_key='log',
+        )
 
     def _confirm_remove_owned_image(
         self,
@@ -3256,6 +3704,20 @@ class MainWindow(QMainWindow):
             QMessageBox.information(parent, 'Image Removed', f'Removed image {image_id}.')
 
         refresh_callback()
+        self._check_for_dangling_images()
+        self._log_verification_command(
+            'Post-cleanup dangling check (remove)',
+            [
+                'docker',
+                'images',
+                '-f',
+                'dangling=true',
+                '--format',
+                '{{.Repository}}:{{.Tag}}\t{{.ID}}\t{{.Size}}',
+                '--no-trunc',
+            ],
+            log_key='log',
+        )
 
     def execute_docker_cp_from_container(self):
         self._log_button_click(self.execute_docker_cp_button, 'Execute Docker cp')
