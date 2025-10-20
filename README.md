@@ -2,7 +2,8 @@
 
 The Mobipick Labs Docker GUI is a PyQt5 desktop application that orchestrates the
 Docker-based Mobipick Labs robotics simulation. Instead of manually invoking
-`docker compose` yourself, you launch `python gui.py` and drive the bring-up,
+`docker compose` yourself, you launch the `mobipick-labs-docker-gui` command (or
+`python -m mobipick_gui`) and drive the bring-up,
 monitoring, and shutdown of the simulation through an interactive interface.
 The GUI reads the bundled configuration files, runs Docker commands on your
 behalf, and streams live logs so you can follow what is happening in each
@@ -13,11 +14,12 @@ container.
 ## Repository layout
 
 ```
-├── gui.py                  # CLI entry point that launches the Qt event loop
-├── docker-compose.yml      # Compose file used internally by the GUI
-├── config/                 # YAML configuration consumed at runtime
-├── mobipick_gui/           # PyQt5 widgets, process orchestration, and helpers
-└── clean.bash              # Convenience script invoked when shutting down
+├── gui.py                  # Legacy CLI shim that forwards to the packaged entry point
+├── mobipick_gui/
+│   ├── resources/          # Bundled compose file, default configs, helper scripts
+│   └── …                   # PyQt5 widgets, process orchestration, and helpers
+├── MANIFEST.in             # Source distribution manifest
+└── pyproject.toml          # Packaging metadata for PyPI distribution
 ```
 
 The compose file is **not** intended to be executed directly. The GUI manages it
@@ -51,6 +53,12 @@ sudo usermod -aG docker $USER
 
 Then log out and back in.
 
+- Install the Mobipick Labs GUI from PyPI (this also installs the package dependencies):
+
+```bash
+pip install mobipick-labs-docker-gui
+```
+
 - Install the Docker Compose plugin and pull the Mobipick Labs image.
 
 ```bash
@@ -71,10 +79,10 @@ Note: If you run Mobipick Labs on the CPU, the simulation will be very slow.
 
 ## Launching the GUI
 
-1. Clone the repository.
+1. Clone the repository *or* install the package from PyPI.
 1. Start the application:
    ```bash
-   python gui.py
+   mobipick-labs-docker-gui
    ```
 1. When the window opens, use the top row of buttons to bring up ROS core,
    start or stop the simulator, toggle RViz/RQt, or open a Docker-backed
@@ -86,13 +94,13 @@ then exits gracefully.
 
 ### Command-line options
 
-`gui.py` accepts a single verbosity switch that controls how much diagnostic
+The CLI accepts a single verbosity switch that controls how much diagnostic
 information the GUI prints to its log tabs and the launch terminal:
 
 ```bash
-python gui.py --verbose        # Same as -v or --v
-python gui.py -v 3             # Maximum verbosity
-python gui.py -v 1             # Quietest mode (default)
+mobipick-labs-docker-gui --verbose        # Same as -v or --v
+mobipick-labs-docker-gui -v 3             # Maximum verbosity
+mobipick-labs-docker-gui -v 1             # Quietest mode (default)
 ```
 
 You can also pass through any Qt-specific arguments (for example `-platform`)
@@ -102,7 +110,7 @@ after the GUI options; they are forwarded automatically to `QApplication`.
 
 * **Process supervision:** Each button spawns a `QProcess` that executes a
   Docker command (`docker compose up`, `docker compose exec`, `docker cp`, etc.).
-  Environment variables from `config/gui_settings.yaml` ensure the commands run
+  Environment variables from `mobipick_gui/resources/config/gui_settings.yaml` ensure the commands run
   with consistent settings (for example `COMPOSE_IGNORE_ORPHANS=1`).
 * **State polling:** Timers defined in `config/gui_settings.yaml` periodically
   inspect Docker to reflect whether the ROS core, simulator, RViz, or RQt
@@ -111,13 +119,16 @@ after the GUI options; they are forwarded automatically to `QApplication`.
   tab, colourised via `mobipick_gui/ansi.py` so you can tail the container logs
   without leaving the GUI.
 * **Graceful shutdown:** When you exit, the GUI stops active containers in a
-  safe order, runs `clean.bash` to remove temporary resources, and only then
-  closes the window.
+  safe order, runs `clean.bash` (bundled in `mobipick_gui/resources/`) to remove
+  temporary resources, and only then closes the window.
 
 ## Configuring the GUI
 
-All customisation lives in the `config/` directory. You can copy these files and
-adapt them to your workflow:
+All customisation lives in the `mobipick_gui/resources/config/` directory. You
+can copy these files and adapt them to your workflow. When running from an
+installed package the directory is read-only; export the environment variable
+`MOBIPICK_GUI_DATA_ROOT` and point it at a writable copy of the resources if you
+need to override the defaults.
 
 * **`config/gui_settings.yaml`** – Controls UI behaviour such as window geometry
   and log styling, defines timer intervals, button colours, terminal launcher
@@ -149,15 +160,15 @@ translating user actions into compose commands. Typical sequences are:
 
 Because the GUI tracks container state, you should avoid running the compose
 file manually in parallel—it can confuse the state machine and lead to orphaned
-containers. If you need a manual clean slate, run `./clean.bash` with the GUI
-closed to remove stopped containers and networks.
+containers. If you need a manual clean slate, run `mobipick_gui/resources/clean.bash`
+with the GUI closed to remove stopped containers and networks.
 
 ## Tips and troubleshooting
 
 * Verify that Docker commands succeed from your shell before launching the GUI;
   it executes the same binaries with your current user.
 * If the GUI cannot discover your Mobipick Labs image, adjust the
-  `images.discovery_filters` list in `config/gui_settings.yaml`.
+  `images.discovery_filters` list in `mobipick_gui/resources/config/gui_settings.yaml`.
 * When experimenting with new Gazebo worlds or launch files, consider adding a
   custom button tab via `mobipick_gui/process_tab.py` so you can track logs in
   the same window.

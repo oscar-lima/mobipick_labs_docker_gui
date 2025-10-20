@@ -1,14 +1,50 @@
 """Configuration helpers for the Mobipick Labs GUI."""
 from __future__ import annotations
 
+import atexit
 import copy
+import os
 import sys
+from contextlib import ExitStack
 from pathlib import Path
 from typing import Dict
 
 import yaml
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+try:  # Python 3.9+
+    from importlib import resources as importlib_resources
+except ImportError:  # pragma: no cover - fallback for Python 3.8
+    import importlib_resources  # type: ignore
+
+
+def _resolve_project_root() -> Path:
+    """Return the directory that stores bundled assets."""
+
+    env_root = os.environ.get('MOBIPICK_GUI_DATA_ROOT')
+    if env_root:
+        candidate = Path(env_root).expanduser()
+        if candidate.is_dir():
+            return candidate
+
+    package_dir = Path(__file__).resolve().parent
+    resources_dir = package_dir / 'resources'
+    if resources_dir.is_dir():
+        return resources_dir
+
+    try:
+        data_pkg = importlib_resources.files('mobipick_gui').joinpath('resources')
+    except (AttributeError, ModuleNotFoundError):  # pragma: no cover - safety
+        return package_dir
+
+    _ASSET_STACK = _resolve_project_root._asset_stack  # type: ignore[attr-defined]
+    resolved = _ASSET_STACK.enter_context(importlib_resources.as_file(data_pkg))
+    return Path(resolved)
+
+
+_resolve_project_root._asset_stack = ExitStack()  # type: ignore[attr-defined]
+atexit.register(_resolve_project_root._asset_stack.close)  # type: ignore[attr-defined]
+
+PROJECT_ROOT = _resolve_project_root()
 CONFIG_FILE = PROJECT_ROOT / 'config' / 'gui_settings.yaml'
 DOCKER_CP_CONFIG_FILE = PROJECT_ROOT / 'config' / 'docker_cp_image_tag.yaml'
 SCRIPT_CLEAN = str(PROJECT_ROOT / 'clean.bash')

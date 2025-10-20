@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mobipick-labs-docker-gui"
+version = "0.1.0"
+description = "PyQt5 desktop controller for the Mobipick Labs Docker simulation"
+readme = "README.md"
+requires-python = ">=3.8"
+authors = [{name = "Mobipick Labs"}]
+license = {text = "Proprietary"}
+dependencies = [
+    "PyQt5>=5.15",
+    "PyYAML>=6.0",
+    "importlib-resources>=5.0; python_version < '3.9'",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: Other/Proprietary License",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Operating System :: POSIX :: Linux",
+    "Topic :: Software Development :: User Interfaces",
+]
+keywords = ["mobipick", "docker", "gui", "ros", "simulation"]
+
+[project.urls]
+Homepage = "https://github.com/openai/mobipick_labs_docker_gui"
+
+[project.scripts]
+mobipick-labs-docker-gui = "mobipick_gui.cli:main"
+
+[tool.setuptools]
+include-package-data = true
+zip-safe = false
+
+[tool.setuptools.packages.find]
+include = ["mobipick_gui", "mobipick_gui.*"]
