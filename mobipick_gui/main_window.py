@@ -21,6 +21,7 @@ from PyQt5.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDialog,
+    QDialogButtonBox,
     QFileDialog,
     QHBoxLayout,
     QLabel,
@@ -40,6 +41,7 @@ from PyQt5.QtWidgets import (
 from .ansi import CSI_SEQ_RE, OSC_SEQ_RE, ansi_to_html
 from .config import (
     CONFIG,
+    CONFIG_FILE,
     DEFAULT_YAML_PATH,
     PROJECT_ROOT,
     SCRIPT_CLEAN,
@@ -110,6 +112,7 @@ class MainWindow(QMainWindow):
         self._last_log_origin: dict[str, str] = {}
         self._gui_log_color = str(CONFIG['log'].get('gui_log_color', '#ff00ff'))
         self._command_log_color = str(CONFIG['log'].get('command_log_color', '#4da3ff'))
+        self._default_image_dialog_shown = False
 
         # sim state
         self._sim_container_name = 'mobipick-run'
@@ -643,35 +646,42 @@ class MainWindow(QMainWindow):
         records, error_message = self._discover_filtered_image_records()
 
         choices = [record.get('ref', '') for record in records if record.get('ref')]
-
-        default_image = images_cfg.get('default', '')
-        if default_image:
-            choices.insert(0, default_image)
-
         choices = [choice for choice in dict.fromkeys(choice for choice in choices if choice)]
 
-        prev_selection = self._selected_image
-        if choices:
-            if prev_selection not in choices:
-                self._selected_image = choices[0]
-            else:
-                self._selected_image = prev_selection
-        else:
+        if not choices:
             self._selected_image = ''
+            self._image_choices = []
+            self.image_combo.blockSignals(True)
+            self.image_combo.clear()
+            self.image_combo.addItem('No images found')
+            self.image_combo.setEnabled(False)
+            self.image_combo.blockSignals(False)
+            self.image_combo.setToolTip('No image selected')
+            self._inform_no_images_and_exit()
+            return
 
-        self._image_choices = choices
+        default_image = str(images_cfg.get('default', '') or '').strip()
+        default_available = default_image in choices
+        if default_available:
+            ordered_choices = [default_image] + [choice for choice in choices if choice != default_image]
+        else:
+            ordered_choices = list(choices)
+
+        prev_selection = self._selected_image
+        if prev_selection in ordered_choices:
+            self._selected_image = prev_selection
+        else:
+            self._selected_image = ordered_choices[0]
+
+        self._image_choices = ordered_choices
 
         self.image_combo.blockSignals(True)
         self.image_combo.clear()
-        if choices:
-            for choice in choices:
-                self.image_combo.addItem(choice)
-            index = choices.index(self._selected_image)
-            self.image_combo.setCurrentIndex(index)
-            self.image_combo.setEnabled(True)
-        else:
-            self.image_combo.addItem('No images found')
-            self.image_combo.setEnabled(False)
+        for choice in ordered_choices:
+            self.image_combo.addItem(choice)
+        index = ordered_choices.index(self._selected_image)
+        self.image_combo.setCurrentIndex(index)
+        self.image_combo.setEnabled(True)
         self.image_combo.blockSignals(False)
         self.image_combo.setToolTip(self._selected_image or 'No image selected')
 
@@ -679,10 +689,10 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, 'Images', error_message)
 
         if show_feedback:
-            if choices:
-                self._console_log(2, f'Available images: {", ".join(choices)}')
-            else:
-                QMessageBox.warning(self, 'Images', 'No matching docker images were found.')
+            self._console_log(2, f'Available images: {", ".join(ordered_choices)}')
+
+        if default_image and not default_available:
+            self._show_missing_default_image_dialog(default_image)
 
         self._update_related_patterns()
         self._apply_env_to_all_tabs()
@@ -690,6 +700,64 @@ class MainWindow(QMainWindow):
     def _apply_env_to_all_tabs(self):
         for tab in self.tasks.values():
             tab.refresh_environment()
+
+    def _inform_no_images_and_exit(self):
+        filters = self._images_cfg.get('discovery_filters', [])
+        filters_desc = ', '.join(str(item) for item in filters) if filters else '(no filters)'
+        config_path = str(CONFIG_FILE)
+        message = (
+            'No docker images matched the configured discovery filters.\n\n'
+            f'Filters: {filters_desc}\n'
+            f'Update the "images.discovery_filters" setting in {config_path} '
+            'to change which images are considered.\n\n'
+            'The application will now exit.'
+        )
+        self._console_log(1, message)
+        QMessageBox.critical(self, 'Images', message)
+        app = QApplication.instance()
+        if app is not None:
+            QTimer.singleShot(0, app.quit)
+
+    def _show_missing_default_image_dialog(self, image_ref: str):
+        if self._default_image_dialog_shown:
+            return
+        self._default_image_dialog_shown = True
+
+        command = f'docker pull {image_ref}'
+        dialog = QDialog(self)
+        dialog.setWindowTitle('Default Image Not Installed')
+
+        layout = QVBoxLayout(dialog)
+        message = QLabel(
+            'The configured default docker image is not available locally.\n'
+            f'Run the following command in a terminal to install "{image_ref}":'
+        )
+        message.setWordWrap(True)
+        layout.addWidget(message)
+
+        command_row = QHBoxLayout()
+        command_edit = QLineEdit(command)
+        command_edit.setReadOnly(True)
+        command_edit.setFocusPolicy(Qt.StrongFocus)
+        command_edit.selectAll()
+        command_row.addWidget(command_edit)
+
+        copy_button = QPushButton('Copy Command')
+
+        def _copy_command():
+            QApplication.clipboard().setText(command)
+            copy_button.setText('Copied!')
+            QTimer.singleShot(1500, lambda: copy_button.setText('Copy Command'))
+
+        copy_button.clicked.connect(_copy_command)
+        command_row.addWidget(copy_button)
+        layout.addLayout(command_row)
+
+        button_box = QDialogButtonBox(QDialogButtonBox.Ok)
+        button_box.accepted.connect(dialog.accept)
+        layout.addWidget(button_box)
+
+        dialog.exec_()
 
     def _on_image_changed(self, index: int):
         if not self._image_choices:
