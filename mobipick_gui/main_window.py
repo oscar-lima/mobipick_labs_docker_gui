@@ -28,6 +28,7 @@ from PyQt5.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
     QTabBar,
     QTabWidget,
@@ -167,6 +168,10 @@ class MainWindow(QMainWindow):
         self.commit_current_tab_button.setToolTip('Create a docker image from the container backing the current tab')
         self.commit_current_tab_button.clicked.connect(self.commit_current_tab)
 
+        self.manage_images_button = QPushButton('Manage Images')
+        self.manage_images_button.setToolTip('Remove docker images that match the configured filters')
+        self.manage_images_button.clicked.connect(self.manage_images)
+
         self.execute_docker_cp_button = QPushButton('Execute Docker cp')
         self.execute_docker_cp_button.setToolTip('Copy configured paths from the active container to the host')
         self.execute_docker_cp_button.clicked.connect(self.execute_docker_cp_from_container)
@@ -259,6 +264,7 @@ class MainWindow(QMainWindow):
         controls_row.addWidget(self.clear_button)
         controls_row.addWidget(self.clear_all_button)
         controls_row.addWidget(self.commit_current_tab_button)
+        controls_row.addWidget(self.manage_images_button)
         controls_row.addWidget(self.execute_docker_cp_button)
 
         spacer_controls = QWidget()
@@ -578,35 +584,59 @@ class MainWindow(QMainWindow):
     def _reload_images(self):
         self._load_available_images(show_feedback=True)
 
-    def _load_available_images(self, show_feedback: bool = False):
+    def _discover_filtered_image_records(self) -> tuple[list[dict[str, str]], str | None]:
         images_cfg = self._images_cfg
         filters = [f.lower() for f in images_cfg.get('discovery_filters', []) if f]
         include_none = bool(images_cfg.get('include_none_tag', False))
-        choices: list[str] = []
+        records: list[dict[str, str]] = []
+        error_message: str | None = None
+
         try:
             run_kwargs = {'stdout': subprocess.PIPE, 'stderr': subprocess.PIPE, 'text': True, 'check': False}
             run_kwargs = self._prepare_run_env(run_kwargs)
-            cp = subprocess.run(['docker', 'images', '--format', '{{.Repository}}:{{.Tag}}'], **run_kwargs)
-            output_lines = (cp.stdout or '').splitlines() if isinstance(cp.stdout, str) else []
-            if cp.returncode not in (0, None):
-                self._console_log(1, f'docker images returned {cp.returncode}')
+            cp = subprocess.run(['docker', 'images', '--format', '{{json .}}'], **run_kwargs)
         except Exception as exc:
-            output_lines = []
-            self._console_log(1, f'Failed to list docker images: {exc}')
+            error_message = f'Failed to list docker images: {exc}'
+            self._console_log(1, error_message)
+            return [], error_message
 
+        if cp.returncode not in (0, None):
+            error_message = f'docker images returned {cp.returncode}'
+            self._console_log(1, error_message)
+
+        output_lines = (cp.stdout or '').splitlines() if isinstance(cp.stdout, str) else []
         for line in output_lines:
             line = line.strip()
             if not line:
                 continue
-            if ':' in line:
-                repo, tag = line.rsplit(':', 1)
-            else:
-                repo, tag = line, ''
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(entry, dict):
+                continue
+            repo = str(entry.get('Repository', '') or '')
+            tag = str(entry.get('Tag', '') or '')
             if not include_none and ('<none>' in (repo.strip(), tag.strip())):
                 continue
-            if filters and not any(f in line.lower() for f in filters):
+            ref = f'{repo}:{tag}' if tag else repo
+            if not ref:
                 continue
-            choices.append(line)
+            if filters and not any(f in ref.lower() for f in filters):
+                continue
+            normalized_entry = {key: ('' if value is None else str(value)) for key, value in entry.items()}
+            normalized_entry['ref'] = ref
+            identifier = normalized_entry.get('ID') or normalized_entry.get('Id') or ref
+            normalized_entry['identifier'] = identifier
+            records.append(normalized_entry)
+
+        return records, error_message
+
+    def _load_available_images(self, show_feedback: bool = False):
+        images_cfg = self._images_cfg
+        records, error_message = self._discover_filtered_image_records()
+
+        choices = [record.get('ref', '') for record in records if record.get('ref')]
 
         default_image = images_cfg.get('default', '')
         if default_image:
@@ -638,6 +668,9 @@ class MainWindow(QMainWindow):
             self.image_combo.setEnabled(False)
         self.image_combo.blockSignals(False)
         self.image_combo.setToolTip(self._selected_image or 'No image selected')
+
+        if show_feedback and error_message:
+            QMessageBox.warning(self, 'Images', error_message)
 
         if show_feedback:
             if choices:
@@ -2567,6 +2600,156 @@ class MainWindow(QMainWindow):
         custom_button.clicked.connect(lambda: _run_commit(custom_image_edit.text(), custom_tag_edit.text()))
         cancel_button.clicked.connect(dialog.reject)
         show_mounts_button.clicked.connect(_show_mounts_dialog)
+
+        dialog.exec_()
+
+    def manage_images(self):
+        self._log_button_click(self.manage_images_button, 'Manage Images')
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle('Manage Images')
+        dialog.setModal(True)
+
+        layout = QVBoxLayout(dialog)
+        intro_label = QLabel(
+            'Select the images you would like to remove and click Apply. '
+            'Only images that match the configured discovery filters are shown.'
+        )
+        intro_label.setWordWrap(True)
+        layout.addWidget(intro_label)
+
+        status_label = QLabel()
+        status_label.setWordWrap(True)
+        status_label.setStyleSheet('color: #ff6b6b;')
+        status_label.hide()
+        layout.addWidget(status_label)
+
+        scroll_area = QScrollArea(dialog)
+        scroll_area.setWidgetResizable(True)
+        layout.addWidget(scroll_area, 1)
+
+        list_container = QWidget()
+        scroll_area.setWidget(list_container)
+        list_layout = QVBoxLayout(list_container)
+        list_layout.setContentsMargins(0, 0, 0, 0)
+        list_layout.setSpacing(6)
+
+        force_checkbox = QCheckBox('Force removal (-f)')
+        layout.addWidget(force_checkbox)
+
+        button_row = QHBoxLayout()
+        button_row.addStretch(1)
+        apply_button = QPushButton('Apply')
+        close_button = QPushButton('Close')
+        button_row.addWidget(apply_button)
+        button_row.addWidget(close_button)
+        layout.addLayout(button_row)
+
+        entries: list[dict[str, object]] = []
+
+        def _format_entry_text(record: dict[str, str]) -> str:
+            ref = record.get('ref', '')
+            identifier = record.get('identifier', '')
+            size = record.get('Size', '')
+            created = record.get('CreatedSince', '') or record.get('CreatedAt', '')
+
+            parts: list[str] = []
+            if ref:
+                parts.append(ref)
+            if identifier:
+                short_id = identifier.split(':', 1)[-1]
+                if short_id:
+                    parts.append(f'ID {short_id[:12]}')
+            if created:
+                parts.append(f'Created {created}')
+            if size:
+                parts.append(f'Size {size}')
+            return ' | '.join(parts) if parts else 'Unnamed image'
+
+        def _clear_list_layout():
+            while list_layout.count():
+                item = list_layout.takeAt(0)
+                widget = item.widget()
+                if widget is not None:
+                    widget.deleteLater()
+
+        def _populate_images():
+            nonlocal entries
+            entries = []
+            _clear_list_layout()
+            records, error_message = self._discover_filtered_image_records()
+            if error_message:
+                status_label.setText(error_message)
+                status_label.show()
+            else:
+                status_label.hide()
+                status_label.clear()
+            if not records:
+                placeholder = QLabel('No images match the configured filters.')
+                placeholder.setWordWrap(True)
+                list_layout.addWidget(placeholder)
+                list_layout.addStretch(1)
+                return
+            for record in records:
+                checkbox = QCheckBox(_format_entry_text(record))
+                checkbox.setChecked(False)
+                list_layout.addWidget(checkbox)
+                entries.append(
+                    {
+                        'checkbox': checkbox,
+                        'target': record.get('identifier') or record.get('ref', ''),
+                        'ref': record.get('ref', ''),
+                    }
+                )
+            list_layout.addStretch(1)
+
+        def _apply_removal():
+            selected_targets: list[str] = []
+            selected_refs: list[str] = []
+            for entry in entries:
+                checkbox = entry.get('checkbox')
+                if not isinstance(checkbox, QCheckBox) or not checkbox.isChecked():
+                    continue
+                target = str(entry.get('target') or '').strip()
+                if not target:
+                    continue
+                selected_targets.append(target)
+                ref = str(entry.get('ref') or target)
+                selected_refs.append(ref)
+            if not selected_targets:
+                QMessageBox.information(dialog, 'Manage Images', 'Select at least one image to remove.')
+                return
+
+            args = ['docker', 'rmi']
+            if force_checkbox.isChecked():
+                args.append('-f')
+            args.extend(selected_targets)
+
+            try:
+                cp = self._sp_run(args, log_key='log', text=True)
+            except Exception as exc:  # pragma: no cover - defensive
+                QMessageBox.warning(dialog, 'Manage Images', f'Failed to remove images: {exc}')
+                return
+
+            if cp.returncode not in (0, None):
+                QMessageBox.warning(
+                    dialog,
+                    'Manage Images',
+                    'Failed to remove one or more images. Check the Log tab for details.',
+                )
+            else:
+                removed = ', '.join(selected_refs)
+                if removed:
+                    self._log_info(f'Removed images: {removed}')
+                QMessageBox.information(dialog, 'Manage Images', 'Selected images were removed.')
+
+            self._load_available_images()
+            _populate_images()
+
+        _populate_images()
+
+        apply_button.clicked.connect(_apply_removal)
+        close_button.clicked.connect(dialog.reject)
 
         dialog.exec_()
 
