@@ -126,8 +126,6 @@ class MainWindow(QMainWindow):
         self._exit_dialog: Optional[QMessageBox] = None
         self._docker_stop_timeout = self._normalize_stop_timeout(CONFIG['exit'].get('docker_stop_timeout'))
 
-        self._initialize_dangling_image_cleanup()
-
         central = QWidget()
         self.setCentralWidget(central)
         root = QVBoxLayout(central)
@@ -300,6 +298,8 @@ class MainWindow(QMainWindow):
         self._ensure_tab('rqt', 'RQt Tables', closable=False)
         # central log tab
         self._ensure_tab('log', 'Log', closable=False)
+
+        self._initialize_dangling_image_cleanup()
 
         self._apply_env_to_all_tabs()
         self._refresh_script_options()
