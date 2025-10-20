@@ -1386,37 +1386,80 @@ class MainWindow(QMainWindow):
         except Exception:
             return 1000
 
-    def _ensure_roscore_ready(self, callback: Callable[[], None], *, attempt: int = 0):
+    def _ensure_roscore_ready(
+        self,
+        callback: Callable[[], None],
+        *,
+        attempt: int = 0,
+        allow_autostart: bool = True,
+    ):
         delay_ms = self._roscore_delay_ms()
         last_start = self._roscore_last_start_ts
 
-        if self._roscore_running_cached or self.tasks['roscore'].is_running():
+        roscore_tab = self.tasks.get('roscore')
+        roscore_active = self._roscore_running_cached or (
+            roscore_tab.is_running() if roscore_tab else False
+        )
+
+        if roscore_active:
             if delay_ms > 0 and last_start is not None:
                 elapsed_ms = int((time.monotonic() - last_start) * 1000)
                 remaining = delay_ms - elapsed_ms
                 if remaining > 0:
-                    QTimer.singleShot(remaining, lambda: self._ensure_roscore_ready(callback, attempt=attempt + 1))
+                    QTimer.singleShot(
+                        remaining,
+                        lambda: self._ensure_roscore_ready(
+                            callback,
+                            attempt=attempt + 1,
+                            allow_autostart=allow_autostart,
+                        ),
+                    )
                     return
+            callback()
+            return
+
+        if not allow_autostart:
             callback()
             return
 
         if self._roscore_stopping:
             self._log_info('roscore is shutting down; retrying shortly...')
-            QTimer.singleShot(delay_ms or 1000, lambda: self._ensure_roscore_ready(callback, attempt=attempt + 1))
+            QTimer.singleShot(
+                delay_ms or 1000,
+                lambda: self._ensure_roscore_ready(
+                    callback,
+                    attempt=attempt + 1,
+                    allow_autostart=allow_autostart,
+                ),
+            )
             return
 
         try:
             if self.is_roscore_running():
                 self._roscore_running_cached = True
                 self.set_roscore_visual('green', 'Stop Roscore', enabled=True)
-                QTimer.singleShot(delay_ms or 0, lambda: self._ensure_roscore_ready(callback, attempt=attempt + 1))
+                QTimer.singleShot(
+                    delay_ms or 0,
+                    lambda: self._ensure_roscore_ready(
+                        callback,
+                        attempt=attempt + 1,
+                        allow_autostart=allow_autostart,
+                    ),
+                )
                 return
         except Exception:
             pass
 
         self._log_info('roscore not running; starting automatically')
         self.bring_up_roscore()
-        QTimer.singleShot(delay_ms or 1000, lambda: self._ensure_roscore_ready(callback, attempt=attempt + 1))
+        QTimer.singleShot(
+            delay_ms or 1000,
+            lambda: self._ensure_roscore_ready(
+                callback,
+                attempt=attempt + 1,
+                allow_autostart=allow_autostart,
+            ),
+        )
 
     def bring_up_roscore(self):
         if self._roscore_stopping:
@@ -2100,7 +2143,7 @@ class MainWindow(QMainWindow):
             self._append_gui_html('log', f'<i>Launching terminal: {html.escape(command_str)}</i>')
             self.set_terminal_visual('green', 'Close Terminal', True)
 
-        self._ensure_roscore_ready(_start_terminal)
+        self._ensure_roscore_ready(_start_terminal, allow_autostart=False)
 
     def stop_terminal(self):
         if self._terminal_stopping and self._terminal_proc is None:
