@@ -46,6 +46,7 @@ images:
   include_none_tag: false                     # include dangling (<none>) tags in the image list when true
   related_container_keywords: ["mobipick", "mobipick_cmd", "mobipick-run", "rqt", "rviz"]  # container name fragments treated as related
   related_image_keywords: ["mobipick_labs"]  # extra image substrings treated as related for cleanup
+  manage_dialog_detail: simple                # level of detail shown in the Manage Images dialog (simple, medium, full)
 
 worlds:
   default: "moelk_tables"                    # default world_config if none is selected

@@ -632,6 +632,12 @@ class MainWindow(QMainWindow):
 
         return records, error_message
 
+    def _manage_images_detail_level(self) -> str:
+        value = str(self._images_cfg.get('manage_dialog_detail', 'simple') or '').strip().lower()
+        if value in {'simple', 'medium', 'full'}:
+            return value
+        return 'simple'
+
     def _load_available_images(self, show_feedback: bool = False):
         images_cfg = self._images_cfg
         records, error_message = self._discover_filtered_image_records()
@@ -2645,26 +2651,50 @@ class MainWindow(QMainWindow):
         button_row.addWidget(close_button)
         layout.addLayout(button_row)
 
+        detail_level = self._manage_images_detail_level()
         entries: list[dict[str, object]] = []
 
         def _format_entry_text(record: dict[str, str]) -> str:
-            ref = record.get('ref', '')
-            identifier = record.get('identifier', '')
-            size = record.get('Size', '')
-            created = record.get('CreatedSince', '') or record.get('CreatedAt', '')
+            repo = record.get('Repository', '') or ''
+            tag = record.get('Tag', '') or ''
+            if not repo and not tag:
+                repo, tag = self._split_image_ref(record.get('ref', ''))
+            repo_html = html.escape(repo) if repo else ''
+            tag_html = html.escape(tag) if tag else ''
+            if tag_html:
+                tag_html = f'<span style="font-weight:600;">{tag_html}</span>'
+            if repo_html and tag_html:
+                ref_html = f'{repo_html}:{tag_html}'
+            elif tag_html:
+                ref_html = tag_html
+            elif repo_html:
+                ref_html = repo_html
+            else:
+                ref_html = html.escape(record.get('ref', '') or '')
+            if not ref_html:
+                ref_html = 'Unnamed image'
 
-            parts: list[str] = []
-            if ref:
-                parts.append(ref)
+            if detail_level == 'simple':
+                return ref_html
+
+            parts: list[str] = [ref_html]
+            created = record.get('CreatedSince', '') or record.get('CreatedAt', '')
+            if created:
+                parts.append(f'Created {html.escape(created)}')
+
+            if detail_level == 'medium':
+                return ' | '.join(parts)
+
+            identifier = record.get('identifier', '')
             if identifier:
                 short_id = identifier.split(':', 1)[-1]
                 if short_id:
-                    parts.append(f'ID {short_id[:12]}')
-            if created:
-                parts.append(f'Created {created}')
+                    parts.append(f'ID {html.escape(short_id[:12])}')
+            size = record.get('Size', '')
             if size:
-                parts.append(f'Size {size}')
-            return ' | '.join(parts) if parts else 'Unnamed image'
+                parts.append(f'Size {html.escape(size)}')
+
+            return ' | '.join(parts)
 
         def _clear_list_layout():
             while list_layout.count():
