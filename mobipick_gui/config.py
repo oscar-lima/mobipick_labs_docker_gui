@@ -45,6 +45,7 @@ _resolve_project_root._asset_stack = ExitStack()  # type: ignore[attr-defined]
 atexit.register(_resolve_project_root._asset_stack.close)  # type: ignore[attr-defined]
 
 PROJECT_ROOT = _resolve_project_root()
+DOCKER_COMPOSE_FILE = PROJECT_ROOT / 'docker-compose.yml'
 CONFIG_FILE = PROJECT_ROOT / 'config' / 'gui_settings.yaml'
 DOCKER_CP_CONFIG_FILE = PROJECT_ROOT / 'config' / 'docker_cp_image_tag.yaml'
 SCRIPT_CLEAN = str(PROJECT_ROOT / 'clean.bash')
@@ -93,6 +94,8 @@ CONFIG_DEFAULTS: Dict[str, Dict] = {
     'process': {
         'qprocess_env': {
             'COMPOSE_IGNORE_ORPHANS': '1',
+            'COMPOSE_FILE': str(DOCKER_COMPOSE_FILE),
+            'COMPOSE_PROJECT_NAME': 'mobipick',
         },
         'compose_run_env': {
             'PYTHONUNBUFFERED': '1',
@@ -199,4 +202,5 @@ __all__ = [
     'load_docker_cp_config',
     'PROJECT_ROOT',
     'SCRIPT_CLEAN',
+    'DOCKER_COMPOSE_FILE',
 ]

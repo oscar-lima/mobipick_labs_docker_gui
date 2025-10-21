@@ -2,6 +2,18 @@
 
 # docker cleanup with safety checks and clear logging
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DEFAULT_COMPOSE_FILE="$SCRIPT_DIR/docker-compose.yml"
+if [ -z "${COMPOSE_FILE:-}" ] && [ -f "$DEFAULT_COMPOSE_FILE" ]; then
+  export COMPOSE_FILE="$DEFAULT_COMPOSE_FILE"
+fi
+if [ -z "${COMPOSE_PROJECT_NAME:-}" ]; then
+  export COMPOSE_PROJECT_NAME="mobipick"
+fi
+if [ -z "${COMPOSE_IGNORE_ORPHANS:-}" ]; then
+  export COMPOSE_IGNORE_ORPHANS=1
+fi
+
 log() { echo "[clean.bash] $*"; }
 
 command_exists() { command -v "$1" >/dev/null 2>&1; }
