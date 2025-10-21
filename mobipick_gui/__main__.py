@@ -1,10 +1,9 @@
-"""Entry point for the Mobipick Labs Control GUI."""
+"""Allow ``python -m mobipick_gui`` to launch the GUI."""
 from __future__ import annotations
 
 import sys
 
-from mobipick_gui.cli import main
-
+from .cli import main
 
 if __name__ == '__main__':
     sys.exit(main())
