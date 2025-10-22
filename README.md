@@ -51,7 +51,11 @@ sudo systemctl start docker
 sudo usermod -aG docker $USER
 ```
 
-Then log out and back in.
+Then log out and back in, or do:
+
+```bash
+newgrp docker
+```
 
 - Install the Mobipick Labs GUI from PyPI (this also installs the package dependencies):
 
@@ -72,7 +76,7 @@ docker pull ozkrelo/mobipick_labs:noetic
 - Optional but strongly recommended if you have an NVIDIA graphics card: install [nvidia-docker2](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/nvidia-docker.html). After installation, restart Docker and test with:
 
 ```bash
-docker run --rm --gpus all nvidia/cuda:12.4.1-base nvidia-smi
+docker run --rm --gpus all nvidia/cuda:12.4.1-base-ubuntu20.04 nvidia-smi
 ```
 
 Note: If you run Mobipick Labs on the CPU, the simulation will be very slow.
