@@ -10,6 +10,11 @@ trap 'log "error while running: ${BASH_COMMAND} (line ${LINENO})"' ERR
 log "starting entrypoint"
 log "current user: $(id -u):$(id -g)"
 log "working directory: $(pwd)"
+if [[ $# -eq 0 ]]; then
+  log "no command provided; defaulting to interactive bash"
+  set -- /bin/bash
+fi
+
 log "command: $*"
 
 if [[ -f /usr/share/gazebo/setup.sh ]]; then
