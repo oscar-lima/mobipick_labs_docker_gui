@@ -9,7 +9,8 @@ services:
       args:
         ROS_DISTRO: noetic
     working_dir: /root/catkin_ws/
-    entrypoint: /entrypoint.sh
+    entrypoint:
+      - /entrypoint.sh
     environment: 
       - DISPLAY # for Gazebo GUI
       - "ROS_DISTRO=noetic"
@@ -34,7 +35,8 @@ services:
     # gazebo server
     image: ${MOBIPICK_IMAGE:-ozkrelo/mobipick_labs:noetic}
     working_dir: /root/catkin_ws/
-    entrypoint: /entrypoint.sh
+    entrypoint:
+      - /entrypoint.sh
     environment: 
       - DISPLAY # for Gazebo GUI
       - "ROS_DISTRO=noetic"
