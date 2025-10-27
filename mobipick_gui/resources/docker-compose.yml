@@ -24,7 +24,7 @@ services:
     volumes:
       - /tmp/.X11-unix:/tmp/.X11-unix:ro  # for Gazebo GUI
       - /run/user:/run/user:ro  # for Gazebo GUI
-      - ${MOBIPICK_ENTRYPOINT_HOST_PATH:-./custom_entrypoint.sh}:/entrypoint.sh:ro
+      - ./custom_entrypoint.sh:/entrypoint.sh:ro
       - ./scripts:/root/scripts_430ofkjl04fsw:rw
     expose:
       - 11311 # roscore
@@ -53,7 +53,7 @@ services:
     volumes:
       - /tmp/.X11-unix:/tmp/.X11-unix:ro  # for gazebo gui
       - /run/user:/run/user:ro  # for Gazebo GUI
-      - ${MOBIPICK_ENTRYPOINT_HOST_PATH:-./custom_entrypoint.sh}:/entrypoint.sh:ro
+      - ./custom_entrypoint.sh:/entrypoint.sh:ro
       - ./scripts:/root/scripts_430ofkjl04fsw:rw
     privileged: true  # for Gazebo GUI
 

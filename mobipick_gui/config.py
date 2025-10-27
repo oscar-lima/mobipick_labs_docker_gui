@@ -96,7 +96,6 @@ CONFIG_DEFAULTS: Dict[str, Dict] = {
             'COMPOSE_IGNORE_ORPHANS': '1',
             'COMPOSE_FILE': str(DOCKER_COMPOSE_FILE),
             'COMPOSE_PROJECT_NAME': 'mobipick',
-            'MOBIPICK_ENTRYPOINT_HOST_PATH': str(PROJECT_ROOT / 'custom_entrypoint.sh'),
         },
         'compose_run_env': {
             'PYTHONUNBUFFERED': '1',
