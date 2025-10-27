@@ -36,6 +36,7 @@ class ProcessTab:
 
         self.container_name: str | None = None
         self.exec_id: str | None = None
+        self.xhost_token: str | None = None
 
     def start_shell(self, bash_cmd: str):
         self.parent._append_gui_html(
