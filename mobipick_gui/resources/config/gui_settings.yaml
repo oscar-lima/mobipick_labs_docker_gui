@@ -36,6 +36,7 @@ buttons:
 process:
   qprocess_env:
     COMPOSE_IGNORE_ORPHANS: "1"               # environment injected into every QProcess we spawn
+    # MOBIPICK_ENTRYPOINT_HOST_PATH is auto-populated with the packaged entrypoint script path
   compose_run_env:
     PYTHONUNBUFFERED: "1"                     # exported into docker compose runs to force unbuffered stdout
     PYTHONIOENCODING: "UTF-8"                 # ensure python subprocesses emit UTF-8
