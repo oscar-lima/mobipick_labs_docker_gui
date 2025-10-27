@@ -24,7 +24,7 @@ services:
       - /run/user:/run/user:ro  # for Gazebo GUI
       - ./scripts:/root/scripts_430ofkjl04fsw:rw
       # uncomment to add custom entrypoint script
-      - ./custom_entrypoint.sh:/entrypoint.sh:ro
+      # - ./custom_entrypoint.sh:/entrypoint.sh:ro
     expose:
       - 11311 # roscore
       - 12345 # gzserver
