@@ -167,6 +167,27 @@ file manually in parallel—it can confuse the state machine and lead to orphane
 containers. If you need a manual clean slate, run `mobipick_gui/resources/clean.bash`
 with the GUI closed to remove stopped containers and networks.
 
+### Avoiding Git "dubious ownership" warnings in bind mounts
+
+When Docker bind-mounts a host workspace into a container, Git 2.35+ refuses to
+run if the repository is owned by a different UID/GID than the process inside
+the container. The GUI now exports `MOBIPICK_UID` and `MOBIPICK_GID` with your
+current IDs and the bundled compose file runs every service as that user by
+default. This keeps Git happy without resorting to `safe.directory`
+whitelisting.
+
+If you invoke the compose file manually (outside the GUI), make sure the two
+environment variables are set before calling Docker:
+
+```bash
+export MOBIPICK_UID="$(id -u)"
+export MOBIPICK_GID="$(id -g)"
+docker compose up
+```
+
+You can override the values (for example, to fall back to root) by exporting
+different IDs or by setting them in your shell profile.
+
 ## Tips and troubleshooting
 
 * Verify that Docker commands succeed from your shell before launching the GUI;
