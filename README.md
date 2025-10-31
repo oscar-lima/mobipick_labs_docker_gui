@@ -76,10 +76,10 @@ docker pull ozkrelo/mobipick_labs:noetic
 - Optional but strongly recommended if you have an NVIDIA graphics card: install [nvidia-docker2](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/nvidia-docker.html). After installation, restart Docker and test with:
 
 ```bash
-docker run --rm --gpus all nvidia/cuda:12.4.1-base-ubuntu20.04 nvidia-smi
+sudo docker run --rm --runtime=nvidia --gpus all ubuntu nvidia-smi
 ```
 
-Note: If you run Mobipick Labs on the CPU, the simulation will be very slow.
+Note: If you run Mobipick Labs on the CPU, the simulation can be slow.
 
 ## Launching the GUI
 
