@@ -202,10 +202,13 @@ docker compose run --rm \
   mobipick_cmd python3 /root/scripts_430ofkjl04fsw/enter_host_shell.py bash
 ```
 
-The helper respects the `MOBIPICK_HOST_HOME` hint when it points to a directory
-that already contains a `.bashrc`. Otherwise, it falls back to `/root` so the
-image-provided shell configuration (for example `/root/.bashrc`) continues to be
-evaluated even though the terminal session now runs as your UID/GID.
+The helper keeps the hinted `MOBIPICK_HOST_HOME` when possible, creating the
+directory (and a matching passwd/group entry) if it does not already exist. When
+the hinted home lacks a `.bashrc` but `/root/.bashrc` is available, the helper
+creates a lightweight wrapper `~/.bashrc` that sources the container's default
+profile. This preserves your user-specific writable home—editors such as `nano`
+can persist history under `~/.local`—while still executing the image-provided
+initialisation scripts automatically.
 
 ## Tips and troubleshooting
 
