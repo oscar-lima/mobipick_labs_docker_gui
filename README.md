@@ -167,6 +167,49 @@ file manually in parallel—it can confuse the state machine and lead to orphane
 containers. If you need a manual clean slate, run `mobipick_gui/resources/clean.bash`
 with the GUI closed to remove stopped containers and networks.
 
+### Avoiding Git "dubious ownership" warnings in bind mounts
+
+When Docker bind-mounts a host workspace into a container, Git 2.35+ refuses to
+run if the repository is owned by a different UID/GID than the process inside
+the container. The GUI now auto-detects your numeric UID/GID and user metadata
+(with sudo-aware fallbacks) and exports them to every `docker compose` command
+it spawns. Containers are still allowed to start as root—this keeps the original
+entrypoint behaviour intact—but the GUI-provided terminal session immediately
+drops privileges inside the container via
+`/root/scripts_430ofkjl04fsw/enter_host_shell.py`. As a result, interactive
+shells run with the same UID/GID as the bind-mounted repository, preventing Git
+from flagging the workspace as "dubious".
+
+If you invoke the compose file manually (outside the GUI), pass the same
+variables explicitly so Docker uses your login credentials:
+
+```bash
+MOBIPICK_UID="$(id -u)" MOBIPICK_GID="$(id -g)" docker compose up
+```
+
+For ad-hoc `docker run` commands, either specify `--user "$(id -u):$(id -g)"` or
+replicate the GUI behaviour with the `MOBIPICK_UID`/`MOBIPICK_GID` environment
+pair. To obtain an interactive shell that mirrors the GUI behaviour, invoke the
+helper directly:
+
+```
+docker compose run --rm \
+  --env MOBIPICK_UID="$(id -u)" \
+  --env MOBIPICK_GID="$(id -g)" \
+  --env MOBIPICK_HOST_USER="$USER" \
+  --env MOBIPICK_HOST_GROUP="$(id -gn)" \
+  --env MOBIPICK_HOST_HOME="$HOME" \
+  mobipick_cmd python3 /root/scripts_430ofkjl04fsw/enter_host_shell.py bash
+```
+
+The helper keeps the hinted `MOBIPICK_HOST_HOME` when possible, creating the
+directory (and a matching passwd/group entry) if it does not already exist. When
+the hinted home lacks a `.bashrc` but `/root/.bashrc` is available, the helper
+creates a lightweight wrapper `~/.bashrc` that sources the container's default
+profile. This preserves your user-specific writable home—editors such as `nano`
+can persist history under `~/.local`—while still executing the image-provided
+initialisation scripts automatically.
+
 ## Tips and troubleshooting
 
 * Verify that Docker commands succeed from your shell before launching the GUI;

@@ -2241,7 +2241,7 @@ class MainWindow(QMainWindow):
                 '--label', 'mobipick.role=terminal',
                 '--label', 'mobipick.tab=terminal',
                 *self._compose_env_args(),
-                'mobipick_cmd', 'bash'
+                'mobipick_cmd', 'python3', f'{CONTAINER_SCRIPTS_DIR}/enter_host_shell.py', 'bash'
             ]
             command_str = self._fmt_args(command_parts)
             launcher = self._build_terminal_launcher(command_str)
