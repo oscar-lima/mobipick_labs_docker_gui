@@ -10,7 +10,6 @@ services:
         ROS_DISTRO: noetic
     working_dir: /root/catkin_ws/
     entrypoint: /entrypoint.sh
-    user: "${MOBIPICK_UID:-0}:${MOBIPICK_GID:-0}"
     environment:
       - DISPLAY # for Gazebo GUI
       - "ROS_DISTRO=noetic"
@@ -37,7 +36,6 @@ services:
     image: ${MOBIPICK_IMAGE:-ozkrelo/mobipick_labs:noetic}
     working_dir: /root/catkin_ws/
     entrypoint: /entrypoint.sh
-    user: "${MOBIPICK_UID:-0}:${MOBIPICK_GID:-0}"
     environment:
       - DISPLAY # for Gazebo GUI
       - "ROS_DISTRO=noetic"

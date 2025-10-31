@@ -9,6 +9,16 @@ from contextlib import ExitStack
 from pathlib import Path
 from typing import Dict
 
+try:
+    import grp
+except ImportError:  # pragma: no cover - Windows safety
+    grp = None  # type: ignore[assignment]
+
+try:
+    import pwd
+except ImportError:  # pragma: no cover - Windows safety
+    pwd = None  # type: ignore[assignment]
+
 import yaml
 
 try:  # Python 3.9+
@@ -72,6 +82,57 @@ def _detect_numeric_id(getter_name: str, env_candidates: tuple[str, ...], fallba
 HOST_UID = _detect_numeric_id('getuid', ('SUDO_UID', 'UID'), '0')
 HOST_GID = _detect_numeric_id('getgid', ('SUDO_GID', 'GID'), HOST_UID)
 
+
+def _detect_host_user() -> str:
+    for env_name in ('SUDO_USER', 'USER'):
+        value = os.environ.get(env_name)
+        if value and value != 'root':
+            return value
+    if pwd is not None:
+        try:
+            record = pwd.getpwuid(int(HOST_UID))
+        except (KeyError, ValueError):
+            pass
+        else:
+            if record.pw_name and record.pw_name != 'root':
+                return record.pw_name
+    return f'host{HOST_UID}'
+
+
+def _detect_host_group() -> str:
+    if grp is not None:
+        try:
+            record = grp.getgrgid(int(HOST_GID))
+        except (KeyError, ValueError):
+            pass
+        else:
+            if record.gr_name:
+                return record.gr_name
+    return f'hostgrp{HOST_GID}'
+
+
+def _detect_host_home() -> str:
+    for env_name in ('SUDO_HOME', 'HOME'):
+        value = os.environ.get(env_name)
+        if value:
+            expanded = Path(value).expanduser()
+            if expanded.is_dir():
+                return str(expanded)
+    if pwd is not None:
+        try:
+            record = pwd.getpwuid(int(HOST_UID))
+        except (KeyError, ValueError):
+            pass
+        else:
+            if record.pw_dir:
+                return record.pw_dir
+    return '/root'
+
+
+HOST_USER = _detect_host_user()
+HOST_GROUP = _detect_host_group()
+HOST_HOME = _detect_host_home()
+
 CONFIG_DEFAULTS: Dict[str, Dict] = {
     'log': {
         'max_block_count': 20000,
@@ -119,12 +180,18 @@ CONFIG_DEFAULTS: Dict[str, Dict] = {
             'COMPOSE_PROJECT_NAME': 'mobipick',
             'MOBIPICK_UID': HOST_UID,
             'MOBIPICK_GID': HOST_GID,
+            'MOBIPICK_HOST_USER': HOST_USER,
+            'MOBIPICK_HOST_GROUP': HOST_GROUP,
+            'MOBIPICK_HOST_HOME': HOST_HOME,
         },
         'compose_run_env': {
             'PYTHONUNBUFFERED': '1',
             'PYTHONIOENCODING': 'UTF-8',
             'MOBIPICK_UID': HOST_UID,
             'MOBIPICK_GID': HOST_GID,
+            'MOBIPICK_HOST_USER': HOST_USER,
+            'MOBIPICK_HOST_GROUP': HOST_GROUP,
+            'MOBIPICK_HOST_HOME': HOST_HOME,
         },
     },
     'exit': {

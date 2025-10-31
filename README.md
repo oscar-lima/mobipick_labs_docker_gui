@@ -171,12 +171,14 @@ with the GUI closed to remove stopped containers and networks.
 
 When Docker bind-mounts a host workspace into a container, Git 2.35+ refuses to
 run if the repository is owned by a different UID/GID than the process inside
-the container. The bundled compose file now runs each service as the
-`${MOBIPICK_UID}:${MOBIPICK_GID}` account. The GUI auto-detects your numeric UID
-and GID (or falls back to the `SUDO_UID/SUDO_GID` values when launched with
-`sudo`) and exports them to every `docker compose` command it spawns. As a
-result the containers see matching ownership on bind mounts and Git no longer
-marks the repositories as "dubious".
+the container. The GUI now auto-detects your numeric UID/GID and user metadata
+(with sudo-aware fallbacks) and exports them to every `docker compose` command
+it spawns. Containers are still allowed to start as root—this keeps the original
+entrypoint behaviour intact—but the GUI-provided terminal session immediately
+drops privileges inside the container via
+`/root/scripts_430ofkjl04fsw/enter_host_shell.py`. As a result, interactive
+shells run with the same UID/GID as the bind-mounted repository, preventing Git
+from flagging the workspace as "dubious".
 
 If you invoke the compose file manually (outside the GUI), pass the same
 variables explicitly so Docker uses your login credentials:
@@ -187,7 +189,18 @@ MOBIPICK_UID="$(id -u)" MOBIPICK_GID="$(id -g)" docker compose up
 
 For ad-hoc `docker run` commands, either specify `--user "$(id -u):$(id -g)"` or
 replicate the GUI behaviour with the `MOBIPICK_UID`/`MOBIPICK_GID` environment
-pair.
+pair. To obtain an interactive shell that mirrors the GUI behaviour, invoke the
+helper directly:
+
+```
+docker compose run --rm \
+  --env MOBIPICK_UID="$(id -u)" \
+  --env MOBIPICK_GID="$(id -g)" \
+  --env MOBIPICK_HOST_USER="$USER" \
+  --env MOBIPICK_HOST_GROUP="$(id -gn)" \
+  --env MOBIPICK_HOST_HOME="$HOME" \
+  mobipick_cmd python3 /root/scripts_430ofkjl04fsw/enter_host_shell.py bash
+```
 
 ## Tips and troubleshooting
 
