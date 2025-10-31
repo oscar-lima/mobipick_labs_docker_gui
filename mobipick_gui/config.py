@@ -51,10 +51,6 @@ DOCKER_CP_CONFIG_FILE = PROJECT_ROOT / 'config' / 'docker_cp_image_tag.yaml'
 SCRIPT_CLEAN = str(PROJECT_ROOT / 'clean.bash')
 DEFAULT_YAML_PATH = str(PROJECT_ROOT / 'config' / 'worlds.yaml')
 
-_DEFAULT_UID = str(os.getuid()) if hasattr(os, 'getuid') else '0'
-_DEFAULT_GID = str(os.getgid()) if hasattr(os, 'getgid') else '0'
-
-
 CONFIG_DEFAULTS: Dict[str, Dict] = {
     'log': {
         'max_block_count': 20000,
@@ -100,8 +96,6 @@ CONFIG_DEFAULTS: Dict[str, Dict] = {
             'COMPOSE_IGNORE_ORPHANS': '1',
             'COMPOSE_FILE': str(DOCKER_COMPOSE_FILE),
             'COMPOSE_PROJECT_NAME': 'mobipick',
-            'MOBIPICK_UID': _DEFAULT_UID,
-            'MOBIPICK_GID': _DEFAULT_GID,
         },
         'compose_run_env': {
             'PYTHONUNBUFFERED': '1',
