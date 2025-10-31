@@ -10,6 +10,12 @@ services:
         ROS_DISTRO: noetic
     working_dir: /root/catkin_ws/
     entrypoint: /entrypoint.sh
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              capabilities: [gpu]
     environment:
       - DISPLAY # for Gazebo GUI
       - "ROS_DISTRO=noetic"
@@ -36,6 +42,12 @@ services:
     image: ${MOBIPICK_IMAGE:-ozkrelo/mobipick_labs:noetic}
     working_dir: /root/catkin_ws/
     entrypoint: /entrypoint.sh
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              capabilities: [gpu]
     environment:
       - DISPLAY # for Gazebo GUI
       - "ROS_DISTRO=noetic"
