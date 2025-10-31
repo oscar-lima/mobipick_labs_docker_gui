@@ -202,6 +202,11 @@ docker compose run --rm \
   mobipick_cmd python3 /root/scripts_430ofkjl04fsw/enter_host_shell.py bash
 ```
 
+The helper respects the `MOBIPICK_HOST_HOME` hint when it points to a directory
+that already contains a `.bashrc`. Otherwise, it falls back to `/root` so the
+image-provided shell configuration (for example `/root/.bashrc`) continues to be
+evaluated even though the terminal session now runs as your UID/GID.
+
 ## Tips and troubleshooting
 
 * Verify that Docker commands succeed from your shell before launching the GUI;

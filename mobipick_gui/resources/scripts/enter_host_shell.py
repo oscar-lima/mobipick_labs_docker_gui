@@ -84,6 +84,38 @@ def _relax_permissions(path: Path) -> None:
     os.chmod(path, new_mode)
 
 
+def _select_home(home_hint: str | None) -> Path:
+    """Return the home directory that should be used for the dropped user."""
+
+    default_home = Path("/root")
+    if not home_hint:
+        return default_home
+
+    candidate = Path(home_hint).expanduser()
+
+    try:
+        candidate_exists = candidate.exists()
+    except OSError:
+        candidate_exists = False
+
+    if not candidate_exists:
+        return default_home
+
+    if candidate == default_home:
+        return candidate
+
+    candidate_rc = candidate / ".bashrc"
+    default_rc = default_home / ".bashrc"
+
+    if candidate_rc.exists():
+        return candidate
+
+    if default_rc.exists():
+        return default_home
+
+    return candidate
+
+
 def main(argv: list[str]) -> "None":
     uid = _parse_int(os.environ.get("MOBIPICK_UID"), 0)
     gid = _parse_int(os.environ.get("MOBIPICK_GID"), uid)
@@ -96,8 +128,7 @@ def main(argv: list[str]) -> "None":
 
     requested_user = _sanitize_name(os.environ.get("MOBIPICK_HOST_USER"), prefix="host", fallback_id=uid)
     requested_group = _sanitize_name(os.environ.get("MOBIPICK_HOST_GROUP"), prefix="hostgrp", fallback_id=gid)
-    home_hint = os.environ.get("MOBIPICK_HOST_HOME", "")
-    home_path = Path(home_hint).expanduser() if home_hint else Path("/root")
+    home_path = _select_home(os.environ.get("MOBIPICK_HOST_HOME"))
 
     _ensure_group(gid, requested_group)
     user_name = _ensure_user(uid, gid, requested_user, home_path)
