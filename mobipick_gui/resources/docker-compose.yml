@@ -22,7 +22,7 @@ services:
       - "GAZEBO_MASTER_URI=http://mobipick:12345"
       - NVIDIA_VISIBLE_DEVICES=all # for docker-nvidia2
       - NVIDIA_DRIVER_CAPABILITIES=all # for docker-nvidia2
-      - XDG_RUNTIME_DIR 
+      - XDG_RUNTIME_DIR
       - __NV_PRIME_RENDER_OFFLOAD
       - __GLX_VENDOR_LIBRARY_NAME
     volumes:
@@ -55,7 +55,7 @@ services:
       - "ROS_MASTER_URI=http://mobipick:11311"
       - NVIDIA_VISIBLE_DEVICES=all # for docker-nvidia2
       - NVIDIA_DRIVER_CAPABILITIES=all # for docker-nvidia2
-      - XDG_RUNTIME_DIR 
+      - XDG_RUNTIME_DIR
       - __NV_PRIME_RENDER_OFFLOAD
       - __GLX_VENDOR_LIBRARY_NAME
       - DISABLE_ROS1_EOL_WARNINGS=1
