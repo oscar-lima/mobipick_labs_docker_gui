@@ -171,16 +171,23 @@ with the GUI closed to remove stopped containers and networks.
 
 When Docker bind-mounts a host workspace into a container, Git 2.35+ refuses to
 run if the repository is owned by a different UID/GID than the process inside
-the container. The bundled compose file now enables Docker's
-[`userns=keep-id`](https://docs.docker.com/engine/security/userns-remap/#user-namespaces-and-docker-daemon) mode for every service so the
-container retains root privileges internally while mapping file ownership to
-your host UID/GID on bind mounts. This keeps Git happy without resorting to
-`safe.directory` whitelisting and without breaking tools that expect to run as
-root inside the image.
+the container. The bundled compose file now runs each service as the
+`${MOBIPICK_UID}:${MOBIPICK_GID}` account. The GUI auto-detects your numeric UID
+and GID (or falls back to the `SUDO_UID/SUDO_GID` values when launched with
+`sudo`) and exports them to every `docker compose` command it spawns. As a
+result the containers see matching ownership on bind mounts and Git no longer
+marks the repositories as "dubious".
 
-If you invoke the compose file manually (outside the GUI), the same user
-namespace settings apply automatically. For ad-hoc `docker run` commands you can
-replicate the behaviour by appending `--userns=keep-id`.
+If you invoke the compose file manually (outside the GUI), pass the same
+variables explicitly so Docker uses your login credentials:
+
+```bash
+MOBIPICK_UID="$(id -u)" MOBIPICK_GID="$(id -g)" docker compose up
+```
+
+For ad-hoc `docker run` commands, either specify `--user "$(id -u):$(id -g)"` or
+replicate the GUI behaviour with the `MOBIPICK_UID`/`MOBIPICK_GID` environment
+pair.
 
 ## Tips and troubleshooting
 

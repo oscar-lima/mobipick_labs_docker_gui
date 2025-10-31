@@ -51,6 +51,27 @@ DOCKER_CP_CONFIG_FILE = PROJECT_ROOT / 'config' / 'docker_cp_image_tag.yaml'
 SCRIPT_CLEAN = str(PROJECT_ROOT / 'clean.bash')
 DEFAULT_YAML_PATH = str(PROJECT_ROOT / 'config' / 'worlds.yaml')
 
+
+def _detect_numeric_id(getter_name: str, env_candidates: tuple[str, ...], fallback: str) -> str:
+    getter = getattr(os, getter_name, None)
+    if callable(getter):
+        try:
+            value = getter()
+        except OSError:
+            value = None
+        else:
+            if value is not None:
+                return str(value)
+    for env_name in env_candidates:
+        raw = os.environ.get(env_name)
+        if raw and raw.isdigit():
+            return raw
+    return fallback
+
+
+HOST_UID = _detect_numeric_id('getuid', ('SUDO_UID', 'UID'), '0')
+HOST_GID = _detect_numeric_id('getgid', ('SUDO_GID', 'GID'), HOST_UID)
+
 CONFIG_DEFAULTS: Dict[str, Dict] = {
     'log': {
         'max_block_count': 20000,
@@ -96,10 +117,14 @@ CONFIG_DEFAULTS: Dict[str, Dict] = {
             'COMPOSE_IGNORE_ORPHANS': '1',
             'COMPOSE_FILE': str(DOCKER_COMPOSE_FILE),
             'COMPOSE_PROJECT_NAME': 'mobipick',
+            'MOBIPICK_UID': HOST_UID,
+            'MOBIPICK_GID': HOST_GID,
         },
         'compose_run_env': {
             'PYTHONUNBUFFERED': '1',
             'PYTHONIOENCODING': 'UTF-8',
+            'MOBIPICK_UID': HOST_UID,
+            'MOBIPICK_GID': HOST_GID,
         },
     },
     'exit': {
