@@ -1102,7 +1102,7 @@ class MainWindow(QMainWindow):
         scripts: list[str] = []
         for entry in entries:
             path = self._scripts_dir / entry
-            if path.is_file() and entry.endswith('.py'):
+            if path.is_file() and entry.endswith('.py') and entry != 'enter_host_shell.py':
                 scripts.append(entry)
         scripts.sort()
         return scripts
