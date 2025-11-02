@@ -215,6 +215,7 @@ CONFIG_DEFAULTS: Dict[str, Dict] = {
         'launcher': 'gnome-terminal --title "{title}" -- bash -lc "{command}"',
         'title': 'Mobipick Terminal',
         'container_prefix': 'mobipick-terminal',
+        'drop_to_host_user': True,
     },
 }
 
