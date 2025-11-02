@@ -10,19 +10,27 @@ services:
         ROS_DISTRO: noetic
     working_dir: /root/catkin_ws/
     entrypoint: /entrypoint.sh
-    environment: 
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              capabilities: [gpu]
+    environment:
       - DISPLAY # for Gazebo GUI
       - "ROS_DISTRO=noetic"
       - "GAZEBO_MASTER_URI=http://mobipick:12345"
       - NVIDIA_VISIBLE_DEVICES=all # for docker-nvidia2
       - NVIDIA_DRIVER_CAPABILITIES=all # for docker-nvidia2
-      - XDG_RUNTIME_DIR 
+      - XDG_RUNTIME_DIR
       - __NV_PRIME_RENDER_OFFLOAD
       - __GLX_VENDOR_LIBRARY_NAME
     volumes:
       - /tmp/.X11-unix:/tmp/.X11-unix:ro  # for Gazebo GUI
       - /run/user:/run/user:ro  # for Gazebo GUI
       - ./scripts:/root/scripts_430ofkjl04fsw:rw
+      # uncomment to add custom entrypoint script
+      # - ./custom_entrypoint.sh:/entrypoint.sh:ro
     expose:
       - 11311 # roscore
       - 12345 # gzserver
@@ -34,14 +42,20 @@ services:
     image: ${MOBIPICK_IMAGE:-ozkrelo/mobipick_labs:noetic}
     working_dir: /root/catkin_ws/
     entrypoint: /entrypoint.sh
-    environment: 
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              capabilities: [gpu]
+    environment:
       - DISPLAY # for Gazebo GUI
       - "ROS_DISTRO=noetic"
       - "GAZEBO_MASTER_URI=http://mobipick:12345"
       - "ROS_MASTER_URI=http://mobipick:11311"
       - NVIDIA_VISIBLE_DEVICES=all # for docker-nvidia2
       - NVIDIA_DRIVER_CAPABILITIES=all # for docker-nvidia2
-      - XDG_RUNTIME_DIR 
+      - XDG_RUNTIME_DIR
       - __NV_PRIME_RENDER_OFFLOAD
       - __GLX_VENDOR_LIBRARY_NAME
       - DISABLE_ROS1_EOL_WARNINGS=1
@@ -49,6 +63,8 @@ services:
       - /tmp/.X11-unix:/tmp/.X11-unix:ro  # for gazebo gui
       - /run/user:/run/user:ro  # for Gazebo GUI
       - ./scripts:/root/scripts_430ofkjl04fsw:rw
+      # uncomment to add custom entrypoint script
+      # - ./custom_entrypoint.sh:/entrypoint.sh:ro
     privileged: true  # for Gazebo GUI
 
 networks:

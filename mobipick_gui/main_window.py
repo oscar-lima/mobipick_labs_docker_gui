@@ -95,6 +95,14 @@ class MainWindow(QMainWindow):
         self._roscore_stopping = False
         self._roscore_last_start_ts: float | None = None
         self._terminal_cfg = CONFIG.get('terminal', {})
+        drop_to_host_user_default = self._terminal_cfg.get('drop_to_host_user', True)
+        if drop_to_host_user_default is None:
+            self._terminal_drop_to_host_user_default = True
+        elif isinstance(drop_to_host_user_default, str):
+            lowered = drop_to_host_user_default.strip().lower()
+            self._terminal_drop_to_host_user_default = lowered not in {'0', 'false', 'no', 'off'}
+        else:
+            self._terminal_drop_to_host_user_default = bool(drop_to_host_user_default)
         self._terminal_launcher_template = str(self._terminal_cfg.get('launcher', 'gnome-terminal --title "{title}" -- bash -lc "{command}"'))
         self._terminal_title = str(self._terminal_cfg.get('title', 'Mobipick Terminal'))
         self._terminal_container_prefix = str(self._terminal_cfg.get('container_prefix', 'mobipick-terminal'))
@@ -116,7 +124,7 @@ class MainWindow(QMainWindow):
 
         # sim state
         self._sim_container_name = 'mobipick-run'
-        self._sim_xhost_granted = False
+        self._xhost_sources: set[str] = set()
         self._sim_running_cached = False  # event driven sim state
 
         self.tasks: dict[str, ProcessTab] = {}
@@ -155,6 +163,11 @@ class MainWindow(QMainWindow):
         self.terminal_button = QPushButton()
         self.terminal_button.clicked.connect(self._on_terminal_toggle_clicked)
         top.addWidget(self.terminal_button)
+
+        self.terminal_root_checkbox = QCheckBox('Run as root')
+        self.terminal_root_checkbox.setToolTip('When checked, new terminals run as root inside the container.')
+        self.terminal_root_checkbox.setChecked(not self._terminal_drop_to_host_user_default)
+        top.addWidget(self.terminal_root_checkbox)
 
         spacer = QWidget()
         spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
@@ -333,7 +346,7 @@ class MainWindow(QMainWindow):
             return args_or_str
         return ' '.join(shlex.quote(s) for s in args_or_str)
 
-    def _compose_env_args(self) -> list[str]:
+    def _compose_env_args(self, overrides: Optional[dict[str, str]] = None) -> list[str]:
         env_args: list[str] = []
         compose_env = dict(CONFIG['process']['compose_run_env'])
         if self._selected_image:
@@ -344,6 +357,9 @@ class MainWindow(QMainWindow):
         master_uri = self._current_master_uri()
         if master_uri:
             compose_env['ROS_MASTER_URI'] = master_uri
+        if overrides:
+            for key, value in overrides.items():
+                compose_env[str(key)] = str(value)
         for key, value in compose_env.items():
             env_args.extend(['--env', f'{key}={value}'])
         return env_args
@@ -371,6 +387,18 @@ class MainWindow(QMainWindow):
             for key, value in extra.items():
                 env.insert(str(key), str(value))
         return env
+
+    def _terminal_env_overrides(self) -> dict[str, str]:
+        checkbox = getattr(self, 'terminal_root_checkbox', None)
+        if not checkbox or not checkbox.isChecked():
+            return {}
+        return {
+            'MOBIPICK_UID': '0',
+            'MOBIPICK_GID': '0',
+            'MOBIPICK_HOST_USER': 'root',
+            'MOBIPICK_HOST_GROUP': 'root',
+            'MOBIPICK_HOST_HOME': '/root',
+        }
 
     def _prepare_run_env(self, run_kwargs: dict) -> dict:
         env = run_kwargs.get('env')
@@ -958,6 +986,7 @@ class MainWindow(QMainWindow):
             exec_id = uuid.uuid4().hex
             tab.exec_id = exec_id
             tab.container_name = f'mpcmd-{exec_id[:10]}'
+            self._claim_xhost(tab, key_target, log_key=tab.key)
             inner = f"python3 {CONTAINER_SCRIPTS_DIR}/{self._sh_quote(script)}"
             args = [
                 'compose', 'run', '--rm', '--name', tab.container_name,
@@ -1101,7 +1130,7 @@ class MainWindow(QMainWindow):
         scripts: list[str] = []
         for entry in entries:
             path = self._scripts_dir / entry
-            if path.is_file() and entry.endswith('.py'):
+            if path.is_file() and entry.endswith('.py') and entry != 'enter_host_shell.py':
                 scripts.append(entry)
         scripts.sort()
         return scripts
@@ -1443,15 +1472,36 @@ class MainWindow(QMainWindow):
 
     # ---------- Sim control ----------
 
-    def _grant_x(self):
-        if not self._sim_xhost_granted:
-            self._sp_run(['xhost', '+local:root'], check=False, log_key='sim')
-            self._sim_xhost_granted = True
+    def _grant_x(self, source: str, *, log_key: str | None = None):
+        if source in self._xhost_sources:
+            return
+        if not self._xhost_sources:
+            self._sp_run(['xhost', '+local:root'], check=False, log_key=log_key or 'sim')
+        self._xhost_sources.add(source)
 
-    def _revoke_x(self):
-        if self._sim_xhost_granted:
-            self._sp_run(['xhost', '-local:root'], check=False, log_key='sim')
-            self._sim_xhost_granted = False
+    def _revoke_x(self, source: str | None = None, *, log_key: str | None = None):
+        if source is None:
+            if not self._xhost_sources:
+                return
+            self._xhost_sources.clear()
+            self._sp_run(['xhost', '-local:root'], check=False, log_key=log_key or 'sim')
+            return
+        if source not in self._xhost_sources:
+            return
+        self._xhost_sources.remove(source)
+        if not self._xhost_sources:
+            self._sp_run(['xhost', '-local:root'], check=False, log_key=log_key or 'sim')
+
+    def _claim_xhost(self, tab: ProcessTab, token: str, *, log_key: str | None = None):
+        tab.xhost_token = token
+        self._grant_x(token, log_key=log_key or tab.key)
+
+    def _release_xhost(self, tab: ProcessTab, *, log_key: str | None = None):
+        token = getattr(tab, 'xhost_token', None)
+        if not token:
+            return
+        tab.xhost_token = None
+        self._revoke_x(token, log_key=log_key or tab.key)
 
     def is_roscore_running(self) -> bool:
         try:
@@ -1707,12 +1757,12 @@ class MainWindow(QMainWindow):
         def _start_sim():
             world = self._current_world()
             self._log_info(f'starting simulation stack (world {world})')
-            self._grant_x()
-
             tab = self._ensure_tab('sim', 'Sim', closable=False)
             tab.container_name = self._sim_container_name  # ensure sim tab is addressable
             exec_id = uuid.uuid4().hex
             tab.exec_id = exec_id
+
+            self._claim_xhost(tab, 'sim', log_key=tab.key)
 
             args = [
                 'compose', 'run', '--rm', '--name', self._sim_container_name,
@@ -1785,7 +1835,7 @@ class MainWindow(QMainWindow):
             commands += self._docker_stop_if_exists(self._sim_container_name, tab, exec_id=tab.exec_id)
 
             def _finalize():
-                self._revoke_x()
+                self._release_xhost(tab, log_key=tab.key)
                 self._sim_running_cached = False
                 self._killing = False
                 self.set_toggle_visual('red', 'Start Sim', enabled=True)
@@ -2067,6 +2117,7 @@ class MainWindow(QMainWindow):
             exec_id = uuid.uuid4().hex
             tab.exec_id = exec_id
             tab.container_name = f'mpcmd-{exec_id[:10]}'
+            self._claim_xhost(tab, 'tables', log_key=tab.key)
             inner = 'rosrun tables_demo_planning tables_demo_node.py'
             args = [
                 'compose', 'run', '--rm', '--name', tab.container_name,
@@ -2087,10 +2138,11 @@ class MainWindow(QMainWindow):
             self.set_tables_visual('red', 'Run Tables Demo', True)
             return
         self.set_tables_visual('yellow', 'Stopping Tables Demo...', False)
-        self._stop_custom_tab(
-            tab,
-            on_stopped=lambda: self.set_tables_visual('red', 'Run Tables Demo', True),
-        )
+        def _on_stopped():
+            self._release_xhost(tab, log_key=tab.key)
+            self.set_tables_visual('red', 'Run Tables Demo', True)
+
+        self._stop_custom_tab(tab, on_stopped=_on_stopped)
 
     def toggle_rviz(self):
         tab = self.tasks['rviz']
@@ -2110,11 +2162,11 @@ class MainWindow(QMainWindow):
 
         def _start_rviz():
             self._log_info('starting RViz viewer')
-            self._grant_x()
             tab = self._ensure_tab('rviz', 'RViz', closable=False)
             exec_id = uuid.uuid4().hex
             tab.exec_id = exec_id
             tab.container_name = f'mpcmd-{exec_id[:10]}'
+            self._claim_xhost(tab, 'rviz', log_key=tab.key)
             rviz_cmd = 'rosrun rviz rviz -d $(rospack find tables_demo_bringup)/config/pick_n_place.rviz __ns:=mobipick'
             args = [
                 'compose', 'run', '--rm', '--name', tab.container_name,
@@ -2135,10 +2187,11 @@ class MainWindow(QMainWindow):
             self.set_rviz_visual('red', 'Start RViz', True)
             return
         self.set_rviz_visual('yellow', 'Stopping RViz...', False)
-        self._stop_custom_tab(
-            tab,
-            on_stopped=lambda: self.set_rviz_visual('red', 'Start RViz', True),
-        )
+        def _on_stopped():
+            self._release_xhost(tab, log_key=tab.key)
+            self.set_rviz_visual('red', 'Start RViz', True)
+
+        self._stop_custom_tab(tab, on_stopped=_on_stopped)
 
     def toggle_rqt_tables_demo(self):
         tab = self.tasks['rqt']
@@ -2159,11 +2212,11 @@ class MainWindow(QMainWindow):
         def _start_rqt():
             world = self.world_combo.currentText().strip() or 'moelk_tables'
             self._log_info(f'starting rqt tables demo for {world}')
-            self._grant_x()
             tab = self._ensure_tab('rqt', 'RQt Tables', closable=False)
             exec_id = uuid.uuid4().hex
             tab.exec_id = exec_id
             tab.container_name = f'mpcmd-{exec_id[:10]}'
+            self._claim_xhost(tab, 'rqt', log_key=tab.key)
             cmd = f'roslaunch rqt_tables_demo rqt_tables_demo.launch namespace:=mobipick world_config:={self._sh_quote(world)}'
             args = [
                 'compose', 'run', '--rm', '--name', tab.container_name,
@@ -2184,10 +2237,11 @@ class MainWindow(QMainWindow):
             self.set_rqt_visual('red', 'Start RQt Tables', True)
             return
         self.set_rqt_visual('yellow', 'Stopping RQt Tables...', False)
-        self._stop_custom_tab(
-            tab,
-            on_stopped=lambda: self.set_rqt_visual('red', 'Start RQt Tables', True),
-        )
+        def _on_stopped():
+            self._release_xhost(tab, log_key=tab.key)
+            self.set_rqt_visual('red', 'Start RQt Tables', True)
+
+        self._stop_custom_tab(tab, on_stopped=_on_stopped)
 
     def toggle_terminal(self):
         if self._terminal_stopping:
@@ -2207,13 +2261,17 @@ class MainWindow(QMainWindow):
             exec_id = uuid.uuid4().hex
             container_name = f"{self._terminal_container_prefix}-{exec_id[:10]}"
 
+            self._grant_x('terminal', log_key='log')
+
+            env_overrides = self._terminal_env_overrides()
+
             command_parts = [
                 'docker', 'compose', 'run', '--rm', '--name', container_name,
                 '--label', f'mobipick.exec={exec_id}',
                 '--label', 'mobipick.role=terminal',
                 '--label', 'mobipick.tab=terminal',
-                *self._compose_env_args(),
-                'mobipick_cmd', 'bash'
+                *self._compose_env_args(env_overrides),
+                'mobipick_cmd', 'python3', f'{CONTAINER_SCRIPTS_DIR}/enter_host_shell.py', 'bash'
             ]
             command_str = self._fmt_args(command_parts)
             launcher = self._build_terminal_launcher(command_str)
@@ -2228,7 +2286,7 @@ class MainWindow(QMainWindow):
             self._terminal_exec_id = exec_id
 
             proc = QProcess(self)
-            proc.setProcessEnvironment(self._build_process_environment())
+            proc.setProcessEnvironment(self._build_process_environment(env_overrides))
             proc.setWorkingDirectory(str(self._project_root))
             proc.finished.connect(self._on_terminal_proc_finished)
             proc.errorOccurred.connect(self._on_terminal_proc_error)
@@ -2329,6 +2387,7 @@ class MainWindow(QMainWindow):
             return
         self._terminal_container_name = None
         self._terminal_exec_id = None
+        self._revoke_x('terminal', log_key='log')
         try:
             subprocess.run(
                 ['docker', 'stop', name],
@@ -2381,6 +2440,7 @@ class MainWindow(QMainWindow):
             exec_id = uuid.uuid4().hex
             tab.exec_id = exec_id
             tab.container_name = f'mpcmd-{exec_id[:10]}'
+            self._claim_xhost(tab, key_target, log_key=tab.key)
             wrapped = self._wrap_line_buffered(text)
             args = [
                 'compose', 'run', '--rm', '--name', tab.container_name,
@@ -2441,6 +2501,7 @@ class MainWindow(QMainWindow):
             if container_name:
                 tab.container_name = None
             tab.exec_id = None
+            self._release_xhost(tab, log_key=tab.key)
             if on_stopped:
                 on_stopped()
             self._update_stop_custom_enabled()
@@ -3111,10 +3172,12 @@ class MainWindow(QMainWindow):
         status_name = 'NormalExit' if int(exit_status) == int(QProcess.NormalExit) else 'Crashed'
         if key == self._terminal_stream_tab_key:
             self._terminal_stream_tab_key = None
-        if key in self.tasks:
+        tab = self.tasks.get(key)
+        if tab:
+            self._release_xhost(tab, log_key=key)
             self._append_gui_html(key, f'<i>Process finished with code {exit_code} [{status_name}]</i>')
-            self.tasks[key].container_name = None
-            self.tasks[key].exec_id = None
+            tab.container_name = None
+            tab.exec_id = None
         if key == 'roscore':
             self._roscore_running_cached = False
             if self._roscore_stopping:
@@ -3132,7 +3195,6 @@ class MainWindow(QMainWindow):
             self._update_stop_custom_enabled()
             return
         if key == 'sim':
-            self._revoke_x()
             self._sim_running_cached = False
             if self._killing:
                 return

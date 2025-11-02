@@ -40,6 +40,12 @@ process:
     PYTHONUNBUFFERED: "1"                     # exported into docker compose runs to force unbuffered stdout
     PYTHONIOENCODING: "UTF-8"                 # ensure python subprocesses emit UTF-8
 
+terminal:
+  launcher: "gnome-terminal --title \"{title}\" -- bash -lc \"{command}\""  # external terminal command template
+  title: "Mobipick Terminal"                # substituted into the launcher template
+  container_prefix: "mobipick-terminal"     # prefix used when naming one-off terminal containers
+  drop_to_host_user: true                    # when false, the GUI keeps terminals running as root inside the container
+
 images:
   default: "ozkrelo/mobipick_labs:noetic"       # image:tag selected by default when the GUI starts
   discovery_filters: ["mobipick"]             # repository substrings used to filter docker images for the dropdown
