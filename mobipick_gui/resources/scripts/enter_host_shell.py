@@ -10,6 +10,7 @@ import shlex
 import stat
 import shutil
 import sys
+import time
 from pathlib import Path
 
 
@@ -63,6 +64,36 @@ def _ensure_user(uid: int, gid: int, name: str, home: Path) -> str:
     with open("/etc/passwd", "a", encoding="utf-8") as handle:
         handle.write(entry)
     return name
+
+
+def _ensure_shadow_entry(user_name: str) -> None:
+    """Append a disabled password shadow entry for ``user_name`` when needed."""
+
+    shadow_path = Path("/etc/shadow")
+    if not shadow_path.exists():
+        return
+
+    try:
+        import spwd
+    except ImportError:
+        return
+
+    try:
+        spwd.getspnam(user_name)
+        return
+    except PermissionError:
+        return
+    except KeyError:
+        pass
+
+    # ``/etc/shadow`` stores the password change time as days since epoch.
+    last_change = int(time.time() // 86400)
+
+    try:
+        with shadow_path.open("a", encoding="utf-8") as handle:
+            handle.write(f"{user_name}:*:{last_change}:0:99999:7:::\n")
+    except OSError:
+        return
 
 
 def _relax_permissions(path: Path) -> None:
@@ -227,6 +258,7 @@ def main(argv: list[str]) -> "None":
     user_name = _ensure_user(uid, gid, requested_user, home_path)
     _ensure_home_ownership(home_path, uid, gid)
     _ensure_rc_stub(home_path, rc_source, uid, gid)
+    _ensure_shadow_entry(user_name)
     _enable_passwordless_sudo(user_name)
 
     cwd = Path.cwd().resolve()
