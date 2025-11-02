@@ -8,6 +8,7 @@ import pwd
 import re
 import shlex
 import stat
+import shutil
 import sys
 from pathlib import Path
 
@@ -183,6 +184,31 @@ def _ensure_rc_stub(home: Path, rc_source: Path | None, uid: int, gid: int) -> N
         return
 
 
+def _enable_passwordless_sudo(user_name: str) -> None:
+    """Allow ``user_name`` to run sudo without a password when possible."""
+
+    if not shutil.which("sudo"):
+        return
+
+    sudoers_dir = Path("/etc/sudoers.d")
+
+    try:
+        sudoers_dir.mkdir(mode=0o755, exist_ok=True)
+    except OSError:
+        return
+
+    fragment = sudoers_dir / "mobipick-host"
+    try:
+        fragment.write_text(f"{user_name} ALL=(ALL) NOPASSWD:ALL\n", encoding="utf-8")
+        os.chown(fragment, 0, 0)
+        os.chmod(fragment, 0o440)
+    except OSError:
+        try:
+            fragment.unlink()
+        except OSError:
+            pass
+
+
 def main(argv: list[str]) -> "None":
     uid = _parse_int(os.environ.get("MOBIPICK_UID"), 0)
     gid = _parse_int(os.environ.get("MOBIPICK_GID"), uid)
@@ -201,6 +227,7 @@ def main(argv: list[str]) -> "None":
     user_name = _ensure_user(uid, gid, requested_user, home_path)
     _ensure_home_ownership(home_path, uid, gid)
     _ensure_rc_stub(home_path, rc_source, uid, gid)
+    _enable_passwordless_sudo(user_name)
 
     cwd = Path.cwd().resolve()
     for candidate in (cwd, *cwd.parents):

@@ -183,7 +183,10 @@ shell, tick the **Run as root** checkbox next to the **Open Terminal** button
 before launching it. The GUI will export root credentials to Docker Compose and
 skip the user drop so the terminal starts as the container's root user. You can
 also make this behaviour the default by setting `terminal.drop_to_host_user` to
-`false` in `config/gui_settings.yaml`.
+`false` in `config/gui_settings.yaml`. When you keep the checkbox cleared the
+helper enables passwordless `sudo` for the synthesized host user, so you can run
+administrative commands without re-owning files created later by non-privileged
+processes.
 
 If you invoke the compose file manually (outside the GUI), pass the same
 variables explicitly so Docker uses your login credentials:
