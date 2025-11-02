@@ -95,6 +95,14 @@ class MainWindow(QMainWindow):
         self._roscore_stopping = False
         self._roscore_last_start_ts: float | None = None
         self._terminal_cfg = CONFIG.get('terminal', {})
+        drop_to_host_user_default = self._terminal_cfg.get('drop_to_host_user', True)
+        if drop_to_host_user_default is None:
+            self._terminal_drop_to_host_user_default = True
+        elif isinstance(drop_to_host_user_default, str):
+            lowered = drop_to_host_user_default.strip().lower()
+            self._terminal_drop_to_host_user_default = lowered not in {'0', 'false', 'no', 'off'}
+        else:
+            self._terminal_drop_to_host_user_default = bool(drop_to_host_user_default)
         self._terminal_launcher_template = str(self._terminal_cfg.get('launcher', 'gnome-terminal --title "{title}" -- bash -lc "{command}"'))
         self._terminal_title = str(self._terminal_cfg.get('title', 'Mobipick Terminal'))
         self._terminal_container_prefix = str(self._terminal_cfg.get('container_prefix', 'mobipick-terminal'))
@@ -155,6 +163,11 @@ class MainWindow(QMainWindow):
         self.terminal_button = QPushButton()
         self.terminal_button.clicked.connect(self._on_terminal_toggle_clicked)
         top.addWidget(self.terminal_button)
+
+        self.terminal_root_checkbox = QCheckBox('Run as root')
+        self.terminal_root_checkbox.setToolTip('When checked, new terminals run as root inside the container.')
+        self.terminal_root_checkbox.setChecked(not self._terminal_drop_to_host_user_default)
+        top.addWidget(self.terminal_root_checkbox)
 
         spacer = QWidget()
         spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
@@ -333,7 +346,7 @@ class MainWindow(QMainWindow):
             return args_or_str
         return ' '.join(shlex.quote(s) for s in args_or_str)
 
-    def _compose_env_args(self) -> list[str]:
+    def _compose_env_args(self, overrides: Optional[dict[str, str]] = None) -> list[str]:
         env_args: list[str] = []
         compose_env = dict(CONFIG['process']['compose_run_env'])
         if self._selected_image:
@@ -344,6 +357,9 @@ class MainWindow(QMainWindow):
         master_uri = self._current_master_uri()
         if master_uri:
             compose_env['ROS_MASTER_URI'] = master_uri
+        if overrides:
+            for key, value in overrides.items():
+                compose_env[str(key)] = str(value)
         for key, value in compose_env.items():
             env_args.extend(['--env', f'{key}={value}'])
         return env_args
@@ -371,6 +387,18 @@ class MainWindow(QMainWindow):
             for key, value in extra.items():
                 env.insert(str(key), str(value))
         return env
+
+    def _terminal_env_overrides(self) -> dict[str, str]:
+        checkbox = getattr(self, 'terminal_root_checkbox', None)
+        if not checkbox or not checkbox.isChecked():
+            return {}
+        return {
+            'MOBIPICK_UID': '0',
+            'MOBIPICK_GID': '0',
+            'MOBIPICK_HOST_USER': 'root',
+            'MOBIPICK_HOST_GROUP': 'root',
+            'MOBIPICK_HOST_HOME': '/root',
+        }
 
     def _prepare_run_env(self, run_kwargs: dict) -> dict:
         env = run_kwargs.get('env')
@@ -2235,12 +2263,14 @@ class MainWindow(QMainWindow):
 
             self._grant_x('terminal', log_key='log')
 
+            env_overrides = self._terminal_env_overrides()
+
             command_parts = [
                 'docker', 'compose', 'run', '--rm', '--name', container_name,
                 '--label', f'mobipick.exec={exec_id}',
                 '--label', 'mobipick.role=terminal',
                 '--label', 'mobipick.tab=terminal',
-                *self._compose_env_args(),
+                *self._compose_env_args(env_overrides),
                 'mobipick_cmd', 'python3', f'{CONTAINER_SCRIPTS_DIR}/enter_host_shell.py', 'bash'
             ]
             command_str = self._fmt_args(command_parts)
@@ -2256,7 +2286,7 @@ class MainWindow(QMainWindow):
             self._terminal_exec_id = exec_id
 
             proc = QProcess(self)
-            proc.setProcessEnvironment(self._build_process_environment())
+            proc.setProcessEnvironment(self._build_process_environment(env_overrides))
             proc.setWorkingDirectory(str(self._project_root))
             proc.finished.connect(self._on_terminal_proc_finished)
             proc.errorOccurred.connect(self._on_terminal_proc_error)

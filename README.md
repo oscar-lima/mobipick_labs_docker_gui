@@ -178,7 +178,12 @@ entrypoint behaviour intact—but the GUI-provided terminal session immediately
 drops privileges inside the container via
 `/root/scripts_430ofkjl04fsw/enter_host_shell.py`. As a result, interactive
 shells run with the same UID/GID as the bind-mounted repository, preventing Git
-from flagging the workspace as "dubious".
+from flagging the workspace as "dubious". When you genuinely need a privileged
+shell, tick the **Run as root** checkbox next to the **Open Terminal** button
+before launching it. The GUI will export root credentials to Docker Compose and
+skip the user drop so the terminal starts as the container's root user. You can
+also make this behaviour the default by setting `terminal.drop_to_host_user` to
+`false` in `config/gui_settings.yaml`.
 
 If you invoke the compose file manually (outside the GUI), pass the same
 variables explicitly so Docker uses your login credentials:
