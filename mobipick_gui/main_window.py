@@ -48,7 +48,9 @@ from .config import (
     load_docker_cp_config,
 )
 
-CONTAINER_SCRIPTS_DIR = '/root/scripts_430ofkjl04fsw'
+CONTAINER_SCRIPTS_DIR = str(
+    CONFIG.get('process', {}).get('container_scripts_dir', '/scripts_430ofkjl04fsw')
+)
 from .process_tab import ProcessTab
 
 _SIGINT_TRIGGERED = False
@@ -389,8 +391,7 @@ class MainWindow(QMainWindow):
         return env
 
     def _terminal_env_overrides(self) -> dict[str, str]:
-        checkbox = getattr(self, 'terminal_root_checkbox', None)
-        if not checkbox or not checkbox.isChecked():
+        if not self._terminal_run_as_root_requested():
             return {}
         return {
             'MOBIPICK_UID': '0',
@@ -399,6 +400,10 @@ class MainWindow(QMainWindow):
             'MOBIPICK_HOST_GROUP': 'root',
             'MOBIPICK_HOST_HOME': '/root',
         }
+
+    def _terminal_run_as_root_requested(self) -> bool:
+        checkbox = getattr(self, 'terminal_root_checkbox', None)
+        return bool(checkbox and checkbox.isChecked())
 
     def _prepare_run_env(self, run_kwargs: dict) -> dict:
         env = run_kwargs.get('env')
@@ -2263,6 +2268,7 @@ class MainWindow(QMainWindow):
 
             self._grant_x('terminal', log_key='log')
 
+            run_as_root = self._terminal_run_as_root_requested()
             env_overrides = self._terminal_env_overrides()
 
             command_parts = [
@@ -2270,9 +2276,18 @@ class MainWindow(QMainWindow):
                 '--label', f'mobipick.exec={exec_id}',
                 '--label', 'mobipick.role=terminal',
                 '--label', 'mobipick.tab=terminal',
-                *self._compose_env_args(env_overrides),
-                'mobipick_cmd', 'python3', f'{CONTAINER_SCRIPTS_DIR}/enter_host_shell.py', 'bash'
             ]
+            if run_as_root:
+                command_parts.extend(['--user', 'root'])
+            command_parts.extend(self._compose_env_args(env_overrides))
+            command_parts.extend(
+                [
+                    'mobipick_cmd',
+                    'python3',
+                    f'{CONTAINER_SCRIPTS_DIR}/enter_host_shell.py',
+                    'bash',
+                ]
+            )
             command_str = self._fmt_args(command_parts)
             launcher = self._build_terminal_launcher(command_str)
             if not launcher:

@@ -176,7 +176,7 @@ the container. The GUI now auto-detects your numeric UID/GID and user metadata
 it spawns. Containers are still allowed to start as root—this keeps the original
 entrypoint behaviour intact—but the GUI-provided terminal session immediately
 drops privileges inside the container via
-`/root/scripts_430ofkjl04fsw/enter_host_shell.py`. As a result, interactive
+`/scripts_430ofkjl04fsw/enter_host_shell.py`. As a result, interactive
 shells run with the same UID/GID as the bind-mounted repository, preventing Git
 from flagging the workspace as "dubious". When you genuinely need a privileged
 shell, tick the **Run as root** checkbox next to the **Open Terminal** button
@@ -207,7 +207,7 @@ docker compose run --rm \
   --env MOBIPICK_HOST_USER="$USER" \
   --env MOBIPICK_HOST_GROUP="$(id -gn)" \
   --env MOBIPICK_HOST_HOME="$HOME" \
-  mobipick_cmd python3 /root/scripts_430ofkjl04fsw/enter_host_shell.py bash
+  mobipick_cmd python3 /scripts_430ofkjl04fsw/enter_host_shell.py bash
 ```
 
 The helper keeps the hinted `MOBIPICK_HOST_HOME` when possible, creating the

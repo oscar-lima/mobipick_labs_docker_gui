@@ -174,6 +174,7 @@ CONFIG_DEFAULTS: Dict[str, Dict] = {
         },
     },
     'process': {
+        'container_scripts_dir': '/scripts_430ofkjl04fsw',
         'qprocess_env': {
             'COMPOSE_IGNORE_ORPHANS': '1',
             'COMPOSE_FILE': str(DOCKER_COMPOSE_FILE),
