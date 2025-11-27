@@ -348,7 +348,12 @@ class MainWindow(QMainWindow):
             return args_or_str
         return ' '.join(shlex.quote(s) for s in args_or_str)
 
-    def _compose_env_args(self, overrides: Optional[dict[str, str]] = None) -> list[str]:
+    def _compose_env_args(
+        self,
+        overrides: Optional[dict[str, str]] = None,
+        *,
+        container_name: str | None = None,
+    ) -> list[str]:
         env_args: list[str] = []
         compose_env = dict(CONFIG['process']['compose_run_env'])
         if self._selected_image:
@@ -359,6 +364,8 @@ class MainWindow(QMainWindow):
         master_uri = self._current_master_uri()
         if master_uri:
             compose_env['ROS_MASTER_URI'] = master_uri
+        if container_name and 'ROS_HOSTNAME' not in compose_env:
+            compose_env['ROS_HOSTNAME'] = container_name
         if overrides:
             for key, value in overrides.items():
                 compose_env[str(key)] = str(value)
@@ -996,7 +1003,7 @@ class MainWindow(QMainWindow):
             args = [
                 'compose', 'run', '--rm', '--name', tab.container_name,
                 '--label', f'mobipick.exec={exec_id}', '--label', f'mobipick.tab={key_target}',
-                *self._compose_env_args(),
+                *self._compose_env_args(container_name=tab.container_name),
                 'mobipick_cmd', 'bash', '-lc', self._wrap_line_buffered(inner)
             ]
             tab.start_program('docker', args)
@@ -1641,7 +1648,7 @@ class MainWindow(QMainWindow):
         args = [
             'compose', 'run', '--rm', '--name', self._roscore_container_name,
             '--label', f'mobipick.exec={exec_id}', '--label', f'mobipick.tab={tab.key}',
-            *self._compose_env_args(),
+            *self._compose_env_args(container_name=self._roscore_container_name),
             'mobipick_cmd', 'bash', '-lc', self._wrap_line_buffered(inner)
         ]
         tab.start_program('docker', args)
@@ -2127,7 +2134,7 @@ class MainWindow(QMainWindow):
             args = [
                 'compose', 'run', '--rm', '--name', tab.container_name,
                 '--label', f'mobipick.exec={exec_id}', '--label', f'mobipick.tab={tab.key}',
-                *self._compose_env_args(),
+                *self._compose_env_args(container_name=tab.container_name),
                 'mobipick_cmd', 'bash', '-lc', self._wrap_line_buffered(inner)
             ]
             tab.start_program('docker', args)
@@ -2176,7 +2183,7 @@ class MainWindow(QMainWindow):
             args = [
                 'compose', 'run', '--rm', '--name', tab.container_name,
                 '--label', f'mobipick.exec={exec_id}', '--label', f'mobipick.tab={tab.key}',
-                *self._compose_env_args(),
+                *self._compose_env_args(container_name=tab.container_name),
                 'mobipick_cmd', 'bash', '-lc', self._wrap_line_buffered(rviz_cmd)
             ]
             tab.start_program('docker', args)
@@ -2226,7 +2233,7 @@ class MainWindow(QMainWindow):
             args = [
                 'compose', 'run', '--rm', '--name', tab.container_name,
                 '--label', f'mobipick.exec={exec_id}', '--label', f'mobipick.tab={tab.key}',
-                *self._compose_env_args(),
+                *self._compose_env_args(container_name=tab.container_name),
                 'mobipick_cmd', 'bash', '-lc', self._wrap_line_buffered(cmd)
             ]
             tab.start_program('docker', args)
@@ -2279,7 +2286,9 @@ class MainWindow(QMainWindow):
             ]
             if run_as_root:
                 command_parts.extend(['--user', 'root'])
-            command_parts.extend(self._compose_env_args(env_overrides))
+            env_overrides = dict(env_overrides)
+            env_overrides['ROS_HOSTNAME'] = container_name
+            command_parts.extend(self._compose_env_args(env_overrides, container_name=container_name))
             command_parts.extend(
                 [
                     'mobipick_cmd',
@@ -2460,7 +2469,7 @@ class MainWindow(QMainWindow):
             args = [
                 'compose', 'run', '--rm', '--name', tab.container_name,
                 '--label', f'mobipick.exec={exec_id}', '--label', f'mobipick.tab={key_target}',
-                *self._compose_env_args(),
+                *self._compose_env_args(container_name=tab.container_name),
                 'mobipick_cmd', 'bash', '-lc', wrapped
             ]
             tab.start_program('docker', args)
