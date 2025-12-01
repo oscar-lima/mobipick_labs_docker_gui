@@ -86,6 +86,13 @@ class WindowLayoutManager:
         self._auto_apply_done = not bool(windows)
         return self._layout
 
+    def reset_auto_apply(self):
+        """Allow a saved layout to be applied again (e.g., after relaunching windows)."""
+        windows = self._layout.get('windows') if isinstance(self._layout, dict) else []
+        self._applied_ids.clear()
+        self._auto_apply_done = not bool(windows)
+        self._start_ts = time.monotonic()
+
     def capture_layout(self, exclude_titles: Iterable[str] | None = None) -> dict | None:
         if not self._wmctrl_available:
             self._warn_missing_tools()

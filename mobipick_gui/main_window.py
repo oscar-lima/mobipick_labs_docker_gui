@@ -1394,6 +1394,9 @@ class MainWindow(QMainWindow):
             self.set_auto_launch_visual('red', self._auto_launch_start_text(), True)
             return
 
+        if self._window_layout_auto_apply and self._window_layout_manager:
+            self._window_layout_manager.reset_auto_apply()
+
         self._cancel_auto_launch_timers()
         self._auto_launch_running = True
         self._auto_launch_active_keys = [
