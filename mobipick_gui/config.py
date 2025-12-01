@@ -60,6 +60,7 @@ CONFIG_FILE = PROJECT_ROOT / 'config' / 'gui_settings.yaml'
 DOCKER_CP_CONFIG_FILE = PROJECT_ROOT / 'config' / 'docker_cp_image_tag.yaml'
 SCRIPT_CLEAN = str(PROJECT_ROOT / 'clean.bash')
 DEFAULT_YAML_PATH = str(PROJECT_ROOT / 'config' / 'worlds.yaml')
+BUTTON_CONFIG_FILE = PROJECT_ROOT / 'config' / 'button_commands_labs.yaml'
 
 
 def _detect_numeric_id(getter_name: str, env_candidates: tuple[str, ...], fallback: str) -> str:
@@ -172,6 +173,7 @@ CONFIG_DEFAULTS: Dict[str, Dict] = {
             'size': 18,
             'stylesheet': 'QPushButton { border: none; padding: 0px; }',
         },
+        'config_file': str(BUTTON_CONFIG_FILE),
     },
     'process': {
         'container_scripts_dir': '/scripts_430ofkjl04fsw',
@@ -220,6 +222,65 @@ CONFIG_DEFAULTS: Dict[str, Dict] = {
     },
 }
 
+BUTTON_CONFIG_DEFAULTS = [
+    {
+        'key': 'sim',
+        'label': 'Sim',
+        'kind': 'builtin',
+        'action': 'sim',
+        'tooltip': 'Start or stop the simulator',
+        'world_config_required': False,
+        'world_arg_name': 'world_config',
+        'setup': None,
+        'host': False,
+        'stop_command': None,
+        'log_command': None,
+        'pass_ros_master_uri': False,
+    },
+    {
+        'key': 'tables',
+        'label': 'Tables Demo',
+        'kind': 'builtin',
+        'action': 'tables_demo',
+        'tooltip': 'Launch the tables demo planning node',
+        'world_config_required': False,
+        'world_arg_name': 'world_config',
+        'setup': None,
+        'host': False,
+        'stop_command': None,
+        'log_command': None,
+        'pass_ros_master_uri': False,
+    },
+    {
+        'key': 'rviz',
+        'label': 'RViz',
+        'kind': 'builtin',
+        'action': 'rviz',
+        'tooltip': 'Open RViz with the pick and place config',
+        'world_config_required': False,
+        'world_arg_name': 'world_config',
+        'setup': None,
+        'host': False,
+        'stop_command': None,
+        'log_command': None,
+        'pass_ros_master_uri': False,
+    },
+    {
+        'key': 'rqt',
+        'label': 'RQt Tables',
+        'kind': 'builtin',
+        'action': 'rqt_tables',
+        'tooltip': 'Open the RQt tables demo UI',
+        'world_config_required': False,
+        'world_arg_name': 'world_config',
+        'setup': None,
+        'host': False,
+        'stop_command': None,
+        'log_command': None,
+        'pass_ros_master_uri': False,
+    },
+]
+
 
 def _deep_update(base: Dict, updates: Dict) -> Dict:
     for key, value in updates.items():
@@ -244,6 +305,57 @@ def _load_config() -> Dict:
 
 
 CONFIG = _load_config()
+
+
+def load_button_layout() -> list[dict]:
+    """Load configurable command buttons."""
+    entries = copy.deepcopy(BUTTON_CONFIG_DEFAULTS)
+    raw_path = CONFIG.get('buttons', {}).get('config_file') or str(BUTTON_CONFIG_FILE)
+    path = Path(raw_path)
+    if not path.is_absolute():
+        path = PROJECT_ROOT / raw_path
+    try:
+        if path.is_file():
+            with open(path, 'r', encoding='utf-8') as handle:
+                data = yaml.safe_load(handle) or {}
+            raw = data.get('buttons') if isinstance(data, dict) else None
+            if raw is None and isinstance(data, list):
+                raw = data
+            normalized: list[dict] = []
+            if isinstance(raw, list):
+                for item in raw:
+                    if not isinstance(item, dict):
+                        continue
+                    key = str(item.get('key', '')).strip()
+                    if not key:
+                        continue
+                    normalized.append(
+                        {
+                            'key': key,
+                            'label': item.get('label') or item.get('text') or key,
+                            'kind': item.get('kind') or item.get('type') or 'builtin',
+                            'action': item.get('action'),
+                            'command': item.get('command'),
+                            'tooltip': item.get('tooltip'),
+                            'requires_roscore': item.get('requires_roscore', True),
+                            'reuse_tab': item.get('reuse_tab', False),
+                            'world_config_required': item.get('world_config_required', False),
+                            'world_arg_name': item.get('world_arg_name', 'world_config'),
+                            'setup': item.get('setup') or item.get('pre_command') or item.get('prologue'),
+                            'host': bool(item.get('host', False)),
+                            'stop_command': item.get('stop_command'),
+                            'log_command': item.get('log_command'),
+                            'pass_ros_master_uri': item.get('pass_ros_master_uri', False),
+                        }
+                    )
+            if normalized:
+                entries = normalized
+    except Exception as exc:
+        print(
+            f'Warning: failed to load button configuration from {path}: {exc}',
+            file=sys.stderr,
+        )
+    return entries
 
 
 def load_docker_cp_config() -> Dict[str, Dict[str, list[dict]]]:
@@ -296,5 +408,8 @@ __all__ = [
     'load_docker_cp_config',
     'PROJECT_ROOT',
     'SCRIPT_CLEAN',
+    'BUTTON_CONFIG_FILE',
+    'BUTTON_CONFIG_DEFAULTS',
+    'load_button_layout',
     'DOCKER_COMPOSE_FILE',
 ]

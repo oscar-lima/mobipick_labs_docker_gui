@@ -32,6 +32,7 @@ buttons:
     tooltip: "Close tab"                       # hover text for close buttons
     size: 18                                   # close button width/height in pixels
     stylesheet: "QPushButton { border: none; padding: 0px; }"  # Qt stylesheet for close buttons
+  config_file: "config/button_commands_labs.yaml"  # switch button profiles (e.g., private/button_configs/button_commands_gpt.yaml)
 
 process:
   qprocess_env:

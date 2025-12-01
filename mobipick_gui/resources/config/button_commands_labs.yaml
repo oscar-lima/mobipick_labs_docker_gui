@@ -1,0 +1,21 @@
+buttons:
+  - key: sim
+    label: "Sim"
+    kind: builtin
+    action: sim
+    tooltip: "Start or stop the simulator container"
+  - key: tables
+    label: "Tables Demo"
+    kind: builtin
+    action: tables_demo
+    tooltip: "Launch the tables demo planning node"
+  - key: rviz
+    label: "RViz"
+    kind: builtin
+    action: rviz
+    tooltip: "Open RViz with the pick and place configuration"
+  - key: rqt
+    label: "RQt Tables"
+    kind: builtin
+    action: rqt_tables
+    tooltip: "Open the RQt tables demo UI"

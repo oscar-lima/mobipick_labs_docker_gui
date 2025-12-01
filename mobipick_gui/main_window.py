@@ -5,6 +5,7 @@ import json
 import os
 import re
 import shlex
+import signal
 import subprocess
 import sys
 import time
@@ -46,6 +47,7 @@ from .config import (
     PROJECT_ROOT,
     SCRIPT_CLEAN,
     load_docker_cp_config,
+    load_button_layout,
 )
 
 CONTAINER_SCRIPTS_DIR = str(
@@ -135,6 +137,10 @@ class MainWindow(QMainWindow):
         self._exit_in_progress = False
         self._exit_dialog: Optional[QMessageBox] = None
         self._docker_stop_timeout = self._normalize_stop_timeout(CONFIG['exit'].get('docker_stop_timeout'))
+        self._button_layout = load_button_layout()
+        self._button_widgets: dict[str, QPushButton] = {}
+        self._config_buttons: dict[str, dict] = {}
+        self._config_button_order: list[str] = []
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -145,26 +151,14 @@ class MainWindow(QMainWindow):
         self.roscore_button = QPushButton()
         self.roscore_button.clicked.connect(self._on_roscore_toggle_clicked)
         top.addWidget(self.roscore_button)
+        self._button_widgets['roscore'] = self.roscore_button
 
-        self.sim_toggle_button = QPushButton()
-        self.sim_toggle_button.clicked.connect(self._on_sim_toggle_clicked)
-        top.addWidget(self.sim_toggle_button)
-
-        self.tables_button = QPushButton()
-        self.tables_button.clicked.connect(self._on_tables_toggle_clicked)
-        top.addWidget(self.tables_button)
-
-        self.rviz_button = QPushButton()
-        self.rviz_button.clicked.connect(self._on_rviz_toggle_clicked)
-        top.addWidget(self.rviz_button)
-
-        self.rqt_button = QPushButton()
-        self.rqt_button.clicked.connect(self._on_rqt_toggle_clicked)
-        top.addWidget(self.rqt_button)
+        self._build_configurable_buttons(top)
 
         self.terminal_button = QPushButton()
         self.terminal_button.clicked.connect(self._on_terminal_toggle_clicked)
         top.addWidget(self.terminal_button)
+        self._button_widgets['terminal'] = self.terminal_button
 
         self.terminal_root_checkbox = QCheckBox('Run as root')
         self.terminal_root_checkbox.setToolTip('When checked, new terminals run as root inside the container.')
@@ -312,6 +306,10 @@ class MainWindow(QMainWindow):
 
         # fixed tabs
         self._ensure_tab('roscore', 'Roscore', closable=False)
+        for key in self._config_button_order:
+            cfg = self._config_buttons[key]
+            label = cfg.get('label') or key
+            self._ensure_tab(key, label, closable=False)
         self._ensure_tab('sim', 'Sim', closable=False)
         self._ensure_tab('tables', 'Tables Demo', closable=False)
         self._ensure_tab('rviz', 'RViz', closable=False)
@@ -340,6 +338,186 @@ class MainWindow(QMainWindow):
         app_instance = QApplication.instance()
         if app_instance:
             app_instance.aboutToQuit.connect(self._ensure_cleanup_before_exit)
+
+    def _get_button_widget(self, key: str) -> QPushButton | None:
+        return self._button_widgets.get(key)
+
+    def _build_configurable_buttons(self, layout: QHBoxLayout):
+        self._config_buttons: dict[str, dict] = {}
+        self._config_button_order = []
+        for entry in self._button_layout:
+            if not isinstance(entry, dict):
+                continue
+            key = str(entry.get('key', '')).strip()
+            if not key or key in {'roscore', 'terminal'}:
+                continue
+            normalized = {
+                'key': key,
+                'label': entry.get('label') or entry.get('text') or key,
+                'kind': str(entry.get('kind') or entry.get('type') or 'builtin').lower(),
+                'action': entry.get('action') or key,
+                'command': entry.get('command'),
+                'tooltip': entry.get('tooltip'),
+                'requires_roscore': bool(entry.get('requires_roscore', True)),
+                'reuse_tab': bool(entry.get('reuse_tab', False)),
+                'world_arg_name': entry.get('world_arg_name', 'world_config'),
+                'world_config_required': entry.get('world_config_required', False),
+                'setup': entry.get('setup') or entry.get('pre_command') or entry.get('prologue'),
+                'host': bool(entry.get('host', False)),
+                'stop_command': entry.get('stop_command'),
+                'log_command': entry.get('log_command'),
+                'pass_ros_master_uri': entry.get('pass_ros_master_uri', False),
+            }
+            self._config_buttons[key] = normalized
+            self._config_button_order.append(key)
+            button = QPushButton(normalized['label'])
+            tooltip = normalized.get('tooltip')
+            if tooltip:
+                button.setToolTip(str(tooltip))
+            button.clicked.connect(
+                lambda _checked=False, k=key: self._on_config_button_clicked(k)
+            )
+            layout.addWidget(button)
+            self._button_widgets[key] = button
+
+    def _on_config_button_clicked(self, key: str):
+        button = self._get_button_widget(key)
+        config = self._config_buttons.get(key, {})
+        self._log_button_click(button, config.get('label') or key)
+        if not config:
+            return
+        kind = str(config.get('kind') or 'builtin').lower()
+        if kind == 'command':
+            self._run_config_command(config)
+        else:
+            self._dispatch_builtin_action(config)
+
+    def _config_label(self, config: dict) -> str:
+        return str(config.get('label') or config.get('key') or 'Command')
+
+    def _set_config_visual(self, config: dict, state: str, text: str, enabled: bool):
+        key = str(config.get('key'))
+        self._set_toggle_state(key, self._get_button_widget(key), state, text, enabled)
+
+    @staticmethod
+    def _neutralize_compose_ignore(cmd: str) -> str:
+        cmd = cmd.strip()
+        if not cmd:
+            return cmd
+        return f'COMPOSE_IGNORE_ORPHANS= {cmd}'
+
+    def _dispatch_builtin_action(self, config: dict):
+        action = str(config.get('action') or config.get('key') or '').strip().lower()
+        button = self._get_button_widget(config.get('key', ''))
+        if action in {'sim', 'toggle_sim', 'sim_toggle'}:
+            if not self._guard_toggle_action('sim', button):
+                return
+            self.toggle_sim()
+        elif action in {'tables', 'tables_demo', 'toggle_tables'}:
+            if not self._guard_toggle_action('tables', button):
+                return
+            self.toggle_tables_demo()
+        elif action in {'rviz', 'toggle_rviz'}:
+            if not self._guard_toggle_action('rviz', button):
+                return
+            self.toggle_rviz()
+        elif action in {'rqt', 'rqt_tables', 'toggle_rqt'}:
+            if not self._guard_toggle_action('rqt', button):
+                return
+            self.toggle_rqt_tables_demo()
+        elif action in {'refresh', 'refresh_status', 'refresh_sim'}:
+            self._on_refresh_clicked()
+        else:
+            QMessageBox.information(self, 'Buttons', f'No builtin action registered for "{action}".')
+
+    def _run_config_command(self, config: dict):
+        command = str(config.get('command') or '').strip()
+        if not command:
+            QMessageBox.information(self, 'Buttons', 'Command is missing for this button.')
+            return
+        key = str(config.get('key') or '').strip() or 'command'
+        button = self._get_button_widget(key)
+        if not self._guard_toggle_action(key, button):
+            return
+        setup = str(config.get('setup') or '').strip()
+        run_on_host = bool(config.get('host'))
+        stop_command = str(config.get('stop_command') or '').strip()
+        log_command = str(config.get('log_command') or '').strip()
+        pass_master = bool(config.get('pass_ros_master_uri'))
+        label = self._config_label(config)
+        tab = self._ensure_tab(key, label, closable=False)
+        if tab.is_running():
+            self._set_config_visual(config, 'yellow', f'Stopping {label}...', False)
+            def _done():
+                self._set_config_visual(config, 'red', f'Start {label}', True)
+            stop_cmd_for_running = stop_command if run_on_host else None
+            if run_on_host and stop_cmd_for_running:
+                stop_cmd_for_running = self._neutralize_compose_ignore(stop_cmd_for_running)
+            self._stop_custom_tab(tab, on_stopped=_done, stop_command=stop_cmd_for_running)
+            return
+
+        def _apply_env(cmd: str) -> str:
+            if not pass_master:
+                return cmd
+            master = self._current_master_uri()
+            if not master:
+                return cmd
+            return f"ROS_MASTER_URI={self._sh_quote(master)} {cmd}"
+
+        def _run_command():
+            key_label = config.get('key', 'button')
+            full_command = command
+            if config.get('world_config_required'):
+                arg_name = str(config.get('world_arg_name') or 'world_config')
+                world = self._current_world()
+                if world:
+                    full_command = f"{command} {arg_name}:={self._sh_quote(world)}"
+                else:
+                    self._log_info('world_config_required set but no world selected; running without flag')
+            if setup:
+                composed = f'{setup} && {full_command}'
+                full_command = f"bash -lc {self._sh_quote(composed)}"
+            full_command = _apply_env(full_command)
+            stop_command_full = _apply_env(stop_command) if stop_command else ''
+            log_command_full = _apply_env(log_command) if log_command else ''
+            if run_on_host:
+                full_command = self._neutralize_compose_ignore(full_command)
+                if stop_command_full:
+                    stop_command_full = self._neutralize_compose_ignore(stop_command_full)
+                if log_command_full:
+                    log_command_full = self._neutralize_compose_ignore(log_command_full)
+            self._log_info(f'running configured command ({key_label}): {full_command}')
+            if run_on_host:
+                tab.container_name = None
+                tab.exec_id = None
+                if log_command_full:
+                    self._sp_run(['bash', '-lc', full_command], log_key=tab.key, check=False)
+                    tab.start_program('bash', ['-lc', log_command_full])
+                else:
+                    tab.start_program('bash', ['-lc', full_command])
+            else:
+                exec_id = uuid.uuid4().hex
+                tab.exec_id = exec_id
+                tab.container_name = f'mpcmd-{exec_id[:10]}'
+                self._claim_xhost(tab, key, log_key=tab.key)
+                wrapped = self._wrap_line_buffered(full_command)
+                args = [
+                    'compose', 'run', '--rm', '--name', tab.container_name,
+                    '--label', f'mobipick.exec={exec_id}', '--label', f'mobipick.tab={key}',
+                    *self._compose_env_args(container_name=tab.container_name),
+                    'mobipick_cmd', 'bash', '-lc', wrapped
+                ]
+                tab.start_program('docker', args)
+                self._schedule_host_to_container_copy(tab)
+            self._focus_tab(key)
+            self._update_stop_custom_enabled()
+            self._set_config_visual(config, 'green', f'Stop {label}', True)
+
+        self._set_config_visual(config, 'yellow', f'Starting {label}...', False)
+        if config.get('requires_roscore', True):
+            self._ensure_roscore_ready(_run_command)
+        else:
+            _run_command()
 
     # ---------- Log tab helpers ----------
 
@@ -897,15 +1075,16 @@ class MainWindow(QMainWindow):
         self._append_log_html(f'<span style="color:#50fa7b">{html.escape(line)}</span>')
         self._console_log(2, line)
 
-    def _log_button_click(self, button: QPushButton, fallback: str | None = None):
-        label = button.text().strip()
+    def _log_button_click(self, button: QPushButton | None, fallback: str | None = None):
+        label = button.text().strip() if button else ''
         if not label:
             label = fallback or 'button'
         self._log_event(f'user clicked {label}')
 
     def _on_sim_toggle_clicked(self):
-        self._log_button_click(self.sim_toggle_button, 'Sim Toggle')
-        if not self._guard_toggle_action('sim', self.sim_toggle_button):
+        button = self._get_button_widget('sim')
+        self._log_button_click(button, 'Sim Toggle')
+        if not self._guard_toggle_action('sim', button):
             return
         self.toggle_sim()
 
@@ -920,20 +1099,23 @@ class MainWindow(QMainWindow):
         self.stop_custom_process()
 
     def _on_tables_toggle_clicked(self):
-        self._log_button_click(self.tables_button, 'Tables Demo')
-        if not self._guard_toggle_action('tables', self.tables_button):
+        button = self._get_button_widget('tables')
+        self._log_button_click(button, 'Tables Demo')
+        if not self._guard_toggle_action('tables', button):
             return
         self.toggle_tables_demo()
 
     def _on_rviz_toggle_clicked(self):
-        self._log_button_click(self.rviz_button, 'RViz')
-        if not self._guard_toggle_action('rviz', self.rviz_button):
+        button = self._get_button_widget('rviz')
+        self._log_button_click(button, 'RViz')
+        if not self._guard_toggle_action('rviz', button):
             return
         self.toggle_rviz()
 
     def _on_rqt_toggle_clicked(self):
-        self._log_button_click(self.rqt_button, 'RQt Tables Demo')
-        if not self._guard_toggle_action('rqt', self.rqt_button):
+        button = self._get_button_widget('rqt')
+        self._log_button_click(button, 'RQt Tables Demo')
+        if not self._guard_toggle_action('rqt', button):
             return
         self.toggle_rqt_tables_demo()
 
@@ -1672,7 +1854,7 @@ class MainWindow(QMainWindow):
             self.set_toggle_visual('yellow', 'Shutting down...', False)
         else:
             self._killing = False
-            self._disable_toggle_preserving_visual('sim', self.sim_toggle_button)
+            self._disable_toggle_preserving_visual('sim', self._get_button_widget('sim'))
         tables_running = 'tables' in self.tasks and self.tasks['tables'].is_running()
         rviz_running = 'rviz' in self.tasks and self.tasks['rviz'].is_running()
         rqt_running = 'rqt' in self.tasks and self.tasks['rqt'].is_running()
@@ -1683,22 +1865,32 @@ class MainWindow(QMainWindow):
         if tables_running:
             self.set_tables_visual('yellow', 'Shutting down...', False)
         else:
-            self._disable_toggle_preserving_visual('tables', self.tables_button)
+            self._disable_toggle_preserving_visual('tables', self._get_button_widget('tables'))
 
         if rviz_running:
             self.set_rviz_visual('yellow', 'Shutting down...', False)
         else:
-            self._disable_toggle_preserving_visual('rviz', self.rviz_button)
+            self._disable_toggle_preserving_visual('rviz', self._get_button_widget('rviz'))
 
         if rqt_running:
             self.set_rqt_visual('yellow', 'Shutting down...', False)
         else:
-            self._disable_toggle_preserving_visual('rqt', self.rqt_button)
+            self._disable_toggle_preserving_visual('rqt', self._get_button_widget('rqt'))
 
         if script_running:
             self.set_script_visual('yellow', 'Shutting down...', False)
         else:
             self._disable_toggle_preserving_visual('script', self.run_script_button)
+
+        for cfg_key in self._config_button_order:
+            cfg = self._config_buttons.get(cfg_key, {})
+            tab_obj = self.tasks.get(cfg_key)
+            running = bool(tab_obj and tab_obj.is_running())
+            button = self._get_button_widget(cfg_key)
+            if running:
+                self._set_config_visual(cfg, 'yellow', 'Shutting down...', False)
+            else:
+                self._disable_toggle_preserving_visual(cfg_key, button)
 
         if self._terminal_is_active():
             self.stop_terminal()
@@ -2036,7 +2228,11 @@ class MainWindow(QMainWindow):
         else:
             self.set_terminal_visual('red', 'Open Terminal', True)
 
-    def _set_toggle_state(self, key: str, button: QPushButton, state: str, text: str, enabled: bool):
+    def _set_toggle_state(self, key: str, button: QPushButton | None, state: str, text: str, enabled: bool):
+        button = button or self._get_button_widget(key)
+        if not button:
+            self._toggle_states[key] = state
+            return
         button.setText(text)
         toggle_cfg = CONFIG['buttons']['sim_toggle']
         states = toggle_cfg['states']
@@ -2053,25 +2249,25 @@ class MainWindow(QMainWindow):
         button.setEnabled(enabled)
         self._toggle_states[key] = state
 
-    def _disable_toggle_preserving_visual(self, key: str, button: QPushButton):
+    def _disable_toggle_preserving_visual(self, key: str, button: QPushButton | None):
         current_state = self._toggle_states.get(key, 'red')
-        current_text = button.text()
+        current_text = button.text() if button else ''
         self._set_toggle_state(key, button, current_state, current_text, False)
 
     def set_toggle_visual(self, state: str, text: str, enabled: bool):
-        self._set_toggle_state('sim', self.sim_toggle_button, state, text, enabled)
+        self._set_toggle_state('sim', self._get_button_widget('sim'), state, text, enabled)
 
     def set_roscore_visual(self, state: str, text: str, enabled: bool):
         self._set_toggle_state('roscore', self.roscore_button, state, text, enabled)
 
     def set_tables_visual(self, state: str, text: str, enabled: bool):
-        self._set_toggle_state('tables', self.tables_button, state, text, enabled)
+        self._set_toggle_state('tables', self._get_button_widget('tables'), state, text, enabled)
 
     def set_rviz_visual(self, state: str, text: str, enabled: bool):
-        self._set_toggle_state('rviz', self.rviz_button, state, text, enabled)
+        self._set_toggle_state('rviz', self._get_button_widget('rviz'), state, text, enabled)
 
     def set_rqt_visual(self, state: str, text: str, enabled: bool):
-        self._set_toggle_state('rqt', self.rqt_button, state, text, enabled)
+        self._set_toggle_state('rqt', self._get_button_widget('rqt'), state, text, enabled)
 
     def set_script_visual(self, state: str, text: str, enabled: bool):
         self._set_toggle_state('script', self.run_script_button, state, text, enabled)
@@ -2079,10 +2275,10 @@ class MainWindow(QMainWindow):
     def set_terminal_visual(self, state: str, text: str, enabled: bool):
         self._set_toggle_state('terminal', self.terminal_button, state, text, enabled)
 
-    def _guard_toggle_action(self, key: str, button: QPushButton) -> bool:
+    def _guard_toggle_action(self, key: str, button: QPushButton | None = None) -> bool:
         if self._toggle_states.get(key) != 'yellow':
             return True
-        text = button.text().strip().lower()
+        text = button.text().strip().lower() if button else ''
         if 'shutting' in text or 'stop' in text:
             msg = 'Process is shutting down, please wait.'
         elif 'starting' in text or 'start' in text:
@@ -2507,6 +2703,7 @@ class MainWindow(QMainWindow):
         tab: ProcessTab,
         *,
         on_stopped: Callable[[], None] | None = None,
+        stop_command: str | None = None,
     ):
         pid = tab.pid()
         if pid:
@@ -2531,6 +2728,12 @@ class MainWindow(QMainWindow):
             self._update_stop_custom_enabled()
 
         def _container_sigint_then_stop():
+            if stop_command:
+                try:
+                    self._sp_run(['bash', '-lc', stop_command], log_key=tab.key, check=False)
+                except Exception as exc:
+                    self._append_gui_html(tab.key, f'<i>Failed to run stop command: {html.escape(str(exc))}</i>')
+
             if container_name or exec_id:
                 self._graceful_stop_container(
                     container_name,
@@ -3224,6 +3427,11 @@ class MainWindow(QMainWindow):
                 return
             self.set_toggle_visual('red', 'Start Sim', enabled=True)
             return
+        if key in self._config_buttons:
+            cfg = self._config_buttons[key]
+            label = self._config_label(cfg)
+            self._set_config_visual(cfg, 'red', f'Start {label}', True)
+            return
         if key == 'tables':
             if self._roscore_stopping or self._toggle_states.get('tables') == 'yellow':
                 return
@@ -3330,6 +3538,10 @@ class MainWindow(QMainWindow):
         self.set_rqt_visual('red', 'Start RQt Tables', True)
         self.set_script_visual('red', 'Run Script', bool(self._script_choices))
         self.set_terminal_visual('red', 'Open Terminal', True)
+        for key in self._config_button_order:
+            cfg = self._config_buttons.get(key, {})
+            label = self._config_label(cfg)
+            self._set_config_visual(cfg, 'red', f'Start {label}', True)
         self.stop_custom_button.setEnabled(False)
         self._update_stop_custom_enabled()
 
