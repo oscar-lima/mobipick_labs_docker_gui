@@ -62,6 +62,7 @@ SCRIPT_CLEAN = str(PROJECT_ROOT / 'clean.bash')
 DEFAULT_YAML_PATH = str(PROJECT_ROOT / 'config' / 'worlds.yaml')
 BUTTON_CONFIG_FILE = PROJECT_ROOT / 'config' / 'button_commands_labs.yaml'
 LAUNCH_SEQUENCE_DIR = PROJECT_ROOT / 'private' / 'experiments'
+WINDOW_LAYOUT_FILE = LAUNCH_SEQUENCE_DIR / 'window_layout.yaml'
 
 
 def _detect_numeric_id(getter_name: str, env_candidates: tuple[str, ...], fallback: str) -> str:
@@ -149,6 +150,11 @@ CONFIG_DEFAULTS: Dict[str, Dict] = {
     'window': {
         'geometry': [100, 100, 1100, 780],
         'title': 'Mobipick Labs Control',
+    },
+    'window_layout': {
+        'state_file': str(WINDOW_LAYOUT_FILE),
+        'auto_apply': True,
+        'apply_delay_ms': 'auto',
     },
     'timers': {
         'poll_ms': 1200,
@@ -549,5 +555,6 @@ __all__ = [
     'load_button_layout',
     'DOCKER_COMPOSE_FILE',
     'LAUNCH_SEQUENCE_DIR',
+    'WINDOW_LAYOUT_FILE',
     'load_launch_sequence_plan',
 ]

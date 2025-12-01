@@ -46,6 +46,7 @@ from .config import (
     DEFAULT_YAML_PATH,
     PROJECT_ROOT,
     SCRIPT_CLEAN,
+    WINDOW_LAYOUT_FILE,
     load_docker_cp_config,
     load_button_layout,
     load_launch_sequence_plan,
@@ -55,6 +56,7 @@ CONTAINER_SCRIPTS_DIR = str(
     CONFIG.get('process', {}).get('container_scripts_dir', '/scripts_430ofkjl04fsw')
 )
 from .process_tab import ProcessTab
+from .window_layout import WindowLayoutManager
 
 _SIGINT_TRIGGERED = False
 
@@ -148,6 +150,27 @@ class MainWindow(QMainWindow):
         self._auto_launch_running = False
         self._auto_launch_timers: list[QTimer] = []
         self._auto_launch_active_keys: list[str] = []
+        self._window_layout_cfg = CONFIG.get('window_layout', {})
+        raw_auto_apply = self._window_layout_cfg.get('auto_apply', True)
+        if isinstance(raw_auto_apply, str):
+            self._window_layout_auto_apply = raw_auto_apply.strip().lower() not in {'0', 'false', 'no', 'off'}
+        else:
+            self._window_layout_auto_apply = bool(raw_auto_apply)
+        raw_layout_path = self._window_layout_cfg.get('state_file') or str(WINDOW_LAYOUT_FILE)
+        layout_path = Path(raw_layout_path)
+        if not layout_path.is_absolute():
+            layout_path = PROJECT_ROOT / layout_path
+        self._window_layout_path = layout_path
+        self._window_layout_delay_ms = self._compute_window_layout_delay_ms()
+        self._window_layout_manager = WindowLayoutManager(
+            state_file=self._window_layout_path,
+            log_info=self._log_info,
+            log_warning=lambda msg: self._append_gui_html('log', f'<i>{html.escape(msg)}</i>'),
+            log_debug=lambda msg: self._console_log(3, msg),
+            apply_delay_ms=self._window_layout_delay_ms,
+        )
+        self._window_layout_manager.record_baseline(exclude_titles={self.windowTitle()})
+        self._window_layout_dialog: QDialog | None = None
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -194,6 +217,10 @@ class MainWindow(QMainWindow):
         self.execute_docker_cp_button = QPushButton('Execute Docker cp')
         self.execute_docker_cp_button.setToolTip('Copy configured paths from the active container to the host')
         self.execute_docker_cp_button.clicked.connect(self.execute_docker_cp_from_container)
+
+        self.window_layout_button = QPushButton('Window Layout')
+        self.window_layout_button.setToolTip('Open helper to save window positions for wmctrl replay')
+        self.window_layout_button.clicked.connect(self._on_window_layout_clicked)
 
         self.refresh_sim_button = QPushButton('Update Status')
         self.refresh_sim_button.setToolTip('Re-check running status for toggles')
@@ -293,6 +320,7 @@ class MainWindow(QMainWindow):
         controls_row.addWidget(self.commit_current_tab_button)
         controls_row.addWidget(self.manage_images_button)
         controls_row.addWidget(self.execute_docker_cp_button)
+        controls_row.addWidget(self.window_layout_button)
 
         spacer_controls = QWidget()
         spacer_controls.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
@@ -334,6 +362,7 @@ class MainWindow(QMainWindow):
 
         self._apply_env_to_all_tabs()
         self._refresh_script_options()
+        self._window_layout_manager.load_layout()
 
         # polling
         self.poll_timer = QTimer(self)
@@ -1122,6 +1151,84 @@ class MainWindow(QMainWindow):
         self._log_button_click(self.refresh_sim_button)
         self._log_info('refreshing sim status view')
         self.update_sim_status_from_poll(force=True)
+
+    def _on_window_layout_clicked(self):
+        self._log_button_click(self.window_layout_button, 'Window Layout')
+        dialog = self._ensure_window_layout_dialog()
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
+    def _compute_window_layout_delay_ms(self) -> int:
+        raw = self._window_layout_cfg.get('apply_delay_ms', 'auto')
+        if isinstance(raw, str):
+            value = raw.strip().lower()
+            if value in {'', 'auto'}:
+                return self._window_layout_delay_from_timeline()
+            try:
+                return max(0, int(raw))
+            except (TypeError, ValueError):
+                return 0
+        try:
+            return max(0, int(raw))
+        except (TypeError, ValueError):
+            return 0
+
+    def _window_layout_delay_from_timeline(self) -> int:
+        try:
+            timeline = self._launch_plan.get('timeline', []) if isinstance(self._launch_plan, dict) else []
+            max_at = 0.0
+            for entry in timeline:
+                try:
+                    max_at = max(max_at, float(entry.get('at_seconds', 0) or 0))
+                except Exception:
+                    continue
+            if max_at <= 0:
+                return 0
+            return int(max_at * 1000) + 2000
+        except Exception:
+            return 0
+
+    def _ensure_window_layout_dialog(self) -> QDialog:
+        if self._window_layout_dialog is not None:
+            return self._window_layout_dialog
+        dialog = QDialog(self)
+        dialog.setWindowTitle('Window Layout Helper')
+        dialog.setWindowFlag(Qt.WindowStaysOnTopHint, True)
+        dialog.setWindowModality(Qt.NonModal)
+        layout = QVBoxLayout(dialog)
+        label = QLabel('Capture and reuse window positions with wmctrl.')
+        label.setWordWrap(True)
+        layout.addWidget(label)
+        path_label = QLabel(str(self._window_layout_path))
+        path_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        layout.addWidget(path_label)
+        save_button = QPushButton('Save Window State')
+        save_button.clicked.connect(self._on_save_window_state_clicked)
+        layout.addWidget(save_button)
+        dialog.setLayout(layout)
+        dialog.setSizeGripEnabled(False)
+        dialog.setMinimumWidth(280)
+        dialog.setMaximumWidth(360)
+        self._window_layout_dialog = dialog
+        return dialog
+
+    def _on_save_window_state_clicked(self):
+        exclude_titles = {self.windowTitle()}
+        if self._window_layout_dialog:
+            exclude_titles.add(self._window_layout_dialog.windowTitle())
+        success = self._window_layout_manager.capture_and_save(exclude_titles=exclude_titles)
+        if success:
+            self._append_gui_html(
+                'log',
+                f'<i>Window layout saved to {html.escape(str(self._window_layout_path))}</i>',
+            )
+            return
+        QMessageBox.warning(
+            self,
+            'Window Layout',
+            'Unable to capture window state. Ensure wmctrl/xprop are installed and windows are visible.',
+        )
 
     def _on_stop_custom_clicked(self):
         self._log_button_click(self.stop_custom_button, 'Stop Command')
@@ -3670,6 +3777,8 @@ class MainWindow(QMainWindow):
 
     def _poll(self):
         self._update_stop_custom_enabled()
+        if self._window_layout_auto_apply and self._window_layout_manager:
+            self._window_layout_manager.maybe_apply_saved_layout()
 
     def _check_sigint(self):
         global _SIGINT_TRIGGERED

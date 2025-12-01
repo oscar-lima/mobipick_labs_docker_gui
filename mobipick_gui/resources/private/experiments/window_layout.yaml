@@ -1,0 +1,86 @@
+captured_at: '2025-12-01T23:19:22'
+windows:
+- title: Simulated UR Dashboard - E-Stop
+  wm_class:
+  - simulated_ur_dashboard.py
+  - simulated_ur_dashboard.py
+  desktop: 0
+  pid: 290
+  geometry:
+    x: 1991
+    y: 1349
+    width: 240
+    height: 140
+  stack_index: 8
+- title: rqt_robot_steering__RobotSteering - rqt
+  wm_class:
+  - rqt_robot_steering
+  - rqt_robot_steering
+  desktop: 0
+  pid: 252
+  geometry:
+    x: 1998
+    y: 595
+    width: 220
+    height: 255
+  stack_index: 9
+- title: rqt_joint_trajectory_controller__JointTrajectoryController - rqt
+  wm_class:
+  - rqt_joint_trajectory_controller
+  - rqt_joint_trajectory_controller
+  desktop: 0
+  pid: 272
+  geometry:
+    x: 1987
+    y: 896
+    width: 260
+    height: 412
+  stack_index: 10
+- title: Gazebo
+  wm_class:
+  - gazebo
+  - gazebo
+  desktop: 0
+  pid: 747
+  geometry:
+    x: 2253
+    y: 794
+    width: 1196
+    height: 691
+  stack_index: 11
+- title: Mobipick Command Generator
+  wm_class:
+  - command_gui.py
+  - command_gui.py
+  desktop: 0
+  pid: 49
+  geometry:
+    x: 125
+    y: 123
+    width: 877
+    height: 1366
+  stack_index: 12
+- title: Mobipick GPT Debug Monitor
+  wm_class:
+  - cot_gui.py
+  - cot_gui.py
+  desktop: 0
+  pid: 57
+  geometry:
+    x: 1005
+    y: 129
+    width: 980
+    height: 1360
+  stack_index: 13
+- title: pick_n_place.rviz - RViz
+  wm_class:
+  - rviz
+  - rviz
+  desktop: 0
+  pid: 27
+  geometry:
+    x: 2255
+    y: 119
+    width: 1191
+    height: 631
+  stack_index: 15

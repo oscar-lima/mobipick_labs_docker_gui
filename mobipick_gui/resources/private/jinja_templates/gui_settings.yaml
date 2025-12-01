@@ -12,6 +12,11 @@ window:
   geometry: [100, 100, 1100, 780]   # main window position (x, y) and size (width, height)
   title: "Mobipick Labs Control"    # title displayed on the window chrome
 
+window_layout:
+  state_file: "private/experiments/window_layout.yaml"  # where to save captured window positions (relative paths are resolved from the data root)
+  auto_apply: true                                      # when true, apply saved sizes/positions to matching windows after they appear
+  apply_delay_ms: "auto"                                # wait this long before applying layout; "auto" waits until the last auto-launch timeline entry finishes
+
 timers:
   poll_ms: 1200                     # interval for the UI poller that updates button state, etc.
   sigint_check_ms: 100              # how often we check for Ctrl+C from the launch terminal
