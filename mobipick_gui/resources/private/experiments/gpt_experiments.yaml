@@ -1,10 +1,12 @@
-# available buttons: roscore, sim, gpt_experiments, gpt_robot_demo, piper_tts, whisper_ros_sim
+# available buttons: roscore, sim, rviz, rqt, gpt_experiments, gpt_robot_demo, piper_tts, whisper_ros_sim
 timeline:
   # Absolute offsets from when the Auto Launch toggle is turned on
   - at_seconds: 0
     button: roscore
   - at_seconds: 2
     button: sim
+  - at_seconds: 5
+    button: rviz
   - at_seconds: 12
     button: gpt_experiments
   - at_seconds: 12
@@ -13,6 +15,7 @@ timeline:
 shutdown:
   order:
     - gpt_robot_demo
+    - rviz
     - sim
   skip:
     - roscore

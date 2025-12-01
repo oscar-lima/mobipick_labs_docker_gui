@@ -1,5 +1,17 @@
-captured_at: '2025-12-01T23:19:22'
+captured_at: '2025-12-01T23:30:26'
 windows:
+- title: pick_n_place.rviz* - RViz
+  wm_class:
+  - rviz
+  - rviz
+  desktop: 0
+  pid: 27
+  geometry:
+    x: 2260
+    y: 126
+    width: 1186
+    height: 630
+  stack_index: 8
 - title: Simulated UR Dashboard - E-Stop
   wm_class:
   - simulated_ur_dashboard.py
@@ -7,59 +19,59 @@ windows:
   desktop: 0
   pid: 290
   geometry:
-    x: 1991
-    y: 1349
+    x: 1981
+    y: 1340
     width: 240
     height: 140
-  stack_index: 8
+  stack_index: 9
 - title: rqt_robot_steering__RobotSteering - rqt
   wm_class:
   - rqt_robot_steering
   - rqt_robot_steering
   desktop: 0
-  pid: 252
+  pid: 246
   geometry:
-    x: 1998
-    y: 595
-    width: 220
+    x: 1963
+    y: 133
+    width: 289
     height: 255
-  stack_index: 9
+  stack_index: 10
 - title: rqt_joint_trajectory_controller__JointTrajectoryController - rqt
   wm_class:
   - rqt_joint_trajectory_controller
   - rqt_joint_trajectory_controller
   desktop: 0
-  pid: 272
+  pid: 287
   geometry:
-    x: 1987
-    y: 896
-    width: 260
+    x: 1961
+    y: 436
+    width: 292
     height: 412
-  stack_index: 10
+  stack_index: 11
 - title: Gazebo
   wm_class:
   - gazebo
   - gazebo
   desktop: 0
-  pid: 747
+  pid: 711
   geometry:
-    x: 2253
-    y: 794
+    x: 2258
+    y: 798
     width: 1196
     height: 691
-  stack_index: 11
+  stack_index: 12
 - title: Mobipick Command Generator
   wm_class:
   - command_gui.py
   - command_gui.py
   desktop: 0
-  pid: 49
+  pid: 50
   geometry:
-    x: 125
-    y: 123
+    x: 86
+    y: 130
     width: 877
-    height: 1366
-  stack_index: 12
+    height: 1352
+  stack_index: 13
 - title: Mobipick GPT Debug Monitor
   wm_class:
   - cot_gui.py
@@ -67,20 +79,8 @@ windows:
   desktop: 0
   pid: 57
   geometry:
-    x: 1005
-    y: 129
+    x: 973
+    y: 133
     width: 980
-    height: 1360
-  stack_index: 13
-- title: pick_n_place.rviz - RViz
-  wm_class:
-  - rviz
-  - rviz
-  desktop: 0
-  pid: 27
-  geometry:
-    x: 2255
-    y: 119
-    width: 1191
-    height: 631
-  stack_index: 15
+    height: 1349
+  stack_index: 14
