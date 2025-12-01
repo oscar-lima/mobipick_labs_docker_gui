@@ -1,0 +1,27 @@
+# available buttons: roscore, sim, rviz, rqt, tables
+timeline:
+  - at_seconds: 0
+    button: roscore
+  - at_seconds: 2
+    button: sim
+  - at_seconds: 12
+    button: rviz
+  - at_seconds: 12
+    button: rqt
+  - at_seconds: 16
+    button: tables
+
+shutdown:
+  order:
+    - tables
+    - rqt
+    - rviz
+    - sim
+  skip:
+    - roscore
+
+button:
+  label: "Auto Launch"
+  start_text: "Start Auto Launch"
+  stop_text: "Stop Auto Launch"
+  tooltip: "Auto start the Mobipick labs demo stack"

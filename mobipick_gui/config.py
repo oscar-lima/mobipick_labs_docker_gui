@@ -61,6 +61,7 @@ DOCKER_CP_CONFIG_FILE = PROJECT_ROOT / 'config' / 'docker_cp_image_tag.yaml'
 SCRIPT_CLEAN = str(PROJECT_ROOT / 'clean.bash')
 DEFAULT_YAML_PATH = str(PROJECT_ROOT / 'config' / 'worlds.yaml')
 BUTTON_CONFIG_FILE = PROJECT_ROOT / 'config' / 'button_commands_labs.yaml'
+LAUNCH_SEQUENCE_DIR = PROJECT_ROOT / 'private' / 'experiments'
 
 
 def _detect_numeric_id(getter_name: str, env_candidates: tuple[str, ...], fallback: str) -> str:
@@ -220,6 +221,15 @@ CONFIG_DEFAULTS: Dict[str, Dict] = {
         'container_prefix': 'mobipick-terminal',
         'drop_to_host_user': True,
     },
+    'launch_sequence': {
+        'config_file': 'auto',
+        'label': 'Auto Launch',
+        'start_text': 'Start Auto Launch',
+        'stop_text': 'Stop Auto Launch',
+        'tooltip': 'Launch the configured startup sequence',
+        'retry_delay_ms': 750,
+        'max_retry_attempts': 6,
+    },
 }
 
 BUTTON_CONFIG_DEFAULTS = [
@@ -358,6 +368,132 @@ def load_button_layout() -> list[dict]:
     return entries
 
 
+def load_launch_sequence_plan(button_config_path: str | Path | None = None) -> Dict:
+    """Load auto-launch timeline and button text."""
+
+    def _normalize_timeline(entries) -> list[dict]:
+        if not isinstance(entries, list):
+            return []
+        normalized: list[dict] = []
+        for item in entries:
+            if not isinstance(item, dict):
+                continue
+            key = str(item.get('button') or item.get('key') or '').strip()
+            if not key:
+                continue
+            at_value = item.get('at_seconds', item.get('at', item.get('time_seconds')))
+            try:
+                at_seconds = max(0.0, float(at_value))
+            except (TypeError, ValueError):
+                continue
+            normalized.append({'button': key, 'at_seconds': at_seconds})
+        normalized.sort(key=lambda e: (e['at_seconds'], e['button']))
+        return normalized
+
+    cfg = CONFIG.get('launch_sequence', {})
+    button_defaults = {
+        'label': cfg.get('label', 'Auto Launch') or 'Auto Launch',
+        'start_text': cfg.get('start_text', 'Start Auto Launch') or 'Start Auto Launch',
+        'stop_text': cfg.get('stop_text', 'Stop Auto Launch') or 'Stop Auto Launch',
+        'tooltip': cfg.get('tooltip', '') or '',
+    }
+    retry_delay_ms = int(cfg.get('retry_delay_ms', 750) or 0)
+    max_retry_attempts = int(cfg.get('max_retry_attempts', 6) or 0)
+
+    raw_path = str(cfg.get('config_file') or '').strip()
+    raw_button_cfg = button_config_path or CONFIG.get('buttons', {}).get('config_file')
+    button_path = Path(raw_button_cfg) if raw_button_cfg else None
+    if button_path and not button_path.is_absolute():
+        button_path = PROJECT_ROOT / button_path
+
+    def _candidate_paths() -> list[Path]:
+        candidates: list[Path] = []
+        if raw_path and raw_path.lower() not in {'auto', 'default'}:
+            custom = Path(raw_path)
+            if not custom.is_absolute():
+                custom = PROJECT_ROOT / custom
+            candidates.append(custom)
+        stem_candidates: list[str] = []
+        if button_path:
+            stem_candidates.append(button_path.stem)
+            if button_path.stem.startswith('button_commands_'):
+                stem_candidates.append(button_path.stem.replace('button_commands_', '', 1))
+            if button_path.stem.endswith('_ws'):
+                stem_candidates.append(button_path.stem[: -len('_ws')])
+        stem_candidates.append('launch_sequence')
+        filenames: list[str] = []
+        for stem in stem_candidates:
+            filenames.extend(
+                [
+                    f'{stem}_launch.yaml',
+                    f'{stem}_sequence.yaml',
+                    f'{stem}_autolaunch.yaml',
+                    f'{stem}_experiments.yaml',
+                    f'{stem}.yaml',
+                ]
+            )
+        search_dirs = [
+            LAUNCH_SEQUENCE_DIR,
+            PROJECT_ROOT / 'private' / 'launch_sequences',
+            PROJECT_ROOT / 'private' / 'experiments',
+        ]
+        for directory in search_dirs:
+            for name in filenames:
+                candidates.append(directory / name)
+        return candidates
+
+    path: Path | None = None
+    for candidate in _candidate_paths():
+        if candidate.is_file():
+            path = candidate
+            break
+        if path is None:
+            path = candidate
+    if path is None:
+        path = LAUNCH_SEQUENCE_DIR / 'launch_sequence.yaml'
+
+    timeline: list[dict] = []
+    shutdown_order: list[str] = []
+    button_cfg = dict(button_defaults)
+    shutdown_skip: list[str] = []
+    try:
+        if path.is_file():
+            with open(path, 'r', encoding='utf-8') as handle:
+                data = yaml.safe_load(handle) or {}
+            if isinstance(data, dict):
+                timeline = _normalize_timeline(data.get('timeline', []))
+                shutdown_section = data.get('shutdown') or {}
+                raw_order = []
+                if isinstance(shutdown_section, dict):
+                    raw_order = shutdown_section.get('order') or shutdown_section.get('buttons') or []
+                    raw_skip = shutdown_section.get('skip') or shutdown_section.get('ignore') or []
+                    if isinstance(raw_skip, list):
+                        shutdown_skip = [str(entry).strip() for entry in raw_skip if str(entry).strip()]
+                elif isinstance(data.get('shutdown_order'), list):
+                    raw_order = data.get('shutdown_order') or []
+                if isinstance(raw_order, list):
+                    shutdown_order = [str(entry).strip() for entry in raw_order if str(entry).strip()]
+                if isinstance(data.get('button'), dict):
+                    merged = dict(button_cfg)
+                    merged.update({k: v for k, v in data['button'].items() if v is not None})
+                    button_cfg = merged
+    except Exception as exc:
+        print(f'Warning: failed to load auto launch configuration from {path}: {exc}', file=sys.stderr)
+
+    if not shutdown_order:
+        shutdown_order = list(dict.fromkeys(entry['button'] for entry in reversed(timeline)))
+
+    return {
+        'source': str(path),
+        'timeline': timeline,
+        'shutdown_order': shutdown_order,
+        'shutdown_skip': shutdown_skip,
+        'button': button_cfg,
+        'retry_delay_ms': retry_delay_ms,
+        'max_retry_attempts': max_retry_attempts,
+    }
+
+
 def load_docker_cp_config() -> Dict[str, Dict[str, list[dict]]]:
     """Load optional docker cp mappings keyed by image references."""
 
@@ -412,4 +548,6 @@ __all__ = [
     'BUTTON_CONFIG_DEFAULTS',
     'load_button_layout',
     'DOCKER_COMPOSE_FILE',
+    'LAUNCH_SEQUENCE_DIR',
+    'load_launch_sequence_plan',
 ]

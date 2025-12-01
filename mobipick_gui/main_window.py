@@ -48,6 +48,7 @@ from .config import (
     SCRIPT_CLEAN,
     load_docker_cp_config,
     load_button_layout,
+    load_launch_sequence_plan,
 )
 
 CONTAINER_SCRIPTS_DIR = str(
@@ -138,9 +139,15 @@ class MainWindow(QMainWindow):
         self._exit_dialog: Optional[QMessageBox] = None
         self._docker_stop_timeout = self._normalize_stop_timeout(CONFIG['exit'].get('docker_stop_timeout'))
         self._button_layout = load_button_layout()
+        self._launch_plan = load_launch_sequence_plan(CONFIG.get('buttons', {}).get('config_file'))
+        self._launch_retry_ms = max(0, int(self._launch_plan.get('retry_delay_ms', 750) or 0))
+        self._launch_max_retry = max(0, int(self._launch_plan.get('max_retry_attempts', 6) or 0))
         self._button_widgets: dict[str, QPushButton] = {}
         self._config_buttons: dict[str, dict] = {}
         self._config_button_order: list[str] = []
+        self._auto_launch_running = False
+        self._auto_launch_timers: list[QTimer] = []
+        self._auto_launch_active_keys: list[str] = []
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -203,6 +210,14 @@ class MainWindow(QMainWindow):
 
         # actions row
         actions = QHBoxLayout()
+
+        self.auto_launch_button = QPushButton()
+        self.auto_launch_button.clicked.connect(self._on_auto_launch_toggle_clicked)
+        auto_launch_tooltip = str(self._launch_plan.get('button', {}).get('tooltip') or '').strip()
+        if auto_launch_tooltip:
+            self.auto_launch_button.setToolTip(auto_launch_tooltip)
+        actions.addWidget(self.auto_launch_button)
+        self._button_widgets['auto_launch'] = self.auto_launch_button
 
         self.world_label = QLabel('world_config:')
         actions.addWidget(self.world_label)
@@ -341,6 +356,21 @@ class MainWindow(QMainWindow):
 
     def _get_button_widget(self, key: str) -> QPushButton | None:
         return self._button_widgets.get(key)
+
+    def _auto_launch_button_cfg(self) -> dict:
+        return self._launch_plan.get('button', {}) if isinstance(self._launch_plan, dict) else {}
+
+    def _auto_launch_label(self) -> str:
+        cfg = self._auto_launch_button_cfg()
+        return str(cfg.get('label') or cfg.get('start_text') or 'Auto Launch')
+
+    def _auto_launch_start_text(self) -> str:
+        cfg = self._auto_launch_button_cfg()
+        return str(cfg.get('start_text') or cfg.get('label') or 'Start Auto Launch')
+
+    def _auto_launch_stop_text(self) -> str:
+        cfg = self._auto_launch_button_cfg()
+        return str(cfg.get('stop_text') or cfg.get('label') or 'Stop Auto Launch')
 
     def _build_configurable_buttons(self, layout: QHBoxLayout):
         self._config_buttons: dict[str, dict] = {}
@@ -1131,6 +1161,12 @@ class MainWindow(QMainWindow):
             return
         self.toggle_roscore()
 
+    def _on_auto_launch_toggle_clicked(self):
+        self._log_button_click(self.auto_launch_button, self._auto_launch_label())
+        if not self._guard_toggle_action('auto_launch', self.auto_launch_button):
+            return
+        self._toggle_auto_launch_stack()
+
     def _on_refresh_scripts_clicked(self):
         self._log_button_click(self.refresh_scripts_button, 'Refresh Scripts')
         count = self._refresh_script_options()
@@ -1232,6 +1268,168 @@ class MainWindow(QMainWindow):
             tab.is_running() for key, tab in self.tasks.items() if key.startswith('custom')
         )
         self.stop_custom_button.setEnabled(running_custom)
+
+    def _toggle_auto_launch_stack(self):
+        if self._auto_launch_running:
+            self._stop_auto_launch_stack()
+        else:
+            self._start_auto_launch_stack()
+
+    def _start_auto_launch_stack(self):
+        timeline = self._launch_plan.get('timeline') if isinstance(self._launch_plan, dict) else []
+        if not timeline:
+            QMessageBox.information(
+                self,
+                'Auto Launch',
+                'No launch sequence is configured. Update the auto launch config file to enable automation.',
+            )
+            self._auto_launch_running = False
+            self.set_auto_launch_visual('red', self._auto_launch_start_text(), True)
+            return
+
+        self._cancel_auto_launch_timers()
+        self._auto_launch_running = True
+        self._auto_launch_active_keys = [
+            entry.get('button') for entry in timeline if isinstance(entry, dict) and entry.get('button')
+        ]
+        source = self._launch_plan.get('source', 'configuration')
+        self._log_info(f'starting auto launch timeline from {source}')
+        self.set_auto_launch_visual('green', self._auto_launch_stop_text(), True)
+        for entry in timeline:
+            key = entry.get('button') if isinstance(entry, dict) else None
+            if not key:
+                continue
+            try:
+                at_seconds = max(0.0, float(entry.get('at_seconds', 0)))
+            except (TypeError, ValueError):
+                at_seconds = 0.0
+            delay_ms = int(at_seconds * 1000)
+            if delay_ms <= 0:
+                self._trigger_auto_launch_step(key, target_running=True)
+            else:
+                self._schedule_auto_launch_step(key, delay_ms)
+
+    def _stop_auto_launch_stack(self):
+        self._cancel_auto_launch_timers()
+        order = self._auto_launch_shutdown_order()
+        self._auto_launch_running = False
+        if order:
+            self.set_auto_launch_visual('yellow', 'Stopping Auto Launch...', False)
+            for key in order:
+                self._trigger_auto_launch_step(key, target_running=False)
+        self.set_auto_launch_visual('red', self._auto_launch_start_text(), True)
+
+    def _auto_launch_shutdown_order(self) -> list[str]:
+        plan_order = []
+        if isinstance(self._launch_plan, dict):
+            raw = self._launch_plan.get('shutdown_order') or []
+            if isinstance(raw, list):
+                plan_order = [str(item).strip() for item in raw if str(item).strip()]
+            if not plan_order:
+                plan_order = [
+                    entry.get('button')
+                    for entry in self._launch_plan.get('timeline', [])
+                    if isinstance(entry, dict) and entry.get('button')
+                ]
+        skip = set(self._launch_plan.get('shutdown_skip', [])) if isinstance(self._launch_plan, dict) else set()
+        plan_order = [entry for entry in plan_order if entry and entry not in skip]
+        if not self._auto_launch_active_keys:
+            return plan_order
+        ordered = [key for key in plan_order if key in self._auto_launch_active_keys and key not in skip]
+        remaining = [
+            key for key in self._auto_launch_active_keys
+            if key and key not in ordered and key not in skip
+        ]
+        return list(dict.fromkeys(ordered + remaining))
+
+    def _schedule_auto_launch_step(self, key: str, delay_ms: int):
+        timer = QTimer(self)
+        timer.setSingleShot(True)
+
+        def _fire():
+            try:
+                self._trigger_auto_launch_step(key, target_running=True)
+            finally:
+                if timer in self._auto_launch_timers:
+                    self._auto_launch_timers.remove(timer)
+                timer.deleteLater()
+
+        timer.timeout.connect(_fire)
+        self._auto_launch_timers.append(timer)
+        timer.start(max(0, int(delay_ms)))
+
+    def _trigger_auto_launch_step(self, key: str, *, target_running: bool, attempt: int = 0):
+        if not key:
+            return
+        if target_running and not self._auto_launch_running:
+            return
+
+        if self._toggle_states.get(key) == 'yellow':
+            if attempt >= self._launch_max_retry:
+                self._log_info(f'auto launch: skipping {key} (busy state)')
+                return
+            delay = self._launch_retry_ms or 500
+            QTimer.singleShot(
+                delay,
+                lambda k=key, a=attempt + 1: self._trigger_auto_launch_step(k, target_running=target_running, attempt=a),
+            )
+            return
+
+        self._ensure_button_state(key, target_running)
+
+    def _ensure_button_state(self, key: str, target_running: bool):
+        running = self._is_button_running(key)
+        if target_running and running:
+            return
+        if not target_running and not running:
+            return
+        verb = 'starting' if target_running else 'stopping'
+        self._log_info(f'auto launch: {verb} {key}')
+        self._dispatch_auto_launch_toggle(key)
+
+    def _dispatch_auto_launch_toggle(self, key: str) -> bool:
+        if key == 'roscore':
+            self.toggle_roscore()
+            return True
+        if key == 'sim':
+            self.toggle_sim()
+            return True
+        if key == 'tables':
+            self.toggle_tables_demo()
+            return True
+        if key == 'rviz':
+            self.toggle_rviz()
+            return True
+        if key == 'rqt':
+            self.toggle_rqt_tables_demo()
+            return True
+        if key == 'terminal':
+            self.toggle_terminal()
+            return True
+        if key in self._config_buttons:
+            self._on_config_button_clicked(key)
+            return True
+        self._log_info(f'auto launch: no action found for "{key}"')
+        return False
+
+    def _cancel_auto_launch_timers(self):
+        for timer in list(self._auto_launch_timers):
+            try:
+                timer.stop()
+            except Exception:
+                pass
+            timer.deleteLater()
+        self._auto_launch_timers.clear()
+
+    def _is_button_running(self, key: str) -> bool:
+        if key == 'roscore':
+            return self.is_roscore_running()
+        if key == 'sim':
+            return self.is_sim_running()
+        tab = self.tasks.get(key)
+        if tab:
+            return tab.is_running()
+        return False
 
     def _docker_ps_ids(self, filters: list[str]) -> list[str]:
         if not filters:
@@ -1840,6 +2038,7 @@ class MainWindow(QMainWindow):
     def shutdown_roscore(self):
         if self._roscore_stopping:
             return
+        self._stop_auto_launch_stack()
         self._log_info('stopping roscore master')
         self.set_roscore_visual('yellow', 'Shutting down...', enabled=False)
         self._roscore_stopping = True
@@ -2274,6 +2473,9 @@ class MainWindow(QMainWindow):
 
     def set_terminal_visual(self, state: str, text: str, enabled: bool):
         self._set_toggle_state('terminal', self.terminal_button, state, text, enabled)
+
+    def set_auto_launch_visual(self, state: str, text: str, enabled: bool):
+        self._set_toggle_state('auto_launch', self.auto_launch_button, state, text, enabled)
 
     def _guard_toggle_action(self, key: str, button: QPushButton | None = None) -> bool:
         if self._toggle_states.get(key) != 'yellow':
@@ -3408,6 +3610,9 @@ class MainWindow(QMainWindow):
         if key == 'roscore':
             self._roscore_running_cached = False
             if self._roscore_stopping:
+                self._cancel_auto_launch_timers()
+                self._auto_launch_running = False
+                self.set_auto_launch_visual('red', self._auto_launch_start_text(), True)
                 return
             self._roscore_last_start_ts = None
             self.set_roscore_visual('red', 'Start Roscore', enabled=True)
@@ -3491,6 +3696,8 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(0, self._perform_exit_cleanup)
 
     def _perform_exit_cleanup(self):
+        self._cancel_auto_launch_timers()
+        self._auto_launch_running = False
         self.stop_terminal()
 
         for proc in list(self._bg_procs):
@@ -3538,6 +3745,7 @@ class MainWindow(QMainWindow):
         self.set_rqt_visual('red', 'Start RQt Tables', True)
         self.set_script_visual('red', 'Run Script', bool(self._script_choices))
         self.set_terminal_visual('red', 'Open Terminal', True)
+        self.set_auto_launch_visual('red', self._auto_launch_start_text(), True)
         for key in self._config_button_order:
             cfg = self._config_buttons.get(key, {})
             label = self._config_label(cfg)

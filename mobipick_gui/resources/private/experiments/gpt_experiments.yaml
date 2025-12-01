@@ -1,0 +1,25 @@
+# available buttons: roscore, sim, gpt_experiments, gpt_robot_demo, piper_tts, whisper_ros_sim
+timeline:
+  # Absolute offsets from when the Auto Launch toggle is turned on
+  - at_seconds: 0
+    button: roscore
+  - at_seconds: 2
+    button: sim
+  - at_seconds: 12
+    button: gpt_experiments
+  - at_seconds: 12
+    button: gpt_robot_demo
+
+shutdown:
+  order:
+    - gpt_robot_demo
+    - sim
+  skip:
+    - roscore
+    - gpt_experiments
+
+button:
+  label: "Auto Launch"
+  start_text: "Start Auto Launch"
+  stop_text: "Stop Auto Launch"
+  tooltip: "Launch the GPT stack with timed button presses"

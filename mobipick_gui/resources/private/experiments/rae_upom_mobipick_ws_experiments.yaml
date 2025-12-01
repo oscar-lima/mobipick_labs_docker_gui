@@ -1,0 +1,24 @@
+# available buttons: roscore, sim, rviz, rqt, piper_tts, whisper_ros_sim
+timeline:
+  - at_seconds: 0
+    button: roscore
+  - at_seconds: 2
+    button: sim
+  - at_seconds: 12
+    button: rviz
+  - at_seconds: 12
+    button: rqt
+
+shutdown:
+  order:
+    - rqt
+    - rviz
+    - sim
+  skip:
+    - roscore
+
+button:
+  label: "Auto Launch"
+  start_text: "Start Auto Launch"
+  stop_text: "Stop Auto Launch"
+  tooltip: "Auto start the RAE UPOM Mobipick stack"
