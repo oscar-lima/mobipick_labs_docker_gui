@@ -101,6 +101,15 @@ class SelectRos1Ws:
             raise ValueError("Could not find DESIRED_NUMBER assignment to replace")
         return new_text
 
+    @staticmethod
+    def _extract_workspace_raw(path_expr: str) -> str:
+        """Return the workspace name with any leading 'ros_ws/' removed."""
+        cleaned = path_expr.strip().strip('"').strip("'")
+        match = re.search(r"ros_ws/(?P<name>[^/\s]+)", cleaned)
+        if match:
+            return match.group("name")
+        return Path(cleaned).name
+
     def _prompt_choice(self, entries: List[Tuple[int, str, str]]) -> int:
         print("Select ROS1 workspace by number:")
         for idx, path_expr, comment in entries:
@@ -123,15 +132,23 @@ class SelectRos1Ws:
         entries = self._extract_rws_list(sh_text)
         choice = self._prompt_choice(entries)
 
+        selected_expr = entries[choice][1]
+        workspace_raw = self._extract_workspace_raw(selected_expr)
+        print(f"Derived workspace_raw={workspace_raw!r}")
+
         updated = self._replace_desired_number(sh_text, choice)
         self.bash_path.write_text(updated, encoding="utf-8")
         print(f"Updated {self.bash_path.name}: DESIRED_NUMBER={choice}")
 
         # Run the renderer with the same interpreter
         print(f"Running {self.renderer_path.name} ...")
+        env = os.environ.copy()
+        env["WORKSPACE_RAW"] = workspace_raw
+        env["workspace_raw"] = workspace_raw
         result = subprocess.run(
             [sys.executable, str(self.renderer_path)],
             cwd=str(self.renderer_path.parent),
+            env=env,
         )
         if result.returncode != 0:
             raise SystemExit(result.returncode)

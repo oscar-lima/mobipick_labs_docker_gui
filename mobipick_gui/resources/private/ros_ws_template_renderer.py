@@ -130,6 +130,16 @@ class CommandSelector:
         )
 
 
+def _derive_workspace_raw(workspace_segment: str) -> str:
+    """Return the leaf workspace name, stripping an optional 'ros_ws/' prefix."""
+    normalized = workspace_segment.strip().strip('/')
+    if normalized.startswith("ros_ws/"):
+        normalized = normalized.split('/', 1)[1]
+    if '/' in normalized:
+        normalized = normalized.split('/')[-1]
+    return normalized or workspace_segment
+
+
 class TemplateRenderer:
     """Render all files under templates_dir with Jinja and write them under output_base preserving names and modes."""
     def __init__(self, templates_dir: Path, output_base: Path):
@@ -146,13 +156,17 @@ class TemplateRenderer:
             lstrip_blocks=False,
             trim_blocks=False,
         )
+        self._special_targets = {
+            Path("gui_settings.yaml"): Path("config/gui_settings.yaml"),
+        }
 
     def render_all(self, context: dict) -> None:
         for src in self.templates_dir.rglob("*"):
             if not src.is_file():
                 continue
             rel = src.relative_to(self.templates_dir)
-            dst = self.output_base / rel
+            target_rel = self._special_targets.get(rel, rel)
+            dst = self.output_base / target_rel
             dst.parent.mkdir(parents=True, exist_ok=True)
 
             template = self.env.get_template(str(rel))
@@ -174,6 +188,7 @@ def main() -> None:
 
     # Capture workspace segment and derive selection key
     workspace_segment = RosWorkspaceFetcher(script_path).fetch_workspace_segment()
+    workspace_raw = _derive_workspace_raw(workspace_segment)
 
     # Choose command from config
     command_list = CommandSelector(config_path).select(workspace_segment)
@@ -181,8 +196,9 @@ def main() -> None:
     # Render templates with both variables
     context = {
         "ros1_workspace": workspace_segment,
-        "command": command_list,              # usable with: command: {{ command }}
-        "command_str": " ".join(command_list) # optional convenience if templates want a single string
+        "workspace_raw": workspace_raw,
+        "command": command_list,
+        "command_str": " ".join(command_list),
     }
     TemplateRenderer(templates_dir, output_base).render_all(context)
 

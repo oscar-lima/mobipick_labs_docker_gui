@@ -1,2 +1,3 @@
 logs/*
 __pycache__
+mobipick_gui/resources/private/button_configs/*
