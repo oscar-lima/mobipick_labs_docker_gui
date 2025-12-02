@@ -15,8 +15,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Match, Optional
 
-from PyQt5.QtCore import QProcess, QProcessEnvironment, QTimer, Qt
-from PyQt5.QtGui import QTextCursor, QTextDocument
+from PyQt5.QtCore import QIODevice, QProcess, QProcessEnvironment, QTimer, Qt
+from PyQt5.QtGui import QGuiApplication, QTextCursor, QTextDocument
 from PyQt5.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -171,6 +171,20 @@ class MainWindow(QMainWindow):
         )
         self._window_layout_manager.record_baseline(exclude_titles={self.windowTitle()})
         self._window_layout_dialog: QDialog | None = None
+        self._recording_cfg = CONFIG.get('recording', {})
+        self._recording_default_checked = bool(self._recording_cfg.get('enabled_by_default', True))
+        self._recording_output_root = self._resolve_recording_output_root()
+        self._recording_workspace_name = self._normalize_workspace_name(self._recording_cfg.get('workspace_name'))
+        self._screen_resolution = ''
+        self._recording_counter = self._load_recording_counter()
+        self._recording_resolutions = self._load_recording_resolutions()
+        self._recording_default_resolution = self._select_default_resolution()
+        self._recording_start_timer: QTimer | None = None
+        self._recording_proc: QProcess | None = None
+        self._recording_session: dict | None = None
+        self._recording_window: QDialog | None = None
+        self._recording_stop_button: QPushButton | None = None
+        self._recording_path_label: QLabel | None = None
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -245,6 +259,24 @@ class MainWindow(QMainWindow):
             self.auto_launch_button.setToolTip(auto_launch_tooltip)
         actions.addWidget(self.auto_launch_button)
         self._button_widgets['auto_launch'] = self.auto_launch_button
+
+        self.record_checkbox = QCheckBox('Record screen')
+        self.record_checkbox.setToolTip('Record the full display after auto launch finishes repositioning windows.')
+        self.record_checkbox.setChecked(self._recording_default_checked)
+        actions.addWidget(self.record_checkbox)
+        self.record_resolution_label = QLabel('Resolution:')
+        actions.addWidget(self.record_resolution_label)
+        self.record_resolution_combo = QComboBox()
+        self.record_resolution_combo.setInsertPolicy(QComboBox.NoInsert)
+        self.record_resolution_combo.addItems(self._recording_resolutions)
+        if self._recording_default_resolution in self._recording_resolutions:
+            self.record_resolution_combo.setCurrentIndex(
+                self._recording_resolutions.index(self._recording_default_resolution)
+            )
+        else:
+            self.record_resolution_combo.setCurrentIndex(0)
+        self.record_resolution_combo.setToolTip('Select the resolution used for screen recording.')
+        actions.addWidget(self.record_resolution_combo)
 
         self.world_label = QLabel('world_config:')
         actions.addWidget(self.world_label)
@@ -1185,7 +1217,7 @@ class MainWindow(QMainWindow):
                     continue
             if max_at <= 0:
                 return 0
-            return int(max_at * 1000) + 2000
+            return int(max_at * 1000) + 4000
         except Exception:
             return 0
 
@@ -1376,6 +1408,394 @@ class MainWindow(QMainWindow):
         )
         self.stop_custom_button.setEnabled(running_custom)
 
+    # ---------- Recording ----------
+
+    def _resolve_recording_output_root(self) -> Path:
+        raw = str(self._recording_cfg.get('output_dir') or 'private/recordings')
+        path = Path(raw)
+        if not path.is_absolute():
+            path = PROJECT_ROOT / path
+        return path
+
+    def _load_recording_counter(self) -> int:
+        try:
+            root = self._recording_output_root
+            if not root.exists():
+                return 0
+            max_idx = 0
+            for entry in root.iterdir():
+                if not entry.is_dir():
+                    continue
+                match = re.match(r'^(\d+)_', entry.name)
+                if match:
+                    try:
+                        max_idx = max(max_idx, int(match.group(1)))
+                    except ValueError:
+                        continue
+            return max_idx
+        except Exception:
+            return 0
+
+    def _normalize_resolution_string(self, value) -> str:
+        if not value:
+            return ''
+        text = str(value).lower().strip()
+        match = re.match(r'^(\d{3,5})[xX](\d{3,5})$', text)
+        if not match:
+            return ''
+        width, height = match.groups()
+        return f'{int(width)}x{int(height)}'
+
+    def _detect_screen_resolution(self) -> str:
+        # Prefer actual monitor resolution via xrandr, then Qt, then configured fallback.
+        try:
+            cp = subprocess.run(
+                ['bash', '-lc', "xrandr | awk '/\\*/ {print $1; exit}'"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                check=False,
+            )
+            out = (cp.stdout or '').strip()
+            normalized = self._normalize_resolution_string(out)
+            if normalized:
+                self._screen_resolution = normalized
+                return normalized
+        except Exception:
+            pass
+
+        try:
+            screen = QGuiApplication.primaryScreen()
+            if screen is not None:
+                geometry = screen.geometry()
+                size = geometry.size()
+                if size and size.width() > 0 and size.height() > 0:
+                    detected = f'{int(size.width())}x{int(size.height())}'
+                    normalized = self._normalize_resolution_string(detected)
+                    if normalized:
+                        self._screen_resolution = normalized
+                        return normalized
+        except Exception:
+            pass
+
+        configured = self._normalize_resolution_string(self._recording_cfg.get('resolution') or '3440x1440')
+        self._screen_resolution = configured
+        return configured
+
+    def _load_recording_resolutions(self) -> list[str]:
+        options: list[str] = []
+        detected = self._normalize_resolution_string(self._detect_screen_resolution())
+        if detected:
+            options.append(detected)
+        configured = self._normalize_resolution_string(self._recording_cfg.get('resolution'))
+        if configured:
+            options.append(configured)
+        presets = self._recording_cfg.get('presets') or []
+        for entry in presets:
+            normalized = self._normalize_resolution_string(entry)
+            if normalized:
+                options.append(normalized)
+        options.extend(['3440x1440', '3840x2160', '2560x1440', '1920x1080', '1600x900', '1280x720'])
+        return list(dict.fromkeys([opt for opt in options if opt]))
+
+    def _select_default_resolution(self) -> str:
+        detected = self._normalize_resolution_string(self._screen_resolution)
+        if detected and detected in self._recording_resolutions:
+            return detected
+        preferred = self._normalize_resolution_string(self._recording_cfg.get('resolution'))
+        if preferred and preferred in self._recording_resolutions:
+            return preferred
+        return self._recording_resolutions[0] if self._recording_resolutions else '3440x1440'
+
+    def _current_recording_resolution(self) -> str:
+        combo = getattr(self, 'record_resolution_combo', None)
+        if combo is not None:
+            value = self._normalize_resolution_string(combo.currentText())
+            if value:
+                return self._clamp_resolution_to_screen(value)
+        return self._clamp_resolution_to_screen(self._select_default_resolution())
+
+    def _clamp_resolution_to_screen(self, resolution: str) -> str:
+        parts = resolution.split('x')
+        if len(parts) != 2:
+            return resolution
+        try:
+            width = int(parts[0])
+            height = int(parts[1])
+        except ValueError:
+            return resolution
+        screen_res = self._normalize_resolution_string(self._screen_resolution or self._detect_screen_resolution())
+        if not screen_res:
+            return resolution
+        sw, sh = (int(x) for x in screen_res.split('x'))
+        clamped_w = min(width, sw)
+        clamped_h = min(height, sh)
+        clamped = f'{clamped_w}x{clamped_h}'
+        if clamped != resolution:
+            self._log_info(f'Adjusting recording resolution from {resolution} to {clamped} to fit screen ({screen_res})')
+        return clamped
+
+    @staticmethod
+    def _normalize_workspace_name(value) -> str:
+        raw = str(value or 'workspace')
+        slug = re.sub(r'[^a-zA-Z0-9_-]+', '_', raw).strip('_')
+        return slug or 'workspace'
+
+    def _recording_start_delay_ms(self) -> int:
+        timeline = self._launch_plan.get('timeline') if isinstance(self._launch_plan, dict) else []
+        max_at_ms = 0
+        for entry in timeline:
+            try:
+                at_seconds = float(entry.get('at_seconds', 0) or 0)
+            except Exception:
+                continue
+            max_at_ms = max(max_at_ms, int(max(0.0, at_seconds) * 1000))
+        layout_delay = max(0, int(self._window_layout_delay_ms))
+        buffer_ms = 500
+        return max(max_at_ms, layout_delay) + buffer_ms
+
+    def _schedule_recording_after_launch(self):
+        self._cancel_recording_schedule()
+        if not getattr(self, 'record_checkbox', None):
+            return
+        if not self.record_checkbox.isChecked():
+            self._console_log(2, 'screen recording skipped (checkbox unchecked)')
+            return
+        if self._recording_is_active():
+            return
+        delay_ms = self._recording_start_delay_ms()
+        if delay_ms <= 0:
+            self._start_screen_recording()
+            return
+
+        timer = QTimer(self)
+        timer.setSingleShot(True)
+
+        def _fire():
+            try:
+                self._start_screen_recording()
+            finally:
+                if self._recording_start_timer is timer:
+                    self._recording_start_timer = None
+                timer.deleteLater()
+
+        timer.timeout.connect(_fire)
+        self._recording_start_timer = timer
+        timer.start(delay_ms)
+        self._log_info(f'scheduling screen recording in {delay_ms / 1000:.1f}s')
+
+    def _cancel_recording_schedule(self):
+        timer = self._recording_start_timer
+        if timer is not None:
+            try:
+                timer.stop()
+            except Exception:
+                pass
+            timer.deleteLater()
+        self._recording_start_timer = None
+
+    def _recording_is_active(self) -> bool:
+        if self._recording_proc and self._recording_proc.state() != QProcess.NotRunning:
+            return True
+        return bool(self._recording_session)
+
+    def _ensure_recording_window(self) -> QDialog:
+        # recreate if previously closed/deleted
+        try:
+            if self._recording_window is not None:
+                _ = self._recording_window.windowTitle()
+                return self._recording_window
+        except RuntimeError:
+            self._recording_window = None
+
+        dialog = QDialog(None)  # top-level so wmctrl can move it independently
+        dialog.setWindowTitle('Recording Control')
+        dialog.setWindowFlag(Qt.WindowStaysOnTopHint, True)
+        dialog.setWindowFlag(Qt.Tool, True)
+        dialog.setWindowModality(Qt.NonModal)
+        dialog.setAttribute(Qt.WA_DeleteOnClose, False)
+        layout = QVBoxLayout(dialog)
+        label = QLabel('Screen recording is active.')
+        label.setWordWrap(True)
+        layout.addWidget(label)
+        self._recording_path_label = QLabel('')
+        self._recording_path_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        layout.addWidget(self._recording_path_label)
+        button = QPushButton('Stop Recording')
+        button.clicked.connect(self._on_recording_stop_clicked)
+        layout.addWidget(button)
+        self._recording_stop_button = button
+        dialog.setLayout(layout)
+        dialog.setMinimumWidth(260)
+        dialog.setMaximumWidth(360)
+
+        def _mark_closed():
+            self._recording_window = None
+
+        dialog.destroyed.connect(lambda *_: _mark_closed())
+        self._recording_window = dialog
+        return dialog
+
+    def _show_recording_window(self, video_path: Path):
+        dialog = self._ensure_recording_window()
+        if self._recording_path_label:
+            self._recording_path_label.setText(str(video_path))
+        if self._recording_stop_button:
+            self._recording_stop_button.setEnabled(True)
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
+    def _on_recording_stop_clicked(self):
+        self._log_event('user requested recording stop')
+        if self._recording_stop_button:
+            self._recording_stop_button.setEnabled(False)
+        if self._auto_launch_running:
+            self._stop_auto_launch_stack()
+            return
+        self._stop_screen_recording(save_logs=True, reason='Stopping recording')
+
+    def _start_screen_recording(self):
+        if self._recording_is_active():
+            return
+        try:
+            self._recording_output_root.mkdir(parents=True, exist_ok=True)
+        except Exception as exc:
+            self._append_gui_html('log', f'<i>Failed to prepare recording directory: {html.escape(str(exc))}</i>')
+            return
+        now = datetime.now()
+        next_idx = max(self._recording_counter, self._load_recording_counter()) + 1
+        self._recording_counter = next_idx
+        base_name = f'{next_idx}_{self._recording_workspace_name}_{now:%d_%m_%H%M%S}'
+        base_dir = self._recording_output_root / base_name
+        try:
+            base_dir.mkdir(parents=True, exist_ok=True)
+        except Exception as exc:
+            self._append_gui_html('log', f'<i>Failed to create recording folder: {html.escape(str(exc))}</i>')
+            return
+        video_path = base_dir / f'{base_name}.mp4'
+        ffmpeg_log = base_dir / 'ffmpeg.log'
+        self._recording_session = {
+            'base_dir': base_dir,
+            'video_path': video_path,
+            'logs_dir': base_dir / 'logs',
+            'save_logs': False,
+        }
+        proc = QProcess(self)
+        proc.setProgram('ffmpeg')
+        proc.setProcessChannelMode(QProcess.SeparateChannels)
+        try:
+            proc.setStandardOutputFile(str(ffmpeg_log))
+            proc.setStandardErrorFile(str(ffmpeg_log), mode=QIODevice.Append)
+        except Exception:
+            # fallback: let ffmpeg print to stdout/stderr
+            pass
+        requested_res = self._current_recording_resolution()
+        args = [
+            '-f', 'x11grab',
+            '-s', requested_res,
+            '-r', '30',
+            '-i', ':1',
+            '-vcodec', 'libx264',
+            '-pix_fmt', 'yuv420p',
+            '-preset', 'veryfast',
+            '-threads', '8',
+            str(video_path),
+        ]
+        proc.finished.connect(self._on_recording_finished)
+        proc.errorOccurred.connect(lambda _err: self._append_gui_html(
+            'log',
+            f'<i>Recording error: {html.escape(proc.errorString())}</i>',
+        ))
+        self._recording_proc = proc
+        self._log_info(f'starting screen recording at {requested_res} to {video_path}')
+        proc.start('ffmpeg', args)
+        if not proc.waitForStarted(3000):
+            self._append_gui_html('log', '<i>Unable to start ffmpeg; recording cancelled.</i>')
+            self._recording_proc = None
+            self._recording_session = None
+            return
+        self._show_recording_window(video_path)
+
+    def _stop_screen_recording(self, *, save_logs: bool, reason: str | None = None):
+        self._cancel_recording_schedule()
+        session = self._recording_session
+        if session is None and not self._recording_proc:
+            return
+        if session is not None:
+            session['save_logs'] = session.get('save_logs', False) or save_logs
+        if reason:
+            self._log_info(reason)
+        proc = self._recording_proc
+        try:
+            state = proc.state() if proc else None
+        except RuntimeError:
+            return
+        if proc and state != QProcess.NotRunning:
+            proc.terminate()
+            QTimer.singleShot(2000, lambda: self._force_kill_recording(proc))
+            return
+        self._finalize_recording_session()
+
+    def _force_kill_recording(self, proc: QProcess | None):
+        if proc is None:
+            return
+        try:
+            state = proc.state()
+        except RuntimeError:
+            return
+        if state != QProcess.NotRunning:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+
+    def _on_recording_finished(self, code: int, _status):
+        if self._recording_session is not None:
+            self._recording_session['exit_code'] = code
+        self._finalize_recording_session()
+
+    def _finalize_recording_session(self):
+        session = self._recording_session
+        proc = self._recording_proc
+        self._recording_proc = None
+        self._recording_session = None
+        if self._recording_window:
+            self._recording_window.hide()
+        if session is None:
+            return
+        base_dir = session.get('base_dir')
+        video_path = session.get('video_path')
+        exit_code = session.get('exit_code')
+        video_file = Path(video_path) if video_path else None
+        video_exists = bool(video_file and video_file.is_file())
+        if video_exists:
+            size_kb = video_file.stat().st_size / 1024.0 if video_file else 0.0
+            size_text = f' ({size_kb:.0f} KB)' if size_kb > 0 else ''
+            self._append_gui_html('log', f'<i>Recording saved to {html.escape(str(video_file))}{html.escape(size_text)}</i>')
+        if session.get('save_logs') and base_dir:
+            logs_dir = session.get('logs_dir') or base_dir
+            saved = self._save_logs_to_directory(Path(logs_dir))
+            if saved:
+                self._append_gui_html(
+                    'log',
+                    f'<i>Saved {saved} log file(s) to {html.escape(str(logs_dir))}</i>',
+                )
+        if not video_exists:
+            QMessageBox.warning(
+                self,
+                'Recording',
+                f'No video file was produced. Check ffmpeg.log in {html.escape(str(base_dir))}.',
+            )
+        elif exit_code not in (None, 0):
+            # ffmpeg exits non-zero when we terminate it; suppress dialog if video is present.
+            self._console_log(2, f'Recording finished with exit code {exit_code} (video saved).')
+        if proc:
+            try:
+                proc.deleteLater()
+            except Exception:
+                pass
+
     def _toggle_auto_launch_stack(self):
         if self._auto_launch_running:
             self._stop_auto_launch_stack()
@@ -1418,15 +1838,19 @@ class MainWindow(QMainWindow):
                 self._trigger_auto_launch_step(key, target_running=True)
             else:
                 self._schedule_auto_launch_step(key, delay_ms)
+        self._schedule_recording_after_launch()
 
     def _stop_auto_launch_stack(self):
         self._cancel_auto_launch_timers()
+        self._cancel_recording_schedule()
         order = self._auto_launch_shutdown_order()
         self._auto_launch_running = False
         if order:
             self.set_auto_launch_visual('yellow', 'Stopping Auto Launch...', False)
             for key in order:
                 self._trigger_auto_launch_step(key, target_running=False)
+        if self._recording_is_active():
+            self._stop_screen_recording(save_logs=True, reason='Stopping recording after auto launch toggle')
         self.set_auto_launch_visual('red', self._auto_launch_start_text(), True)
 
     def _auto_launch_shutdown_order(self) -> list[str]:
@@ -3568,30 +3992,50 @@ class MainWindow(QMainWindow):
             self.tabs.setTabText(index, label)
         self._focus_tab(key)
 
-    def save_all_logs(self):
+    def _collect_log_entries(self) -> list[tuple[str, str]]:
         entries: list[tuple[str, str]] = []
         for i in range(self.tabs.count()):
             widget = self.tabs.widget(i)
             if not isinstance(widget, QTextEdit):
                 continue
-            html = self._extract_widget_html(widget)
-            if html is None:
+            html_content = self._extract_widget_html(widget)
+            if html_content is None:
                 continue
             label = self.tabs.tabText(i).strip() or f'tab{i + 1}'
-            entries.append((label, html))
+            entries.append((label, html_content))
+        return entries
+
+    def _save_logs_to_directory(self, directory: Path, entries: list[tuple[str, str]] | None = None) -> int:
+        entries = entries if entries is not None else self._collect_log_entries()
+        if not entries:
+            return 0
+        try:
+            directory.mkdir(parents=True, exist_ok=True)
+        except Exception as exc:
+            self._append_gui_html(
+                'log',
+                f'<i>Failed to prepare log directory {html.escape(str(directory))}: {html.escape(str(exc))}</i>',
+            )
+            return 0
+        count = 0
+        for label, html_content in entries:
+            filename = self._suggest_log_filename(label)
+            path = self._resolve_unique_path(str(directory), filename)
+            if self._write_html_file(path, html_content):
+                count += 1
+        return count
+
+    def save_all_logs(self):
+        entries = self._collect_log_entries()
         if not entries:
             QMessageBox.information(self, 'Save Logs', 'There are no logs to save.')
             return
         directory = QFileDialog.getExistingDirectory(self, 'Select folder to save logs')
         if not directory:
             return
-        os.makedirs(directory, exist_ok=True)
-        for label, html in entries:
-            filename = self._suggest_log_filename(label)
-            path = self._resolve_unique_path(directory, filename)
-            if not self._write_html_file(path, html):
-                return
-        QMessageBox.information(self, 'Save Logs', f'Saved {len(entries)} log file(s).')
+        saved = self._save_logs_to_directory(Path(directory), entries=entries)
+        if saved:
+            QMessageBox.information(self, 'Save Logs', f'Saved {saved} log file(s).')
 
     def _prepare_tab_for_origin(self, key: str, origin: str) -> ProcessTab:
         tab = self._ensure_tab(key, key.title(), closable=(key.startswith('custom')))
@@ -3721,7 +4165,10 @@ class MainWindow(QMainWindow):
             self._roscore_running_cached = False
             if self._roscore_stopping:
                 self._cancel_auto_launch_timers()
+                self._cancel_recording_schedule()
                 self._auto_launch_running = False
+                if self._recording_is_active():
+                    self._stop_screen_recording(save_logs=True, reason='Roscore stopped; ending recording')
                 self.set_auto_launch_visual('red', self._auto_launch_start_text(), True)
                 return
             self._roscore_last_start_ts = None
@@ -3732,6 +4179,9 @@ class MainWindow(QMainWindow):
             self.set_rviz_visual('red', 'Start RViz', True)
             self.set_rqt_visual('red', 'Start RQt Tables', True)
             self.stop_terminal()
+            self._cancel_recording_schedule()
+            if self._recording_is_active():
+                self._stop_screen_recording(save_logs=True, reason='Roscore exited; stopping recording')
             self._script_active_tab_key = None
             self.set_script_visual('red', 'Run Script', bool(self._script_choices))
             self._update_stop_custom_enabled()
@@ -3809,6 +4259,8 @@ class MainWindow(QMainWindow):
 
     def _perform_exit_cleanup(self):
         self._cancel_auto_launch_timers()
+        self._cancel_recording_schedule()
+        self._stop_screen_recording(save_logs=False, reason='Exit requested; stopping recording')
         self._auto_launch_running = False
         self.stop_terminal()
 

@@ -156,6 +156,14 @@ CONFIG_DEFAULTS: Dict[str, Dict] = {
         'auto_apply': True,
         'apply_delay_ms': 'auto',
     },
+    'recording': {
+        'enabled_by_default': True,
+        'output_dir': 'private/recordings',
+        'workspace_name': 'workspace',
+        'resolution': '3440x1440',
+        'presets': ['1920x1080', '2560x1440', '3440x1440'],
+        'include_detected_resolution': True,
+    },
     'timers': {
         'poll_ms': 1200,
         'sigint_check_ms': 100,
