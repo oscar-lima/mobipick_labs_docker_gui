@@ -150,6 +150,7 @@ class MainWindow(QMainWindow):
         self._auto_launch_running = False
         self._auto_launch_timers: list[QTimer] = []
         self._auto_launch_active_keys: list[str] = []
+        self._auto_launch_run_count = 0
         self._window_layout_cfg = CONFIG.get('window_layout', {})
         raw_auto_apply = self._window_layout_cfg.get('auto_apply', True)
         if isinstance(raw_auto_apply, str):
@@ -1813,6 +1814,11 @@ class MainWindow(QMainWindow):
             self._auto_launch_running = False
             self.set_auto_launch_visual('red', self._auto_launch_start_text(), True)
             return
+
+        if self._auto_launch_run_count > 0:
+            self.clear_all_tabs()
+            self._append_gui_html('log', '<i>Cleared tabs before starting a new auto launch run.</i>')
+        self._auto_launch_run_count += 1
 
         if self._window_layout_auto_apply and self._window_layout_manager:
             self._window_layout_manager.reset_auto_apply()

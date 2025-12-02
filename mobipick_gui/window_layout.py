@@ -329,6 +329,7 @@ class WindowLayoutManager:
 
     def _match_entry(self, entry: dict, active_windows: list[WindowInfo]) -> WindowInfo | None:
         title = str(entry.get('title') or '').strip()
+        normalized_title = title.lower()
         saved_classes = [str(c).strip().lower() for c in entry.get('wm_class', []) if str(c).strip()]
         saved_pid = entry.get('pid')
         try:
@@ -339,16 +340,18 @@ class WindowLayoutManager:
         best: WindowInfo | None = None
         best_score = 0
         for win in active_windows:
+            win_title = win.title.lower()
+            if normalized_title and normalized_title not in win_title:
+                continue
             score = 0
             if saved_classes and win.wm_class:
                 overlap = set(saved_classes) & {cls.lower() for cls in win.wm_class}
                 if overlap:
                     score += 5 * len(overlap)
-            if title:
-                lowered = win.title.lower()
-                if lowered == title.lower():
+            if normalized_title:
+                if win_title == normalized_title:
                     score += 3
-                elif title.lower() in lowered:
+                else:
                     score += 1
             if saved_pid is not None and win.pid == saved_pid:
                 score += 1
