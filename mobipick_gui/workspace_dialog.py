@@ -5,7 +5,9 @@ import shutil
 import subprocess
 import tempfile
 from pathlib import Path
+from typing import Callable
 
+import yaml
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QPixmap
 from PyQt5.QtWidgets import (
@@ -26,6 +28,7 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
 )
 
+from .settings_transfer import export_settings, import_settings
 from .workspaces import RosWorkspace, WorkspaceRegistry
 
 
@@ -34,10 +37,18 @@ class WorkspaceManagerDialog(QDialog):
 
     workspace_activated = pyqtSignal(str)
     build_requested = pyqtSignal(str)
+    settings_imported = pyqtSignal()
 
-    def __init__(self, registry: WorkspaceRegistry, parent=None):
+    def __init__(
+        self,
+        registry: WorkspaceRegistry,
+        parent=None,
+        *,
+        replace_allowed: Callable[[], bool] | None = None,
+    ):
         super().__init__(parent)
         self.registry = registry
+        self.replace_allowed = replace_allowed
         self.setWindowTitle('ROS 1 Workspace Manager')
         self.resize(1000, 650)
 
@@ -88,6 +99,12 @@ class WorkspaceManagerDialog(QDialog):
         show_graph = QPushButton('Show Graph')
         show_graph.clicked.connect(self._show_graph)
         workspace_actions.addWidget(show_graph)
+        export_button = QPushButton('Export Settings')
+        export_button.clicked.connect(self._export_settings)
+        workspace_actions.addWidget(export_button)
+        import_button = QPushButton('Import Settings')
+        import_button.clicked.connect(self._import_settings)
+        workspace_actions.addWidget(import_button)
         build = QPushButton('Build Selected')
         build.clicked.connect(self._build_selected)
         workspace_actions.addWidget(build)
@@ -393,6 +410,78 @@ class WorkspaceManagerDialog(QDialog):
         workspace = self._selected_workspace()
         if workspace:
             self.build_requested.emit(workspace.name)
+
+    def _export_settings(self) -> None:
+        selected, _ = QFileDialog.getSaveFileName(
+            self,
+            'Export Mobipick GUI settings',
+            str(Path.home() / 'mobipick-gui-settings.yaml'),
+            'YAML files (*.yaml *.yml)',
+        )
+        if not selected:
+            return
+        try:
+            export_settings(Path(selected), self.registry)
+        except (OSError, ValueError) as exc:
+            QMessageBox.critical(self, 'Export Settings', str(exc))
+            return
+        QMessageBox.information(
+            self,
+            'Export Settings',
+            f'Settings exported to:\n{selected}',
+        )
+
+    def _import_settings(self) -> None:
+        if self.replace_allowed and not self.replace_allowed():
+            QMessageBox.warning(
+                self,
+                'Import Settings',
+                'Stop running workspace processes before importing settings.',
+            )
+            return
+        selected, _ = QFileDialog.getOpenFileName(
+            self,
+            'Import Mobipick GUI settings',
+            str(Path.home()),
+            'YAML files (*.yaml *.yml);;All files (*)',
+        )
+        if not selected:
+            return
+        start = self.registry.master_folder or str(Path.home())
+        master = QFileDialog.getExistingDirectory(
+            self,
+            'Choose the workspace master folder for imported settings',
+            start,
+        )
+        if not master:
+            return
+        answer = QMessageBox.question(
+            self,
+            'Import Settings',
+            'Importing will replace the configured workspace list and active '
+            'workspace. All current tabs and log output will be discarded. '
+            'Workspace files on disk will not be changed.\n\n'
+            'Continue?',
+        )
+        if answer != QMessageBox.Yes:
+            return
+        try:
+            import_settings(
+                Path(selected),
+                self.registry,
+                master_folder=Path(master),
+            )
+        except (OSError, ValueError, yaml.YAMLError) as exc:
+            QMessageBox.critical(self, 'Import Settings', str(exc))
+            return
+        self.refresh(self.registry.active)
+        self.settings_imported.emit()
+        QMessageBox.information(
+            self,
+            'Import Settings',
+            'Settings imported. Restart the GUI to apply general GUI '
+            'configuration overrides.',
+        )
 
     def _show_graph(self) -> None:
         dialog = QDialog(self)

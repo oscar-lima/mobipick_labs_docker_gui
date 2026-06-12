@@ -11,12 +11,6 @@ from typing import Iterable
 import yaml
 
 WORKSPACE_NAME_RE = re.compile(r'^[A-Za-z0-9._-]+$')
-LEGACY_WORKSPACE_IMAGES = {
-    'gpt_ws': 'ozkrelo/x_mobipick_labs:gpt_ws_from_oscar_user',
-    'rae_upom_mobipick_ws': (
-        'ozkrelo/x_mobipick_labs:rae_ws_from_oscar_user'
-    ),
-}
 
 
 def default_registry_path() -> Path:
@@ -99,7 +93,7 @@ class WorkspaceRegistry:
         self.active: str = ''
         self.workspaces: list[RosWorkspace] = []
 
-    def load(self, *, migrate_legacy: bool = True) -> 'WorkspaceRegistry':
+    def load(self, *, migrate_legacy: bool = False) -> 'WorkspaceRegistry':
         """Load the registry, optionally importing the old selector."""
         if self.path.is_file():
             with self.path.open('r', encoding='utf-8') as handle:
@@ -126,13 +120,7 @@ class WorkspaceRegistry:
             workspace = RosWorkspace(
                 name=str(item.get('name') or ''),
                 path=str(item.get('path') or ''),
-                image=str(
-                    item.get('image')
-                    or LEGACY_WORKSPACE_IMAGES.get(
-                        str(item.get('name') or '').strip(),
-                        '',
-                    )
-                ),
+                image=str(item.get('image') or ''),
                 extends=self._normalize_extends(item.get('extends')),
                 button_config=str(item.get('button_config') or ''),
                 launch_config=str(item.get('launch_config') or ''),
@@ -608,52 +596,8 @@ class WorkspaceRegistry:
         return '\n'.join(lines) + '\n'
 
     def with_inferred_profile(self, workspace: RosWorkspace) -> RosWorkspace:
-        """Populate profile paths from matching legacy resource filenames."""
-        if not workspace.image:
-            workspace.image = LEGACY_WORKSPACE_IMAGES.get(workspace.name, '')
-        if not self.resources_root:
-            return workspace
-        buttons = (
-            self.resources_root
-            / 'private'
-            / 'button_configs'
-            / f'button_commands_{workspace.name}.yaml'
-        )
-        launches = (
-            self.resources_root
-            / 'private'
-            / 'experiments'
-            / f'{workspace.name}_experiments.yaml'
-        )
-        if buttons.is_file():
-            workspace.button_config = str(buttons)
-        if launches.is_file():
-            workspace.launch_config = str(launches)
-        workspace.sim_command = self._legacy_sim_commands().get(
-            workspace.name,
-            '',
-        )
+        """Return a workspace without applying machine-specific presets."""
         return workspace
-
-    def _legacy_sim_commands(self) -> dict[str, str]:
-        if not self.resources_root:
-            return {}
-        path = self.resources_root / 'private' / 'config.yml'
-        try:
-            with path.open('r', encoding='utf-8') as handle:
-                data = yaml.safe_load(handle) or {}
-        except (OSError, yaml.YAMLError):
-            return {}
-        commands = data.get('commands') if isinstance(data, dict) else {}
-        if not isinstance(commands, dict):
-            return {}
-        result: dict[str, str] = {}
-        for name, command in commands.items():
-            if isinstance(command, list):
-                result[str(name)] = ' '.join(str(part) for part in command)
-            elif isinstance(command, str):
-                result[str(name)] = command
-        return result
 
     def _migrate_legacy(self) -> None:
         selector = self.resources_root / 'private' / 'select_ros1_ws.sh'

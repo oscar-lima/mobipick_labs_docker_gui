@@ -2,6 +2,8 @@ from pathlib import Path
 
 from mobipick_gui.config import (
     CONFIG,
+    default_user_config_dir,
+    default_user_data_dir,
     load_button_layout,
     load_launch_sequence_plan,
 )
@@ -9,6 +11,20 @@ from mobipick_gui.config import (
 
 def test_screen_recording_is_disabled_by_default():
     assert CONFIG['recording']['enabled_by_default'] is False
+
+
+def test_user_state_uses_xdg_directories(monkeypatch, tmp_path):
+    config_home = tmp_path / 'config'
+    data_home = tmp_path / 'data'
+    monkeypatch.setenv('XDG_CONFIG_HOME', str(config_home))
+    monkeypatch.setenv('XDG_DATA_HOME', str(data_home))
+
+    assert default_user_config_dir() == (
+        config_home / 'mobipick-labs-docker-gui'
+    )
+    assert default_user_data_dir() == (
+        data_home / 'mobipick-labs-docker-gui'
+    )
 
 
 def test_explicit_workspace_profiles_override_global_config(tmp_path):

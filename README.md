@@ -106,22 +106,41 @@ which host catkin workspace is bind-mounted into each container.
 
 Use **Configure Workspaces** to:
 
-* choose or create a master folder such as `~/ros1_ws`;
+* choose or create a master folder such as `~/ros_ws`;
 * discover existing child workspaces that contain a `src/` directory;
 * add a standalone workspace outside the master folder;
 * create a new workspace without creating fake `devel` build outputs;
 * declare which workspaces it extends;
 * assign workspace-specific button and auto-launch YAML profiles;
+* export all workspace settings and referenced profiles to one portable YAML
+  file;
+* import that file on another machine and remap workspaces under a selected
+  master folder;
 * set a workspace-specific simulator command;
 * view the inheritance graph with Graphviz; and
 * build the selected workspace with `catkin_make` inside the Docker image.
 
 The registry is stored in
 `~/.config/mobipick-labs-docker-gui/workspaces.yaml`. Set
-`MOBIPICK_WORKSPACE_CONFIG` to use another file. On first launch, the GUI imports
-the old `private/select_ros1_ws.sh` selection when present, then stops modifying
-repository files. Selecting **Docker image default** skips the host workspace
-mount and uses the workspace bundled in the image.
+`MOBIPICK_WORKSPACE_CONFIG` to use another file. The registry remembers the
+configured workspaces and the last active workspace. Selecting **Docker image
+default** skips the host workspace mount and uses the workspace bundled in the
+image.
+
+General per-user overrides live in
+`~/.config/mobipick-labs-docker-gui/gui_settings.yaml`; set
+`MOBIPICK_GUI_CONFIG` to use another file. Window layouts are stored beside that
+file, while recordings default to
+`~/.local/share/mobipick-labs-docker-gui/recordings`. These writable locations
+keep installed package files immutable and prevent local state from entering a
+wheel or source distribution.
+
+Use **Export Settings** in the workspace manager to create a single portable
+YAML file containing the workspace registry, user GUI overrides, and the
+contents of referenced button and auto-launch profiles. **Import Settings**
+asks for the destination machine's workspace master folder, restores profiles
+under the user config directory, and rewrites workspace paths for that folder.
+It does not copy or modify ROS workspace source trees.
 
 The host master folder is mounted once at `~/ros_ws` inside Docker, regardless
 of its host-side folder name. Workspace, devel, and source paths exposed to ROS
@@ -175,12 +194,10 @@ after the GUI options; they are forwarded automatically to `QApplication`.
 
 ## Configuring the GUI
 
-General customisation lives in the `mobipick_gui/resources/config/` directory.
-Workspace locations and workspace-specific profiles live in the per-user
-workspace registry described above. You can copy the bundled resource files and
-adapt them to your workflow. When running from an installed package the
-directory is read-only; export `MOBIPICK_GUI_DATA_ROOT` and point it at a
-writable copy of the resources if you need to override the defaults.
+Bundled defaults live in `mobipick_gui/resources/config/`. Keep user overrides
+in `~/.config/mobipick-labs-docker-gui/gui_settings.yaml`; the GUI merges that
+file over the bundled defaults. Workspace locations and workspace-specific
+profiles live in the per-user workspace registry described above.
 
 * **`config/gui_settings.yaml`** – Controls UI behaviour such as window geometry
   and log styling, defines timer intervals, button colours, terminal launcher

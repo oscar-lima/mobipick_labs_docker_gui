@@ -1,7 +1,6 @@
 from pathlib import Path
 
 import pytest
-import yaml
 
 from mobipick_gui.workspaces import RosWorkspace, WorkspaceRegistry
 
@@ -315,7 +314,7 @@ def test_runtime_environment_maps_relocated_catkin_build(tmp_path):
     assert registry.is_runtime_built(registry.get('gpt_ws'))
 
 
-def test_legacy_selector_migrates_active_workspace_and_profiles(
+def test_legacy_selector_migrates_active_workspace_and_inheritance(
     tmp_path,
     monkeypatch,
 ):
@@ -323,30 +322,9 @@ def test_legacy_selector_migrates_active_workspace_and_profiles(
     monkeypatch.setenv('HOME', str(home))
     resources = tmp_path / 'resources'
     private = resources / 'private'
-    buttons = private / 'button_configs'
-    experiments = private / 'experiments'
-    buttons.mkdir(parents=True)
-    experiments.mkdir()
+    private.mkdir(parents=True)
     (home / 'ros1_ws' / 'base_ws' / 'src').mkdir(parents=True)
     (home / 'ros1_ws' / 'child_ws' / 'src').mkdir(parents=True)
-    (buttons / 'button_commands_child_ws.yaml').write_text(
-        'buttons: []\n',
-        encoding='utf-8',
-    )
-    (experiments / 'child_ws_experiments.yaml').write_text(
-        'timeline: []\n',
-        encoding='utf-8',
-    )
-    (private / 'config.yml').write_text(
-        yaml.safe_dump(
-            {
-                'commands': {
-                    'child_ws': ['roslaunch', 'demo', 'demo.launch']
-                }
-            }
-        ),
-        encoding='utf-8',
-    )
     (private / 'select_ros1_ws.sh').write_text(
         '''
 DESIRED_NUMBER=1
@@ -361,17 +339,16 @@ rws_list=(
     registry = WorkspaceRegistry(
         tmp_path / 'registry.yaml',
         resources_root=resources,
-    ).load()
+    ).load(migrate_legacy=True)
 
     child = registry.get('child_ws')
     assert registry.active == 'child_ws'
     assert child.extends == ['base_ws']
-    assert child.button_config.endswith('button_commands_child_ws.yaml')
-    assert child.launch_config.endswith('child_ws_experiments.yaml')
-    assert child.sim_command == 'roslaunch demo demo.launch'
+    assert child.button_config == ''
+    assert child.launch_config == ''
 
 
-def test_known_workspaces_infer_their_docker_images(tmp_path):
+def test_new_workspaces_do_not_infer_machine_specific_images(tmp_path):
     registry = WorkspaceRegistry(
         tmp_path / 'workspaces.yaml',
         resources_root=tmp_path,
@@ -387,12 +364,8 @@ def test_known_workspaces_infer_their_docker_images(tmp_path):
         )
     )
 
-    assert gpt.image == (
-        'ozkrelo/x_mobipick_labs:gpt_ws_from_oscar_user'
-    )
-    assert rae.image == (
-        'ozkrelo/x_mobipick_labs:rae_ws_from_oscar_user'
-    )
+    assert gpt.image == ''
+    assert rae.image == ''
 
 
 def test_workspace_image_falls_back_to_gui_default(tmp_path):

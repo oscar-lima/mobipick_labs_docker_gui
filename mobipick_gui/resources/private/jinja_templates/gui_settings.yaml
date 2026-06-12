@@ -13,14 +13,14 @@ window:
   title: "Mobipick Labs Control"    # title displayed on the window chrome
 
 window_layout:
-  state_file: "private/experiments/window_layout.yaml"  # where to save captured window positions (relative paths are resolved from the data root)
+  state_file: "~/.config/mobipick-labs-docker-gui/window_layout.yaml"
   auto_apply: true                                      # when true, apply saved sizes/positions to matching windows after they appear
   apply_delay_ms: "auto"                                # wait this long before applying layout; "auto" waits until the last auto-launch timeline entry finishes
 
 recording:
   enabled_by_default: false             # leave "Record screen" unchecked on startup
   workspace_name: "{{workspace_raw}}"   # used when building recording filenames (e.g., 1_{{workspace_raw}}_30_09_142500.mp4)
-  output_dir: "private/recordings"      # directory where videos and collected logs are stored
+  output_dir: "~/.local/share/mobipick-labs-docker-gui/recordings"
   resolution: "3440x1440"               # default ffmpeg capture resolution (-s)
   presets: ["1920x1080", "2560x1440", "3440x1440"]  # options shown in the resolution dropdown
   include_detected_resolution: true     # when true, add the detected primary monitor resolution as a selectable option
@@ -63,9 +63,8 @@ terminal:
   drop_to_host_user: true                    # when false, the GUI keeps terminals running as root inside the container
 
 images:
-  default: "ozkrelo/x_mobipick_labs:gpt_ws_from_oscar_user" # image:tag selected by default when the GUI starts
-  # default: "ozkrelo/x_mobipick_labs:rae_ws_from_oscar_user" # image:tag selected by default when the GUI starts
-  discovery_filters: ["x_mobipick_labs"]         # repository substrings used to filter docker images for the dropdown
+  default: "ozkrelo/mobipick_labs:noetic"        # portable base image selected by default
+  discovery_filters: ["mobipick"]                 # repository substrings used to filter docker images for the dropdown
   include_none_tag: false                     # include dangling (<none>) tags in the image list when true
   related_container_keywords: ["mobipick", "mobipick_cmd", "mobipick-run", "rqt", "rviz"]  # container name fragments treated as related
   related_image_keywords: ["mobipick_labs"]  # extra image substrings treated as related for cleanup

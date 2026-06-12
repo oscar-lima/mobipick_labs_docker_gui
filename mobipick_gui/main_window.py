@@ -43,10 +43,10 @@ from .ansi import CSI_SEQ_RE, OSC_SEQ_RE, ansi_to_html
 from .config import (
     BUTTON_CONFIG_FILE,
     CONFIG,
-    CONFIG_FILE,
     DEFAULT_YAML_PATH,
     PROJECT_ROOT,
     SCRIPT_CLEAN,
+    USER_CONFIG_FILE,
     WINDOW_LAYOUT_FILE,
     load_docker_cp_config,
     load_button_layout,
@@ -126,7 +126,6 @@ class MainWindow(QMainWindow):
         self._project_root = PROJECT_ROOT
         self._workspace_load_error = ''
         workspace_registry = WorkspaceRegistry(
-            resources_root=PROJECT_ROOT,
             container_workspace_root=(
                 Path(
                     CONFIG['process']['qprocess_env'][
@@ -194,7 +193,7 @@ class MainWindow(QMainWindow):
         else:
             self._window_layout_auto_apply = bool(raw_auto_apply)
         raw_layout_path = self._window_layout_cfg.get('state_file') or str(WINDOW_LAYOUT_FILE)
-        layout_path = Path(raw_layout_path)
+        layout_path = Path(raw_layout_path).expanduser()
         if not layout_path.is_absolute():
             layout_path = PROJECT_ROOT / layout_path
         self._window_layout_path = layout_path
@@ -712,12 +711,39 @@ class MainWindow(QMainWindow):
             self._workspace_dialog.raise_()
             self._workspace_dialog.activateWindow()
             return
-        dialog = WorkspaceManagerDialog(self._workspace_registry, self)
+        dialog = WorkspaceManagerDialog(
+            self._workspace_registry,
+            self,
+            replace_allowed=lambda: not self._workspace_processes_running(),
+        )
         dialog.workspace_activated.connect(self._activate_workspace)
         dialog.build_requested.connect(self._build_workspace)
+        dialog.settings_imported.connect(
+            self._apply_imported_workspace_settings
+        )
         dialog.finished.connect(self._on_workspace_manager_closed)
         self._workspace_dialog = dialog
         dialog.show()
+
+    def _apply_imported_workspace_settings(self) -> None:
+        self._reset_workspace_tabs()
+        self._reload_workspace_profile()
+        target_image = self._workspace_image(
+            self._workspace_registry.active
+        )
+        if target_image and target_image in self._image_choices:
+            self._select_image(target_image, log_selection=False)
+        self._create_workspace_tabs()
+        self._apply_env_to_all_tabs()
+        active = self._workspace_registry.active_workspace()
+        self._recording_workspace_name = (
+            active.name
+            if active
+            else self._normalize_workspace_name(
+                self._recording_cfg.get('workspace_name', 'workspace')
+            )
+        )
+        self._populate_workspace_combo()
 
     def _on_workspace_manager_closed(self, _result: int) -> None:
         self._workspace_dialog = None
@@ -1405,11 +1431,12 @@ class MainWindow(QMainWindow):
     def _inform_no_images_and_exit(self):
         filters = self._images_cfg.get('discovery_filters', [])
         filters_desc = ', '.join(str(item) for item in filters) if filters else '(no filters)'
-        config_path = str(CONFIG_FILE)
+        config_path = str(USER_CONFIG_FILE)
         message = (
             'No docker images matched the configured discovery filters.\n\n'
             f'Filters: {filters_desc}\n'
-            f'Update the "images.discovery_filters" setting in {config_path} '
+            f'Create or update the "images.discovery_filters" setting in '
+            f'{config_path} '
             'to change which images are considered.\n\n'
             'The application will now exit.'
         )
@@ -1817,8 +1844,8 @@ class MainWindow(QMainWindow):
     # ---------- Recording ----------
 
     def _resolve_recording_output_root(self) -> Path:
-        raw = str(self._recording_cfg.get('output_dir') or 'private/recordings')
-        path = Path(raw)
+        raw = str(self._recording_cfg.get('output_dir') or '')
+        path = Path(raw).expanduser()
         if not path.is_absolute():
             path = PROJECT_ROOT / path
         return path

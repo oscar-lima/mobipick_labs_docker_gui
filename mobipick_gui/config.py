@@ -61,8 +61,38 @@ DOCKER_CP_CONFIG_FILE = PROJECT_ROOT / 'config' / 'docker_cp_image_tag.yaml'
 SCRIPT_CLEAN = str(PROJECT_ROOT / 'clean.bash')
 DEFAULT_YAML_PATH = str(PROJECT_ROOT / 'config' / 'worlds.yaml')
 BUTTON_CONFIG_FILE = PROJECT_ROOT / 'config' / 'button_commands_labs.yaml'
-LAUNCH_SEQUENCE_DIR = PROJECT_ROOT / 'private' / 'experiments'
-WINDOW_LAYOUT_FILE = LAUNCH_SEQUENCE_DIR / 'window_layout.yaml'
+
+
+def default_user_config_dir() -> Path:
+    """Return the writable per-user configuration directory."""
+    config_home = os.environ.get('XDG_CONFIG_HOME')
+    base = Path(config_home).expanduser() if config_home else Path.home() / '.config'
+    return base / 'mobipick-labs-docker-gui'
+
+
+def default_user_data_dir() -> Path:
+    """Return the writable per-user data directory."""
+    data_home = os.environ.get('XDG_DATA_HOME')
+    base = (
+        Path(data_home).expanduser()
+        if data_home
+        else Path.home() / '.local' / 'share'
+    )
+    return base / 'mobipick-labs-docker-gui'
+
+
+def default_user_config_path() -> Path:
+    """Return the optional per-user GUI settings override path."""
+    override = os.environ.get('MOBIPICK_GUI_CONFIG')
+    if override:
+        return Path(override).expanduser()
+    return default_user_config_dir() / 'gui_settings.yaml'
+
+
+USER_CONFIG_FILE = default_user_config_path()
+USER_DATA_DIR = default_user_data_dir()
+LAUNCH_SEQUENCE_DIR = default_user_config_dir() / 'launch_sequences'
+WINDOW_LAYOUT_FILE = default_user_config_dir() / 'window_layout.yaml'
 
 
 def _detect_numeric_id(getter_name: str, env_candidates: tuple[str, ...], fallback: str) -> str:
@@ -158,7 +188,7 @@ CONFIG_DEFAULTS: Dict[str, Dict] = {
     },
     'recording': {
         'enabled_by_default': False,
-        'output_dir': 'private/recordings',
+        'output_dir': str(USER_DATA_DIR / 'recordings'),
         'workspace_name': 'workspace',
         'resolution': '3440x1440',
         'presets': ['1920x1080', '2560x1440', '3440x1440'],
@@ -318,14 +348,18 @@ def _deep_update(base: Dict, updates: Dict) -> Dict:
 
 def _load_config() -> Dict:
     config = copy.deepcopy(CONFIG_DEFAULTS)
-    try:
-        if CONFIG_FILE.is_file():
-            with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
-                data = yaml.safe_load(f) or {}
-            if isinstance(data, dict):
-                _deep_update(config, data)
-    except Exception as exc:
-        print(f'Warning: failed to load configuration from {CONFIG_FILE}: {exc}', file=sys.stderr)
+    for path in (CONFIG_FILE, USER_CONFIG_FILE):
+        try:
+            if path.is_file():
+                with open(path, 'r', encoding='utf-8') as handle:
+                    data = yaml.safe_load(handle) or {}
+                if isinstance(data, dict):
+                    _deep_update(config, data)
+        except Exception as exc:
+            print(
+                f'Warning: failed to load configuration from {path}: {exc}',
+                file=sys.stderr,
+            )
     return config
 
 
@@ -461,8 +495,6 @@ def load_launch_sequence_plan(
             )
         search_dirs = [
             LAUNCH_SEQUENCE_DIR,
-            PROJECT_ROOT / 'private' / 'launch_sequences',
-            PROJECT_ROOT / 'private' / 'experiments',
         ]
         for directory in search_dirs:
             for name in filenames:
@@ -566,6 +598,11 @@ __all__ = [
     'CONFIG',
     'CONFIG_DEFAULTS',
     'CONFIG_FILE',
+    'USER_CONFIG_FILE',
+    'USER_DATA_DIR',
+    'default_user_config_dir',
+    'default_user_config_path',
+    'default_user_data_dir',
     'DOCKER_CP_CONFIG_FILE',
     'DEFAULT_YAML_PATH',
     'load_docker_cp_config',

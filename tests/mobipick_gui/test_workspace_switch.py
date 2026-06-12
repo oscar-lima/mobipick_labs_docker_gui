@@ -42,7 +42,7 @@ buttons:
             name='gpt_ws',
             path=str(tmp_path / 'gpt_ws'),
             button_config=str(gpt_buttons),
-            image='ozkrelo/x_mobipick_labs:gpt_ws_from_oscar_user',
+            image='example/mobipick:gpt',
         )
     )
     registry.upsert(
@@ -50,15 +50,16 @@ buttons:
             name='rae_upom_mobipick_ws',
             path=str(tmp_path / 'rae_upom_mobipick_ws'),
             button_config=str(rae_buttons),
-            image='ozkrelo/x_mobipick_labs:rae_ws_from_oscar_user',
+            image='example/mobipick:rae',
         )
     )
     registry.active = 'gpt_ws'
     registry.save()
 
     images = [
-        {'ref': 'ozkrelo/x_mobipick_labs:gpt_ws_from_oscar_user'},
-        {'ref': 'ozkrelo/x_mobipick_labs:rae_ws_from_oscar_user'},
+        {'ref': 'ozkrelo/mobipick_labs:noetic'},
+        {'ref': 'example/mobipick:gpt'},
+        {'ref': 'example/mobipick:rae'},
     ]
     monkeypatch.setenv('MOBIPICK_WORKSPACE_CONFIG', str(registry_path))
     monkeypatch.setattr(
@@ -98,7 +99,7 @@ buttons:
     )
     assert window._activate_workspace('rae_upom_mobipick_ws')
     assert window._workspace_registry.active == 'rae_upom_mobipick_ws'
-    assert window._selected_image.endswith('rae_ws_from_oscar_user')
+    assert window._selected_image == 'example/mobipick:rae'
     assert window._config_button_order == ['rae-action']
     assert 'custom-stale' not in window.tasks
     assert window.tabs.indexOf(stale_output) == -1

@@ -58,7 +58,6 @@ services:
     # hostname: mobipick # from mobipick service above
     # gazebo server
     image: ${MOBIPICK_IMAGE:-ozkrelo/mobipick_labs:noetic}
-    # image: ${MOBIPICK_IMAGE:-ozkrelo/x_mobipick_labs:oscar_user_from_1.2}
     working_dir: ${MOBIPICK_WORKSPACE_PATH:-/tmp}
     entrypoint: /usr/local/bin/entrypoint_user.sh
     # user: "${USER}" # from mobipick service above
