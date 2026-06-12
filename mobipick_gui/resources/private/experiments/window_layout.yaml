@@ -1,4 +1,4 @@
-captured_at: '2025-12-02T01:32:14'
+captured_at: '2025-12-02T14:06:42'
 windows:
 - title: pick_n_place.rviz* - RViz
   wm_class:
@@ -7,23 +7,23 @@ windows:
   desktop: 0
   pid: 27
   geometry:
-    x: 2285
-    y: 211
+    x: 1405
+    y: 309
     width: 1169
     height: 630
-  stack_index: 8
+  stack_index: 10
 - title: Simulated UR Dashboard - E-Stop
   wm_class:
   - simulated_ur_dashboard.py
   - simulated_ur_dashboard.py
   desktop: 0
-  pid: 274
+  pid: 290
   geometry:
-    x: 2010
+    x: 2038
     y: 1349
     width: 240
     height: 140
-  stack_index: 9
+  stack_index: 11
 - title: rqt_robot_steering__RobotSteering - rqt
   wm_class:
   - rqt_robot_steering
@@ -31,35 +31,35 @@ windows:
   desktop: 0
   pid: 236
   geometry:
-    x: 1966
-    y: 132
+    x: 1272
+    y: 1168
     width: 289
     height: 316
-  stack_index: 10
+  stack_index: 12
 - title: rqt_joint_trajectory_controller__JointTrajectoryController - rqt
   wm_class:
   - rqt_joint_trajectory_controller
   - rqt_joint_trajectory_controller
   desktop: 0
-  pid: 253
+  pid: 287
   geometry:
-    x: 1966
-    y: 502
+    x: 1582
+    y: 1029
     width: 292
-    height: 412
-  stack_index: 11
+    height: 451
+  stack_index: 13
 - title: Gazebo
   wm_class:
   - gazebo
   - gazebo
   desktop: 0
-  pid: 661
+  pid: 596
   geometry:
-    x: 2295
-    y: 885
-    width: 1153
-    height: 601
-  stack_index: 12
+    x: 1628
+    y: 852
+    width: 946
+    height: 637
+  stack_index: 14
 - title: Mobipick Command Generator
   wm_class:
   - command_gui.py
@@ -67,23 +67,11 @@ windows:
   desktop: 0
   pid: 49
   geometry:
-    x: 92
-    y: 130
-    width: 877
-    height: 1352
-  stack_index: 13
-- title: Recording Control
-  wm_class:
-  - gui.py
-  - gui.py
-  desktop: 0
-  pid: 3508548
-  geometry:
-    x: 1955
-    y: 827
-    width: 360
-    height: 480
-  stack_index: 14
+    x: 109
+    y: 144
+    width: 809
+    height: 1345
+  stack_index: 15
 - title: Mobipick GPT Debug Monitor
   wm_class:
   - cot_gui.py
@@ -91,8 +79,20 @@ windows:
   desktop: 0
   pid: 57
   geometry:
-    x: 976
-    y: 132
+    x: 920
+    y: 143
     width: 980
-    height: 1349
-  stack_index: 15
+    height: 1346
+  stack_index: 16
+- title: Recording Control
+  wm_class:
+  - gui.py
+  - gui.py
+  desktop: 0
+  pid: 3752277
+  geometry:
+    x: 1914
+    y: 159
+    width: 360
+    height: 99
+  stack_index: 17

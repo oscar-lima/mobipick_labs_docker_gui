@@ -3,7 +3,7 @@ services:
     hostname: mobipick
     # gazebo server
     image: ${MOBIPICK_IMAGE:-ozkrelo/mobipick_labs:noetic}
-    working_dir: ${HOME}/ros_ws/
+    working_dir: ${MOBIPICK_WORKSPACE_PATH:-/tmp}
     entrypoint: /usr/local/bin/entrypoint_user.sh
     user: "${USER}"
     deploy:
@@ -17,14 +17,23 @@ services:
       - "ROS_DISTRO=noetic"
       - "GAZEBO_MASTER_URI=http://mobipick:12345"
       - "ROS_MASTER_URI=http://mobipick:11311"
-      - "ROS_HOSTNAME=mobipick"
       - NVIDIA_VISIBLE_DEVICES=all # for docker-nvidia2
       - NVIDIA_DRIVER_CAPABILITIES=all # for docker-nvidia2
       - XDG_RUNTIME_DIR
       - __NV_PRIME_RENDER_OFFLOAD
       - __GLX_VENDOR_LIBRARY_NAME
       - DISABLE_ROS1_EOL_WARNINGS=1
-      # - ROS_WORKSPACE=${HOME}/{{ros1_workspace}}/src
+      - MOBIPICK_WORKSPACE_ENABLED=${MOBIPICK_WORKSPACE_ENABLED:-0}
+      - MOBIPICK_WORKSPACE_NAME=${MOBIPICK_WORKSPACE_NAME:-}
+      - MOBIPICK_WORKSPACE_PATH=${MOBIPICK_WORKSPACE_PATH:-}
+      - MOBIPICK_WORKSPACE_SETUP=${MOBIPICK_WORKSPACE_SETUP:-}
+      - MOBIPICK_WORKSPACE_DEVEL_PATHS=${MOBIPICK_WORKSPACE_DEVEL_PATHS:-}
+      - MOBIPICK_WORKSPACE_COMPAT_ROOTS=${MOBIPICK_WORKSPACE_COMPAT_ROOTS:-}
+      - MOBIPICK_WORKSPACE_MOUNT_TARGET=${MOBIPICK_WORKSPACE_MOUNT_TARGET:-}
+      - MOBIPICK_WORKSPACE_BUILT=${MOBIPICK_WORKSPACE_BUILT:-0}
+      - MOBIPICK_ROS_PACKAGE_PATH=${MOBIPICK_ROS_PACKAGE_PATH:-}
+      - ROS_WORKSPACE=${ROS_WORKSPACE:-}
+      - MOBIPICK_ROS_USE_IP=${MOBIPICK_ROS_USE_IP:-1}
       # - HOST_USER=${USER}
     volumes:
       - /tmp/.X11-unix:/tmp/.X11-unix:ro  # for Gazebo GUI
@@ -32,13 +41,14 @@ services:
       - ./scripts:/scripts_430ofkjl04fsw:rw
       # uncomment to add custom entrypoint script
       - ./custom_entrypoint.sh:/usr/local/bin/entrypoint_user.sh:ro
-      - ./private/select_ros1_ws.sh:${HOME}/scripts/personal_config/select_ros1_ws.sh:ro
-      - ~/ros1_ws:${HOME}/ros_ws:rw
+      - type: bind
+        source: ${MOBIPICK_WORKSPACE_MOUNT_SOURCE:-./empty_workspace}
+        target: ${MOBIPICK_WORKSPACE_MOUNT_TARGET:-/tmp/mobipick-empty-workspace}
     expose:
       - 11311 # roscore
       - 12345 # gzserver
     privileged: true  # for Gazebo GUI
-    command: {{ command }}
+    command: ['roslaunch', 'tables_demo_bringup', 'demo_sim.launch', 'world_config:=${MOBIPICK_WORLD:-moelk_tables}']
     networks:
       default:
         aliases:
@@ -49,7 +59,7 @@ services:
     # gazebo server
     image: ${MOBIPICK_IMAGE:-ozkrelo/mobipick_labs:noetic}
     # image: ${MOBIPICK_IMAGE:-ozkrelo/x_mobipick_labs:oscar_user_from_1.2}
-    working_dir: ${HOME}/ros_ws/
+    working_dir: ${MOBIPICK_WORKSPACE_PATH:-/tmp}
     entrypoint: /usr/local/bin/entrypoint_user.sh
     # user: "${USER}" # from mobipick service above
     deploy:
@@ -69,6 +79,17 @@ services:
       - __NV_PRIME_RENDER_OFFLOAD
       - __GLX_VENDOR_LIBRARY_NAME
       - DISABLE_ROS1_EOL_WARNINGS=1
+      - MOBIPICK_WORKSPACE_ENABLED=${MOBIPICK_WORKSPACE_ENABLED:-0}
+      - MOBIPICK_WORKSPACE_NAME=${MOBIPICK_WORKSPACE_NAME:-}
+      - MOBIPICK_WORKSPACE_PATH=${MOBIPICK_WORKSPACE_PATH:-}
+      - MOBIPICK_WORKSPACE_SETUP=${MOBIPICK_WORKSPACE_SETUP:-}
+      - MOBIPICK_WORKSPACE_DEVEL_PATHS=${MOBIPICK_WORKSPACE_DEVEL_PATHS:-}
+      - MOBIPICK_WORKSPACE_COMPAT_ROOTS=${MOBIPICK_WORKSPACE_COMPAT_ROOTS:-}
+      - MOBIPICK_WORKSPACE_MOUNT_TARGET=${MOBIPICK_WORKSPACE_MOUNT_TARGET:-}
+      - MOBIPICK_WORKSPACE_BUILT=${MOBIPICK_WORKSPACE_BUILT:-0}
+      - MOBIPICK_ROS_PACKAGE_PATH=${MOBIPICK_ROS_PACKAGE_PATH:-}
+      - ROS_WORKSPACE=${ROS_WORKSPACE:-}
+      - MOBIPICK_ROS_USE_IP=${MOBIPICK_ROS_USE_IP:-1}
       # - HOST_USER=${USER} # from mobipick service above
     volumes:
       - /tmp/.X11-unix:/tmp/.X11-unix:ro  # for gazebo gui
@@ -76,8 +97,9 @@ services:
       - ./scripts:/scripts_430ofkjl04fsw:rw
       # uncomment to add custom entrypoint script
       - ./custom_entrypoint.sh:/usr/local/bin/entrypoint_user.sh:ro
-      - ./private/select_ros1_ws.sh:${HOME}/scripts/personal_config/select_ros1_ws.sh:ro
-      - ~/ros1_ws:${HOME}/ros_ws:rw
+      - type: bind
+        source: ${MOBIPICK_WORKSPACE_MOUNT_SOURCE:-./empty_workspace}
+        target: ${MOBIPICK_WORKSPACE_MOUNT_TARGET:-/tmp/mobipick-empty-workspace}
       - ~/.ssh:${HOME}/.ssh:rw # for git access
     privileged: true  # for Gazebo GUI
 

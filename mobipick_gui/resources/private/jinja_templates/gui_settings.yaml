@@ -18,7 +18,7 @@ window_layout:
   apply_delay_ms: "auto"                                # wait this long before applying layout; "auto" waits until the last auto-launch timeline entry finishes
 
 recording:
-  enabled_by_default: true              # set to false to leave "Record screen" unchecked on startup
+  enabled_by_default: false             # leave "Record screen" unchecked on startup
   workspace_name: "{{workspace_raw}}"   # used when building recording filenames (e.g., 1_{{workspace_raw}}_30_09_142500.mp4)
   output_dir: "private/recordings"      # directory where videos and collected logs are stored
   resolution: "3440x1440"               # default ffmpeg capture resolution (-s)
@@ -54,6 +54,7 @@ process:
   compose_run_env:
     PYTHONUNBUFFERED: "1"                     # exported into docker compose runs to force unbuffered stdout
     PYTHONIOENCODING: "UTF-8"                 # ensure python subprocesses emit UTF-8
+    MOBIPICK_ROS_USE_IP: "1"                  # advertise container bridge IPs instead of disposable Docker hostnames
 
 terminal:
   launcher: "gnome-terminal --title \"{title}\" -- bash -lc \"{command}\""  # external terminal command template

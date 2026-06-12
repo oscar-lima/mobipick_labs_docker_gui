@@ -157,7 +157,7 @@ CONFIG_DEFAULTS: Dict[str, Dict] = {
         'apply_delay_ms': 'auto',
     },
     'recording': {
-        'enabled_by_default': True,
+        'enabled_by_default': False,
         'output_dir': 'private/recordings',
         'workspace_name': 'workspace',
         'resolution': '3440x1440',
@@ -205,6 +205,7 @@ CONFIG_DEFAULTS: Dict[str, Dict] = {
         'compose_run_env': {
             'PYTHONUNBUFFERED': '1',
             'PYTHONIOENCODING': 'UTF-8',
+            'MOBIPICK_ROS_USE_IP': '1',
             'MOBIPICK_UID': HOST_UID,
             'MOBIPICK_GID': HOST_GID,
             'MOBIPICK_HOST_USER': HOST_USER,
@@ -331,10 +332,14 @@ def _load_config() -> Dict:
 CONFIG = _load_config()
 
 
-def load_button_layout() -> list[dict]:
+def load_button_layout(config_path: str | Path | None = None) -> list[dict]:
     """Load configurable command buttons."""
     entries = copy.deepcopy(BUTTON_CONFIG_DEFAULTS)
-    raw_path = CONFIG.get('buttons', {}).get('config_file') or str(BUTTON_CONFIG_FILE)
+    raw_path = (
+        config_path
+        or CONFIG.get('buttons', {}).get('config_file')
+        or str(BUTTON_CONFIG_FILE)
+    )
     path = Path(raw_path)
     if not path.is_absolute():
         path = PROJECT_ROOT / raw_path
@@ -382,7 +387,10 @@ def load_button_layout() -> list[dict]:
     return entries
 
 
-def load_launch_sequence_plan(button_config_path: str | Path | None = None) -> Dict:
+def load_launch_sequence_plan(
+    button_config_path: str | Path | None = None,
+    launch_config_path: str | Path | None = None,
+) -> Dict:
     """Load auto-launch timeline and button text."""
 
     def _normalize_timeline(entries) -> list[dict]:
@@ -422,6 +430,11 @@ def load_launch_sequence_plan(button_config_path: str | Path | None = None) -> D
 
     def _candidate_paths() -> list[Path]:
         candidates: list[Path] = []
+        if launch_config_path:
+            explicit = Path(launch_config_path)
+            if not explicit.is_absolute():
+                explicit = PROJECT_ROOT / explicit
+            candidates.append(explicit)
         if raw_path and raw_path.lower() not in {'auto', 'default'}:
             custom = Path(raw_path)
             if not custom.is_absolute():

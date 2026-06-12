@@ -41,6 +41,7 @@ from PyQt5.QtWidgets import (
 
 from .ansi import CSI_SEQ_RE, OSC_SEQ_RE, ansi_to_html
 from .config import (
+    BUTTON_CONFIG_FILE,
     CONFIG,
     CONFIG_FILE,
     DEFAULT_YAML_PATH,
@@ -57,6 +58,8 @@ CONTAINER_SCRIPTS_DIR = str(
 )
 from .process_tab import ProcessTab
 from .window_layout import WindowLayoutManager
+from .workspace_dialog import WorkspaceManagerDialog
+from .workspaces import WorkspaceRegistry
 
 _SIGINT_TRIGGERED = False
 
@@ -121,6 +124,34 @@ class MainWindow(QMainWindow):
         self._terminal_stream_tab_key: str | None = None
         self._terminal_stream_counter = 0
         self._project_root = PROJECT_ROOT
+        self._workspace_load_error = ''
+        workspace_registry = WorkspaceRegistry(
+            resources_root=PROJECT_ROOT,
+            container_workspace_root=(
+                Path(
+                    CONFIG['process']['qprocess_env'][
+                        'MOBIPICK_HOST_HOME'
+                    ]
+                )
+                / 'ros_ws'
+            ),
+        )
+        try:
+            workspace_registry.load()
+        except Exception as exc:
+            self._workspace_load_error = (
+                f'Failed to load workspace registry '
+                f'{workspace_registry.path}: {exc}'
+            )
+        self._workspace_registry = workspace_registry
+        self._empty_workspace_dir = (
+            self._workspace_registry.path.parent / 'empty_workspace'
+        )
+        try:
+            self._empty_workspace_dir.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            self._empty_workspace_dir = PROJECT_ROOT / 'empty_workspace'
+        self._workspace_dialog: WorkspaceManagerDialog | None = None
         self._docker_cp_config = load_docker_cp_config()
         self._synced_container_refs: set[str] = set()
         self._toggle_states: dict[str, str] = {}
@@ -140,8 +171,13 @@ class MainWindow(QMainWindow):
         self._exit_in_progress = False
         self._exit_dialog: Optional[QMessageBox] = None
         self._docker_stop_timeout = self._normalize_stop_timeout(CONFIG['exit'].get('docker_stop_timeout'))
-        self._button_layout = load_button_layout()
-        self._launch_plan = load_launch_sequence_plan(CONFIG.get('buttons', {}).get('config_file'))
+        self._button_layout = load_button_layout(
+            self._workspace_button_config_path()
+        )
+        self._launch_plan = load_launch_sequence_plan(
+            self._workspace_button_config_path(),
+            self._workspace_launch_config_path(),
+        )
         self._launch_retry_ms = max(0, int(self._launch_plan.get('retry_delay_ms', 750) or 0))
         self._launch_max_retry = max(0, int(self._launch_plan.get('max_retry_attempts', 6) or 0))
         self._button_widgets: dict[str, QPushButton] = {}
@@ -173,9 +209,14 @@ class MainWindow(QMainWindow):
         self._window_layout_manager.record_baseline(exclude_titles={self.windowTitle()})
         self._window_layout_dialog: QDialog | None = None
         self._recording_cfg = CONFIG.get('recording', {})
-        self._recording_default_checked = bool(self._recording_cfg.get('enabled_by_default', True))
+        self._recording_default_checked = bool(
+            self._recording_cfg.get('enabled_by_default', False)
+        )
         self._recording_output_root = self._resolve_recording_output_root()
         self._recording_workspace_name = self._normalize_workspace_name(self._recording_cfg.get('workspace_name'))
+        active_workspace = self._workspace_registry.active_workspace()
+        if active_workspace:
+            self._recording_workspace_name = active_workspace.name
         self._screen_resolution = ''
         self._recording_counter = self._load_recording_counter()
         self._recording_resolutions = self._load_recording_resolutions()
@@ -191,8 +232,32 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
         root = QVBoxLayout(central)
 
+        workspace_row = QHBoxLayout()
+        workspace_row.addWidget(QLabel('ROS 1 workspace:'))
+        self.workspace_combo = QComboBox()
+        self.workspace_combo.setSizePolicy(
+            QSizePolicy.Expanding,
+            QSizePolicy.Preferred,
+        )
+        self.workspace_combo.currentIndexChanged.connect(
+            self._on_workspace_changed
+        )
+        workspace_row.addWidget(self.workspace_combo)
+        self.manage_workspaces_button = QPushButton('Configure Workspaces')
+        self.manage_workspaces_button.clicked.connect(
+            self._open_workspace_manager
+        )
+        workspace_row.addWidget(self.manage_workspaces_button)
+        self.build_workspace_button = QPushButton('Build Active Workspace')
+        self.build_workspace_button.clicked.connect(
+            self._build_active_workspace
+        )
+        workspace_row.addWidget(self.build_workspace_button)
+        root.addLayout(workspace_row)
+
         # top controls
         top = QHBoxLayout()
+        self._top_controls_layout = top
         self.roscore_button = QPushButton()
         self.roscore_button.clicked.connect(self._on_roscore_toggle_clicked)
         top.addWidget(self.roscore_button)
@@ -214,6 +279,7 @@ class MainWindow(QMainWindow):
         spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         top.addWidget(spacer)
         root.addLayout(top)
+        self._populate_workspace_combo()
 
         self.clear_button = QPushButton('Clear Current Tab')
         self.clear_button.clicked.connect(self.clear_current_tab)
@@ -380,18 +446,7 @@ class MainWindow(QMainWindow):
         search.addWidget(self.find_next_button)
         root.addLayout(search)
 
-        # fixed tabs
-        self._ensure_tab('roscore', 'Roscore', closable=False)
-        for key in self._config_button_order:
-            cfg = self._config_buttons[key]
-            label = cfg.get('label') or key
-            self._ensure_tab(key, label, closable=False)
-        self._ensure_tab('sim', 'Sim', closable=False)
-        self._ensure_tab('tables', 'Tables Demo', closable=False)
-        self._ensure_tab('rviz', 'RViz', closable=False)
-        self._ensure_tab('rqt', 'RQt Tables', closable=False)
-        # central log tab
-        self._ensure_tab('log', 'Log', closable=False)
+        self._create_workspace_tabs()
 
         self._apply_env_to_all_tabs()
         self._refresh_script_options()
@@ -411,10 +466,326 @@ class MainWindow(QMainWindow):
         self.update_sim_status_from_poll(force=True)
 
         self._console_log(1, f'Mobipick Labs Control ready (verbosity {self._verbosity})')
+        if self._workspace_load_error:
+            self._console_log(1, self._workspace_load_error)
 
         app_instance = QApplication.instance()
         if app_instance:
             app_instance.aboutToQuit.connect(self._ensure_cleanup_before_exit)
+
+    # ---------- ROS workspace management ----------
+
+    def _workspace_button_config_path(self) -> str | None:
+        workspace = self._workspace_registry.active_workspace()
+        if workspace and workspace.button_config:
+            return workspace.button_config
+        return str(BUTTON_CONFIG_FILE)
+
+    def _workspace_launch_config_path(self) -> str | None:
+        workspace = self._workspace_registry.active_workspace()
+        if workspace and workspace.launch_config:
+            return workspace.launch_config
+        return None
+
+    def _workspace_runtime_env(
+        self,
+        workspace_name: str | None = None,
+    ) -> dict[str, str]:
+        return self._workspace_registry.runtime_environment(
+            empty_mount_source=self._empty_workspace_dir,
+            workspace_name=workspace_name,
+        )
+
+    def _workspace_image(self, name: str | None) -> str:
+        return self._workspace_registry.image_for(
+            name,
+            str(self._images_cfg.get('default', '') or ''),
+        )
+
+    def _populate_workspace_combo(self) -> None:
+        selected = self._workspace_registry.active
+        self.workspace_combo.blockSignals(True)
+        self.workspace_combo.clear()
+        self.workspace_combo.addItem('Docker image default', '')
+        for workspace in self._workspace_registry.workspaces:
+            self.workspace_combo.addItem(
+                f'{workspace.name}  [{workspace.directory}]',
+                workspace.name,
+            )
+        index = self.workspace_combo.findData(selected)
+        self.workspace_combo.setCurrentIndex(index if index >= 0 else 0)
+        self.workspace_combo.blockSignals(False)
+        active = self._workspace_registry.active_workspace()
+        self.build_workspace_button.setEnabled(active is not None)
+        if active:
+            setup_status = (
+                'built'
+                if self._workspace_registry.is_runtime_built(active)
+                else 'not built; base ROS remains available'
+            )
+            self.workspace_combo.setToolTip(
+                f'{active.directory}\n{setup_status}'
+            )
+        else:
+            self.workspace_combo.setToolTip(
+                'Use the catkin workspace bundled in the selected Docker image.'
+            )
+
+    def _on_workspace_changed(self, index: int) -> None:
+        name = str(self.workspace_combo.itemData(index) or '')
+        if name == self._workspace_registry.active:
+            return
+        self._activate_workspace(name)
+
+    def _workspace_processes_running(self) -> bool:
+        return bool(
+            self._roscore_running_cached
+            or self._sim_running_cached
+            or self._terminal_running_cached
+            or self._recording_is_active()
+            or any(tab.is_running() for tab in self.tasks.values())
+        )
+
+    def _activate_workspace(self, name: str) -> bool:
+        if name == self._workspace_registry.active:
+            self._populate_workspace_combo()
+            return True
+        workspace = self._workspace_registry.get(name) if name else None
+        if name and workspace is None:
+            QMessageBox.warning(
+                self,
+                'ROS 1 Workspace',
+                f'Workspace "{name}" is not configured.',
+            )
+            self._populate_workspace_combo()
+            return False
+        if self._workspace_processes_running():
+            QMessageBox.warning(
+                self,
+                'ROS 1 Workspace',
+                'Stop running workspace processes before switching.',
+            )
+            self._populate_workspace_combo()
+            return False
+
+        target_image = self._workspace_image(name)
+        if target_image and target_image not in self._image_choices:
+            QMessageBox.warning(
+                self,
+                'ROS 1 Workspace',
+                f'The Docker image configured for this workspace is not '
+                f'installed:\n\n{target_image}\n\n'
+                'Install it or update the workspace settings before switching.',
+            )
+            self._populate_workspace_combo()
+            return False
+
+        current_name = self._workspace_registry.active or 'Docker image default'
+        target_name = name or 'Docker image default'
+        answer = QMessageBox.question(
+            self,
+            'Switch ROS 1 Workspace',
+            f'Switch from "{current_name}" to "{target_name}"?\n\n'
+            'All current tabs and their log output will be discarded and '
+            'recreated for the selected workspace.\n\n'
+            f'Docker image: {target_image or "(none)"}',
+            QMessageBox.Yes | QMessageBox.Cancel,
+            QMessageBox.Cancel,
+        )
+        if answer != QMessageBox.Yes:
+            self._populate_workspace_combo()
+            if self._workspace_dialog:
+                self._workspace_dialog.refresh(
+                    self._workspace_registry.active
+                )
+            return False
+
+        previous_name = self._workspace_registry.active
+        self._workspace_registry.active = name
+        try:
+            self._workspace_registry.save()
+        except (OSError, ValueError) as exc:
+            self._workspace_registry.active = previous_name
+            QMessageBox.critical(self, 'ROS 1 Workspace', str(exc))
+            self._populate_workspace_combo()
+            return False
+
+        self._reset_workspace_tabs()
+        self._reload_workspace_profile()
+        if target_image:
+            self._select_image(target_image, log_selection=False)
+        self._create_workspace_tabs()
+        self._apply_env_to_all_tabs()
+
+        if workspace:
+            self._recording_workspace_name = workspace.name
+            self._log_info(
+                f'active ROS 1 workspace: {workspace.name} '
+                f'({workspace.directory})'
+            )
+        else:
+            configured_name = self._recording_cfg.get(
+                'workspace_name',
+                'workspace',
+            )
+            self._recording_workspace_name = self._normalize_workspace_name(
+                configured_name
+            )
+            self._log_info('using the Docker image default ROS 1 workspace')
+        self._populate_workspace_combo()
+        if self._workspace_dialog:
+            self._workspace_dialog.refresh(name)
+        return True
+
+    def _reset_workspace_tabs(self) -> None:
+        self._cancel_auto_launch_timers()
+        self._cancel_recording_schedule()
+        self._auto_launch_running = False
+        self._auto_launch_active_keys.clear()
+        self._auto_launch_run_count = 0
+        self._script_active_tab_key = None
+        self._terminal_stream_tab_key = None
+        self._custom_counter = 0
+        self._last_log_origin.clear()
+        self._synced_container_refs.clear()
+        self._toggle_states.clear()
+
+        for tab in list(self.tasks.values()):
+            index = self.tabs.indexOf(tab.output)
+            if index >= 0:
+                self.tabs.removeTab(index)
+            tab.proc.deleteLater()
+            tab.output.deleteLater()
+        self.tasks.clear()
+
+    def _create_workspace_tabs(self) -> None:
+        self._ensure_tab('roscore', 'Roscore', closable=False)
+        for key in self._config_button_order:
+            config = self._config_buttons[key]
+            self._ensure_tab(
+                key,
+                str(config.get('label') or key),
+                closable=False,
+            )
+        self._ensure_tab('sim', 'Sim', closable=False)
+        self._ensure_tab('tables', 'Tables Demo', closable=False)
+        self._ensure_tab('rviz', 'RViz', closable=False)
+        self._ensure_tab('rqt', 'RQt Tables', closable=False)
+        self._ensure_tab('log', 'Log', closable=False)
+
+    def _reload_workspace_profile(self) -> None:
+        old_keys = list(self._config_button_order)
+        for key in old_keys:
+            button = self._button_widgets.pop(key, None)
+            if button:
+                self._top_controls_layout.removeWidget(button)
+                button.deleteLater()
+        self._button_layout = load_button_layout(
+            self._workspace_button_config_path()
+        )
+        self._launch_plan = load_launch_sequence_plan(
+            self._workspace_button_config_path(),
+            self._workspace_launch_config_path(),
+        )
+        self._launch_retry_ms = max(
+            0,
+            int(self._launch_plan.get('retry_delay_ms', 750) or 0),
+        )
+        self._launch_max_retry = max(
+            0,
+            int(self._launch_plan.get('max_retry_attempts', 6) or 0),
+        )
+        terminal_index = self._top_controls_layout.indexOf(
+            self.terminal_button
+        )
+        self._build_configurable_buttons(
+            self._top_controls_layout,
+            insert_at=terminal_index,
+        )
+        self.auto_launch_button.setToolTip(
+            str(self._launch_plan.get('button', {}).get('tooltip') or '')
+        )
+        self._update_buttons()
+
+    def _open_workspace_manager(self) -> None:
+        if self._workspace_dialog:
+            self._workspace_dialog.raise_()
+            self._workspace_dialog.activateWindow()
+            return
+        dialog = WorkspaceManagerDialog(self._workspace_registry, self)
+        dialog.workspace_activated.connect(self._activate_workspace)
+        dialog.build_requested.connect(self._build_workspace)
+        dialog.finished.connect(self._on_workspace_manager_closed)
+        self._workspace_dialog = dialog
+        dialog.show()
+
+    def _on_workspace_manager_closed(self, _result: int) -> None:
+        self._workspace_dialog = None
+        self._populate_workspace_combo()
+
+    def _build_active_workspace(self) -> None:
+        workspace = self._workspace_registry.active_workspace()
+        if workspace:
+            self._build_workspace(workspace.name)
+
+    def _build_workspace(self, name: str) -> None:
+        workspace = self._workspace_registry.get(name)
+        if not workspace:
+            return
+        if self._workspace_processes_running():
+            QMessageBox.warning(
+                self,
+                'Build Workspace',
+                'Stop running workspace processes before building.',
+            )
+            return
+        self._ensure_network(log_key='log')
+        key = f'build-{workspace.name}'
+        tab = self._ensure_tab(
+            key,
+            f'Build {workspace.name}',
+            closable=True,
+        )
+        if tab.is_running():
+            self._focus_tab(key)
+            return
+        workspace_env = self._workspace_runtime_env(workspace.name)
+        tab.set_environment_overrides(workspace_env)
+        exec_id = uuid.uuid4().hex
+        tab.exec_id = exec_id
+        tab.container_name = f'mobipick-build-{exec_id[:10]}'
+        command = self._workspace_registry.build_command(workspace)
+        args = [
+            'compose',
+            'run',
+            '--rm',
+            '--name',
+            tab.container_name,
+            '--label',
+            f'mobipick.exec={exec_id}',
+            '--label',
+            f'mobipick.tab={key}',
+            *self._compose_env_args(
+                workspace_env,
+                container_name=tab.container_name,
+            ),
+            'mobipick_cmd',
+            'bash',
+            '-lc',
+            self._wrap_line_buffered(command),
+        ]
+        tab.start_program('docker', args)
+        self._focus_tab(key)
+
+    def _workspace_sim_command(self) -> str:
+        workspace = self._workspace_registry.active_workspace()
+        if workspace and workspace.sim_command:
+            return workspace.sim_command
+        world = self._current_world()
+        return (
+            'roslaunch tables_demo_bringup demo_sim.launch '
+            f'world_config:={self._sh_quote(world)}'
+        )
 
     def _get_button_widget(self, key: str) -> QPushButton | None:
         return self._button_widgets.get(key)
@@ -434,7 +805,12 @@ class MainWindow(QMainWindow):
         cfg = self._auto_launch_button_cfg()
         return str(cfg.get('stop_text') or cfg.get('label') or 'Stop Auto Launch')
 
-    def _build_configurable_buttons(self, layout: QHBoxLayout):
+    def _build_configurable_buttons(
+        self,
+        layout: QHBoxLayout,
+        *,
+        insert_at: int | None = None,
+    ):
         self._config_buttons: dict[str, dict] = {}
         self._config_button_order = []
         for entry in self._button_layout:
@@ -469,7 +845,11 @@ class MainWindow(QMainWindow):
             button.clicked.connect(
                 lambda _checked=False, k=key: self._on_config_button_clicked(k)
             )
-            layout.addWidget(button)
+            if insert_at is None or insert_at < 0:
+                layout.addWidget(button)
+            else:
+                layout.insertWidget(insert_at, button)
+                insert_at += 1
             self._button_widgets[key] = button
 
     def _on_config_button_clicked(self, key: str):
@@ -626,6 +1006,7 @@ class MainWindow(QMainWindow):
     ) -> list[str]:
         env_args: list[str] = []
         compose_env = dict(CONFIG['process']['compose_run_env'])
+        compose_env.update(self._workspace_runtime_env())
         if self._selected_image:
             compose_env['MOBIPICK_IMAGE'] = self._selected_image
         world = self._current_world()
@@ -634,12 +1015,15 @@ class MainWindow(QMainWindow):
         master_uri = self._current_master_uri()
         if master_uri:
             compose_env['ROS_MASTER_URI'] = master_uri
-        if container_name and 'ROS_HOSTNAME' not in compose_env:
-            compose_env['ROS_HOSTNAME'] = container_name
         if overrides:
             for key, value in overrides.items():
                 compose_env[str(key)] = str(value)
         for key, value in compose_env.items():
+            if key in {
+                'MOBIPICK_WORKSPACE_COMPAT_ROOTS',
+                'MOBIPICK_WORKSPACE_MOUNT_SOURCE',
+            }:
+                continue
             env_args.extend(['--env', f'{key}={value}'])
         return env_args
 
@@ -656,6 +1040,8 @@ class MainWindow(QMainWindow):
     def _build_process_environment(self, extra: Optional[dict[str, str]] = None) -> QProcessEnvironment:
         env = QProcessEnvironment.systemEnvironment()
         for key, value in CONFIG['process']['qprocess_env'].items():
+            env.insert(str(key), str(value))
+        for key, value in self._workspace_runtime_env().items():
             env.insert(str(key), str(value))
         if self._selected_image:
             env.insert('MOBIPICK_IMAGE', self._selected_image)
@@ -689,6 +1075,8 @@ class MainWindow(QMainWindow):
         else:
             env = {str(k): str(v) for k, v in env.items()}
         for key, value in CONFIG['process']['qprocess_env'].items():
+            env[str(key)] = str(value)
+        for key, value in self._workspace_runtime_env().items():
             env[str(key)] = str(value)
         if self._selected_image:
             env['MOBIPICK_IMAGE'] = self._selected_image
@@ -977,9 +1365,12 @@ class MainWindow(QMainWindow):
         else:
             ordered_choices = list(choices)
 
-        prev_selection = self._selected_image
-        if prev_selection in ordered_choices:
-            self._selected_image = prev_selection
+        workspace_image = self._workspace_image(
+            self._workspace_registry.active
+        )
+        preferred_image = workspace_image or self._selected_image
+        if preferred_image in ordered_choices:
+            self._selected_image = preferred_image
         else:
             self._selected_image = ordered_choices[0]
 
@@ -1069,19 +1460,33 @@ class MainWindow(QMainWindow):
 
         dialog.exec_()
 
+    def _select_image(
+        self,
+        image_ref: str,
+        *,
+        log_selection: bool = True,
+    ) -> bool:
+        if image_ref not in self._image_choices:
+            return False
+        changed = image_ref != self._selected_image
+        self._selected_image = image_ref
+        self.image_combo.blockSignals(True)
+        self.image_combo.setCurrentIndex(self._image_choices.index(image_ref))
+        self.image_combo.blockSignals(False)
+        self.image_combo.setToolTip(image_ref)
+        if changed and log_selection:
+            self._console_log(2, f'Selected image: {image_ref}')
+        self._update_related_patterns()
+        self._apply_env_to_all_tabs()
+        return True
+
     def _on_image_changed(self, index: int):
         if not self._image_choices:
             return
         if index < 0 or index >= len(self._image_choices):
             return
         new_image = self._image_choices[index]
-        if new_image == self._selected_image:
-            return
-        self._selected_image = new_image
-        self._console_log(2, f'Selected image: {new_image}')
-        self.image_combo.setToolTip(new_image)
-        self._update_related_patterns()
-        self._apply_env_to_all_tabs()
+        self._select_image(new_image)
 
     def _on_world_changed(self, index: int):
         if index < 0:
@@ -2346,7 +2751,12 @@ class MainWindow(QMainWindow):
         tab = self.tasks[key]
         if key == self._terminal_stream_tab_key:
             self._terminal_stream_tab_key = None
-        if not (key.startswith('custom') or key.startswith('loadedlog') or key.startswith('terminal')):
+        if not (
+            key.startswith('custom')
+            or key.startswith('loadedlog')
+            or key.startswith('terminal')
+            or key.startswith('build-')
+        ):
             QMessageBox.information(self, 'Info', 'Only custom, terminal, and loaded log tabs can be closed.')
             return
         if tab.is_running():
@@ -2711,7 +3121,10 @@ class MainWindow(QMainWindow):
                 'compose', 'run', '--rm', '--name', self._sim_container_name,
                 '--label', f'mobipick.exec={exec_id}', '--label', f'mobipick.tab={tab.key}',
                 *self._compose_env_args(),
-                'mobipick'
+                'mobipick',
+                'bash',
+                '-lc',
+                self._wrap_line_buffered(self._workspace_sim_command()),
             ]
             tab.start_program('docker', args)
             self._schedule_host_to_container_copy(tab)
@@ -3213,7 +3626,6 @@ class MainWindow(QMainWindow):
 
             self._grant_x('terminal', log_key='log')
 
-            run_as_root = self._terminal_run_as_root_requested()
             env_overrides = self._terminal_env_overrides()
 
             command_parts = [
@@ -3221,11 +3633,9 @@ class MainWindow(QMainWindow):
                 '--label', f'mobipick.exec={exec_id}',
                 '--label', 'mobipick.role=terminal',
                 '--label', 'mobipick.tab=terminal',
+                '--user', 'root',
             ]
-            if run_as_root:
-                command_parts.extend(['--user', 'root'])
             env_overrides = dict(env_overrides)
-            env_overrides['ROS_HOSTNAME'] = container_name
             command_parts.extend(self._compose_env_args(env_overrides, container_name=container_name))
             command_parts.extend(
                 [
@@ -3233,6 +3643,9 @@ class MainWindow(QMainWindow):
                     'python3',
                     f'{CONTAINER_SCRIPTS_DIR}/enter_host_shell.py',
                     'bash',
+                    '--rcfile',
+                    f'{CONTAINER_SCRIPTS_DIR}/terminal.bashrc',
+                    '-i',
                 ]
             )
             command_str = self._fmt_args(command_parts)

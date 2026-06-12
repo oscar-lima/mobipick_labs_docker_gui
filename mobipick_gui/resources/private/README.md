@@ -1,5 +1,10 @@
 # ROS workspace templating tools
 
+> Deprecated: the GUI workspace manager now stores workspace selection in
+> `~/.config/mobipick-labs-docker-gui/workspaces.yaml` and passes paths to
+> Docker at runtime. These scripts remain only to migrate existing local
+> setups; do not use them for new configurations.
+
 ## Quick use
 
 1. Run the workspace chooser

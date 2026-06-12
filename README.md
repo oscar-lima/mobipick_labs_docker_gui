@@ -43,6 +43,8 @@ and performing cleanup logic when you close the application.
 sudo apt update && sudo apt install docker.io
 sudo systemctl enable docker
 sudo systemctl start docker
+sudo apt install wmctrl graphviz
+sudo apt install ffmpeg -y
 ```
 
 - Configure Docker to run without sudo:
@@ -96,6 +98,51 @@ You can interrupt the GUI with <kbd>Ctrl</kbd>+<kbd>C</kbd> in the launch
 terminal; the application traps the signal, stops the running containers, and
 then exits gracefully.
 
+### ROS 1 workspaces on Ubuntu 24.04
+
+ROS Noetic runs inside Docker; it does not need to be installed on the Ubuntu
+24.04 host. The **ROS 1 workspace** selector at the top of the window controls
+which host catkin workspace is bind-mounted into each container.
+
+Use **Configure Workspaces** to:
+
+* choose or create a master folder such as `~/ros1_ws`;
+* discover existing child workspaces that contain a `src/` directory;
+* add a standalone workspace outside the master folder;
+* create a new workspace without creating fake `devel` build outputs;
+* declare which workspaces it extends;
+* assign workspace-specific button and auto-launch YAML profiles;
+* set a workspace-specific simulator command;
+* view the inheritance graph with Graphviz; and
+* build the selected workspace with `catkin_make` inside the Docker image.
+
+The registry is stored in
+`~/.config/mobipick-labs-docker-gui/workspaces.yaml`. Set
+`MOBIPICK_WORKSPACE_CONFIG` to use another file. On first launch, the GUI imports
+the old `private/select_ros1_ws.sh` selection when present, then stops modifying
+repository files. Selecting **Docker image default** skips the host workspace
+mount and uses the workspace bundled in the image.
+
+The host master folder is mounted once at `~/ros_ws` inside Docker, regardless
+of its host-side folder name. Workspace, devel, and source paths exposed to ROS
+all use that canonical container root, preventing duplicate package discovery
+through names such as `ros1_ws` and `ros_ws`.
+
+Existing catkin-tools builds may contain absolute paths from an older host
+location. The entrypoint creates temporary container-local compatibility
+symlinks while sourcing those generated files, normalizes and deduplicates the
+resulting ROS environment back to `~/ros_ws`, redirects legacy linked-devel
+lookups to the real `.private` package outputs, and removes the aliases before
+the requested command or terminal starts. If the selected workspace has not
+been built, the entrypoint still sources `/opt/ros/noetic/setup.bash`, so
+commands such as `roscore` remain available.
+
+For development, `python gui.py` and an editable
+`mobipick-labs-docker-gui` installation run this checkout. A command installed
+by `pipx` under `~/.local/bin` runs the package in its pipx virtual environment,
+which may be a different version unless that environment was installed from
+the checkout.
+
 ### Command-line options
 
 The CLI accepts a single verbosity switch that controls how much diagnostic
@@ -128,11 +175,12 @@ after the GUI options; they are forwarded automatically to `QApplication`.
 
 ## Configuring the GUI
 
-All customisation lives in the `mobipick_gui/resources/config/` directory. You
-can copy these files and adapt them to your workflow. When running from an
-installed package the directory is read-only; export the environment variable
-`MOBIPICK_GUI_DATA_ROOT` and point it at a writable copy of the resources if you
-need to override the defaults.
+General customisation lives in the `mobipick_gui/resources/config/` directory.
+Workspace locations and workspace-specific profiles live in the per-user
+workspace registry described above. You can copy the bundled resource files and
+adapt them to your workflow. When running from an installed package the
+directory is read-only; export `MOBIPICK_GUI_DATA_ROOT` and point it at a
+writable copy of the resources if you need to override the defaults.
 
 * **`config/gui_settings.yaml`** – Controls UI behaviour such as window geometry
   and log styling, defines timer intervals, button colours, terminal launcher
@@ -217,6 +265,12 @@ creates a lightweight wrapper `~/.bashrc` that sources the container's default
 profile. This preserves your user-specific writable home—editors such as `nano`
 can persist history under `~/.local`—while still executing the image-provided
 initialisation scripts automatically.
+
+GUI terminals use a dedicated RC file that loads the image's
+`~/scripts/permanent.sh` framework selectively. Programs such as `general` and
+`git` remain enabled, so aliases like `..` and the Git-aware prompt are
+available. The legacy `ros1` program is skipped because the GUI sources the
+selected workspace and its underlays after loading the other shell helpers.
 
 ## Tips and troubleshooting
 

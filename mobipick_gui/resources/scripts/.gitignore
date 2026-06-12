@@ -2,3 +2,5 @@
 *
 !.gitignore
 !enter_host_shell.py
+!ros_workspace_setup.bash
+!terminal.bashrc
