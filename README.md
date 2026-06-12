@@ -227,6 +227,15 @@ translating user actions into compose commands. Typical sequences are:
 3. **Visualization tools:** RViz and RQt are launched with `docker compose run`
    so each tool receives its own tabbed log stream.
 
+To connect tools to the real robot, enable **Use remote ROS master** and set
+`ROS_MASTER_URI` (the default is
+`http://mobipick-os-sensor:11311`). RViz, RQt, scripts, terminals, configured
+ROS commands, and custom commands then run through the host-networked
+`mobipick_remote_cmd` service. Host networking is required for ROS 1 callbacks:
+the robot must be able to reach the ROS nodes started inside the container.
+Local roscore and simulation controls are disabled until remote mode is turned
+off. Stop running containers before changing the mode or URI.
+
 Because the GUI tracks container state, you should avoid running the compose
 file manually in parallel—it can confuse the state machine and lead to orphaned
 containers. If you need a manual clean slate, run `mobipick_gui/resources/clean.bash`

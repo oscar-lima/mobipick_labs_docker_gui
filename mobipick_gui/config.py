@@ -181,6 +181,11 @@ CONFIG_DEFAULTS: Dict[str, Dict] = {
         'geometry': [100, 100, 1100, 780],
         'title': 'Mobipick Labs Control',
     },
+    'ros': {
+        'remote_master_uri': 'http://mobipick-os-sensor:11311',
+        'remote_service': 'mobipick_remote_cmd',
+        'remote_enabled_by_default': False,
+    },
     'window_layout': {
         'state_file': str(WINDOW_LAYOUT_FILE),
         'auto_apply': True,

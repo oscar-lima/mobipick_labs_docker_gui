@@ -36,7 +36,38 @@ else
 fi
 
 if [ "${MOBIPICK_ROS_USE_IP:-1}" = "1" ]; then
-    ros_ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
+    ros_ip="$(
+        python3 - "${ROS_MASTER_URI:-}" 2>/dev/null <<'PY'
+import socket
+import sys
+from urllib.parse import urlsplit
+
+master = urlsplit(sys.argv[1])
+if master.hostname:
+    port = master.port or 11311
+    for result in socket.getaddrinfo(
+        master.hostname,
+        port,
+        family=socket.AF_INET,
+        type=socket.SOCK_DGRAM,
+    ):
+        family, socket_type, protocol, _, address = result
+        sock = None
+        try:
+            sock = socket.socket(family, socket_type, protocol)
+            sock.connect(address)
+            print(sock.getsockname()[0])
+            break
+        except OSError:
+            pass
+        finally:
+            if sock is not None:
+                sock.close()
+PY
+    )"
+    if [ -z "$ros_ip" ]; then
+        ros_ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
+    fi
     if [ -n "$ros_ip" ]; then
         export ROS_IP="$ros_ip"
         unset ROS_HOSTNAME

@@ -102,6 +102,47 @@ services:
       - ~/.ssh:${HOME}/.ssh:rw # for git access
     privileged: true  # for Gazebo GUI
 
+  mobipick_remote_cmd:
+    image: ${MOBIPICK_IMAGE:-ozkrelo/mobipick_labs:noetic}
+    working_dir: ${MOBIPICK_WORKSPACE_PATH:-/tmp}
+    entrypoint: /usr/local/bin/entrypoint_user.sh
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              capabilities: [gpu]
+    network_mode: host
+    environment:
+      - DISPLAY
+      - "ROS_DISTRO=noetic"
+      - "ROS_MASTER_URI=${ROS_MASTER_URI:-http://mobipick-os-sensor:11311}"
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=all
+      - XDG_RUNTIME_DIR
+      - __NV_PRIME_RENDER_OFFLOAD
+      - __GLX_VENDOR_LIBRARY_NAME
+      - DISABLE_ROS1_EOL_WARNINGS=1
+      - MOBIPICK_WORKSPACE_ENABLED=${MOBIPICK_WORKSPACE_ENABLED:-0}
+      - MOBIPICK_WORKSPACE_NAME=${MOBIPICK_WORKSPACE_NAME:-}
+      - MOBIPICK_WORKSPACE_PATH=${MOBIPICK_WORKSPACE_PATH:-}
+      - MOBIPICK_WORKSPACE_SETUP=${MOBIPICK_WORKSPACE_SETUP:-}
+      - MOBIPICK_WORKSPACE_DEVEL_PATHS=${MOBIPICK_WORKSPACE_DEVEL_PATHS:-}
+      - MOBIPICK_WORKSPACE_COMPAT_ROOTS=${MOBIPICK_WORKSPACE_COMPAT_ROOTS:-}
+      - MOBIPICK_WORKSPACE_MOUNT_TARGET=${MOBIPICK_WORKSPACE_MOUNT_TARGET:-}
+      - MOBIPICK_WORKSPACE_BUILT=${MOBIPICK_WORKSPACE_BUILT:-0}
+      - MOBIPICK_ROS_PACKAGE_PATH=${MOBIPICK_ROS_PACKAGE_PATH:-}
+      - ROS_WORKSPACE=${ROS_WORKSPACE:-}
+      - MOBIPICK_ROS_USE_IP=${MOBIPICK_ROS_USE_IP:-1}
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:ro
+      - /run/user:/run/user:rw
+      - ./scripts:/scripts_430ofkjl04fsw:rw
+      - ./custom_entrypoint.sh:/usr/local/bin/entrypoint_user.sh:ro
+      - type: bind
+        source: ${MOBIPICK_WORKSPACE_MOUNT_SOURCE:-./empty_workspace}
+        target: ${MOBIPICK_WORKSPACE_MOUNT_TARGET:-/tmp/mobipick-empty-workspace}
+
 networks:
   default:
     name: mobipick

@@ -10,6 +10,8 @@ def test_entrypoint_uses_ros_ip_instead_of_disposable_hostname():
         / 'custom_entrypoint.sh'
     ).read_text(encoding='utf-8')
 
+    assert 'socket.getaddrinfo' in entrypoint
+    assert 'sock.getsockname()[0]' in entrypoint
     assert 'export ROS_IP="$ros_ip"' in entrypoint
     assert 'unset ROS_HOSTNAME' in entrypoint
 

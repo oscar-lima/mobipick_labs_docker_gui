@@ -14,6 +14,7 @@ from collections import deque
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, Match, Optional
+from urllib.parse import urlsplit
 
 from PyQt5.QtCore import QIODevice, QProcess, QProcessEnvironment, QTimer, Qt
 from PyQt5.QtGui import QGuiApplication, QTextCursor, QTextDocument
@@ -104,6 +105,26 @@ class MainWindow(QMainWindow):
         self._roscore_running_cached = False
         self._roscore_stopping = False
         self._roscore_last_start_ts: float | None = None
+        self._ros_cfg = CONFIG.get('ros', {})
+        configured_master = self._normalize_ros_master_uri(
+            self._ros_cfg.get('remote_master_uri', '')
+        )
+        self._remote_master_uri_value = (
+            configured_master or 'http://mobipick-os-sensor:11311'
+        )
+        self._remote_ros_service = str(
+            self._ros_cfg.get('remote_service', 'mobipick_remote_cmd')
+        ).strip() or 'mobipick_remote_cmd'
+        remote_default = self._ros_cfg.get(
+            'remote_enabled_by_default',
+            False,
+        )
+        if isinstance(remote_default, str):
+            self._remote_master_enabled_value = (
+                remote_default.strip().lower() in {'1', 'true', 'yes', 'on'}
+            )
+        else:
+            self._remote_master_enabled_value = bool(remote_default)
         self._terminal_cfg = CONFIG.get('terminal', {})
         drop_to_host_user_default = self._terminal_cfg.get('drop_to_host_user', True)
         if drop_to_host_user_default is None:
@@ -253,6 +274,39 @@ class MainWindow(QMainWindow):
         )
         workspace_row.addWidget(self.build_workspace_button)
         root.addLayout(workspace_row)
+
+        ros_master_row = QHBoxLayout()
+        self.remote_master_checkbox = QCheckBox('Use remote ROS master')
+        self.remote_master_checkbox.setChecked(
+            self._remote_master_enabled_value
+        )
+        self.remote_master_checkbox.setToolTip(
+            'Run ROS tool containers with host networking and connect them '
+            'to the selected external ROS 1 master.'
+        )
+        ros_master_row.addWidget(self.remote_master_checkbox)
+        ros_master_row.addWidget(QLabel('ROS_MASTER_URI:'))
+        self.remote_master_input = QLineEdit(
+            self._remote_master_uri_value
+        )
+        self.remote_master_input.setPlaceholderText(
+            'http://mobipick-os-sensor:11311'
+        )
+        self.remote_master_input.setEnabled(
+            self._remote_master_enabled_value
+        )
+        self.remote_master_input.setToolTip(
+            'ROS 1 master used by RViz, RQt, scripts, terminals, and custom '
+            'commands while remote mode is enabled.'
+        )
+        ros_master_row.addWidget(self.remote_master_input)
+        root.addLayout(ros_master_row)
+        self.remote_master_checkbox.toggled.connect(
+            self._on_remote_master_toggled
+        )
+        self.remote_master_input.editingFinished.connect(
+            self._on_remote_master_uri_edited
+        )
 
         # top controls
         top = QHBoxLayout()
@@ -895,6 +949,9 @@ class MainWindow(QMainWindow):
 
     def _set_config_visual(self, config: dict, state: str, text: str, enabled: bool):
         key = str(config.get('key'))
+        if key == 'sim':
+            self.set_toggle_visual(state, text, enabled)
+            return
         self._set_toggle_state(key, self._get_button_widget(key), state, text, enabled)
 
     @staticmethod
@@ -1003,7 +1060,7 @@ class MainWindow(QMainWindow):
                     'compose', 'run', '--rm', '--name', tab.container_name,
                     '--label', f'mobipick.exec={exec_id}', '--label', f'mobipick.tab={key}',
                     *self._compose_env_args(container_name=tab.container_name),
-                    'mobipick_cmd', 'bash', '-lc', wrapped
+                    self._ros_tool_service(), 'bash', '-lc', wrapped
                 ]
                 tab.start_program('docker', args)
                 self._schedule_host_to_container_copy(tab)
@@ -1053,7 +1110,46 @@ class MainWindow(QMainWindow):
             env_args.extend(['--env', f'{key}={value}'])
         return env_args
 
+    @staticmethod
+    def _normalize_ros_master_uri(value) -> str:
+        raw = str(value or '').strip()
+        if not raw:
+            return ''
+        if '://' not in raw:
+            raw = f'http://{raw}'
+        try:
+            parsed = urlsplit(raw)
+            port = parsed.port or 11311
+        except ValueError:
+            return ''
+        if (
+            parsed.scheme.lower() != 'http'
+            or not parsed.hostname
+            or parsed.username
+            or parsed.password
+            or parsed.query
+            or parsed.fragment
+            or parsed.path not in {'', '/'}
+        ):
+            return ''
+        hostname = parsed.hostname
+        if ':' in hostname:
+            hostname = f'[{hostname}]'
+        return f'http://{hostname}:{port}'
+
+    def _remote_master_enabled(self) -> bool:
+        return bool(
+            getattr(self, '_remote_master_enabled_value', False)
+        )
+
+    def _ros_tool_service(self) -> str:
+        if self._remote_master_enabled():
+            return self._remote_ros_service
+        return 'mobipick_cmd'
+
     def _current_master_uri(self) -> str:
+        if self._remote_master_enabled():
+            return self._remote_master_uri_value
         if getattr(self, '_roscore_stopping', False):
             return 'http://mobipick:11311'
         if getattr(self, '_roscore_running_cached', False):
@@ -1062,6 +1158,87 @@ class MainWindow(QMainWindow):
             self._roscore_running_cached = True
             return f'http://{self._roscore_container_name}:11311'
         return 'http://mobipick:11311'
+
+    def _set_remote_master_checkbox(self, checked: bool) -> None:
+        self.remote_master_checkbox.blockSignals(True)
+        self.remote_master_checkbox.setChecked(checked)
+        self.remote_master_checkbox.blockSignals(False)
+
+    def _on_remote_master_toggled(self, checked: bool) -> None:
+        checked = bool(checked)
+        if checked == self._remote_master_enabled_value:
+            self.remote_master_input.setEnabled(checked)
+            return
+        if self._workspace_processes_running():
+            QMessageBox.warning(
+                self,
+                'ROS Master',
+                'Stop running containers before changing the ROS master.',
+            )
+            self._set_remote_master_checkbox(
+                self._remote_master_enabled_value
+            )
+            return
+        if checked:
+            normalized = self._normalize_ros_master_uri(
+                self.remote_master_input.text()
+            )
+            if not normalized:
+                QMessageBox.warning(
+                    self,
+                    'ROS Master',
+                    'Enter a valid ROS master URI such as '
+                    'http://mobipick-os-sensor:11311.',
+                )
+                self._set_remote_master_checkbox(False)
+                return
+            self._remote_master_uri_value = normalized
+            self.remote_master_input.setText(normalized)
+        self._remote_master_enabled_value = checked
+        self.remote_master_input.setEnabled(checked)
+        self._apply_env_to_all_tabs()
+        self._update_buttons()
+        if checked:
+            self._log_info(
+                'using remote ROS master '
+                f'{self._remote_master_uri_value}'
+            )
+        else:
+            self._log_info('using local ROS master')
+
+    def _on_remote_master_uri_edited(self) -> None:
+        normalized = self._normalize_ros_master_uri(
+            self.remote_master_input.text()
+        )
+        if not normalized:
+            QMessageBox.warning(
+                self,
+                'ROS Master',
+                'Enter a valid ROS master URI such as '
+                'http://mobipick-os-sensor:11311.',
+            )
+            self.remote_master_input.setText(
+                self._remote_master_uri_value
+            )
+            return
+        if (
+            normalized != self._remote_master_uri_value
+            and self._workspace_processes_running()
+        ):
+            QMessageBox.warning(
+                self,
+                'ROS Master',
+                'Stop running containers before changing the ROS master.',
+            )
+            self.remote_master_input.setText(
+                self._remote_master_uri_value
+            )
+            return
+        self._remote_master_uri_value = normalized
+        self.remote_master_input.setText(normalized)
+        self._apply_env_to_all_tabs()
+        if self._remote_master_enabled():
+            self._log_info(f'remote ROS master set to {normalized}')
 
     def _build_process_environment(self, extra: Optional[dict[str, str]] = None) -> QProcessEnvironment:
         env = QProcessEnvironment.systemEnvironment()
@@ -1794,7 +1971,10 @@ class MainWindow(QMainWindow):
                 'compose', 'run', '--rm', '--name', tab.container_name,
                 '--label', f'mobipick.exec={exec_id}', '--label', f'mobipick.tab={key_target}',
                 *self._compose_env_args(container_name=tab.container_name),
-                'mobipick_cmd', 'bash', '-lc', self._wrap_line_buffered(inner)
+                self._ros_tool_service(),
+                'bash',
+                '-lc',
+                self._wrap_line_buffered(inner),
             ]
             tab.start_program('docker', args)
             self._schedule_host_to_container_copy(tab)
@@ -2919,6 +3099,10 @@ class MainWindow(QMainWindow):
         attempt: int = 0,
         allow_autostart: bool = True,
     ):
+        if self._remote_master_enabled():
+            callback()
+            return
+
         delay_ms = self._roscore_delay_ms()
         last_start = self._roscore_last_start_ts
 
@@ -2988,6 +3172,12 @@ class MainWindow(QMainWindow):
         )
 
     def bring_up_roscore(self):
+        if self._remote_master_enabled():
+            self._log_info(
+                'remote ROS master mode is active; local roscore was not '
+                'started'
+            )
+            return
         if self._roscore_stopping:
             return
         self._log_info('starting roscore master')
@@ -3130,6 +3320,11 @@ class MainWindow(QMainWindow):
 
     # event driven bring up
     def bring_up_sim(self):
+        if self._remote_master_enabled():
+            self._log_info(
+                'simulation is disabled while remote ROS master mode is active'
+            )
+            return
         if self._killing:
             return
         self.set_toggle_visual('yellow', 'Starting Sim...', False)
@@ -3434,9 +3629,27 @@ class MainWindow(QMainWindow):
         self._set_toggle_state(key, button, current_state, current_text, False)
 
     def set_toggle_visual(self, state: str, text: str, enabled: bool):
+        if self._remote_master_enabled():
+            self._set_toggle_state(
+                'sim',
+                self._get_button_widget('sim'),
+                'grey',
+                'Sim unavailable with remote ROS',
+                False,
+            )
+            return
         self._set_toggle_state('sim', self._get_button_widget('sim'), state, text, enabled)
 
     def set_roscore_visual(self, state: str, text: str, enabled: bool):
+        if self._remote_master_enabled():
+            self._set_toggle_state(
+                'roscore',
+                self.roscore_button,
+                'grey',
+                'Using Remote Roscore',
+                False,
+            )
+            return
         self._set_toggle_state('roscore', self.roscore_button, state, text, enabled)
 
     def set_tables_visual(self, state: str, text: str, enabled: bool):
@@ -3513,7 +3726,10 @@ class MainWindow(QMainWindow):
                 'compose', 'run', '--rm', '--name', tab.container_name,
                 '--label', f'mobipick.exec={exec_id}', '--label', f'mobipick.tab={tab.key}',
                 *self._compose_env_args(container_name=tab.container_name),
-                'mobipick_cmd', 'bash', '-lc', self._wrap_line_buffered(inner)
+                self._ros_tool_service(),
+                'bash',
+                '-lc',
+                self._wrap_line_buffered(inner),
             ]
             tab.start_program('docker', args)
             self._schedule_host_to_container_copy(tab)
@@ -3562,7 +3778,10 @@ class MainWindow(QMainWindow):
                 'compose', 'run', '--rm', '--name', tab.container_name,
                 '--label', f'mobipick.exec={exec_id}', '--label', f'mobipick.tab={tab.key}',
                 *self._compose_env_args(container_name=tab.container_name),
-                'mobipick_cmd', 'bash', '-lc', self._wrap_line_buffered(rviz_cmd)
+                self._ros_tool_service(),
+                'bash',
+                '-lc',
+                self._wrap_line_buffered(rviz_cmd),
             ]
             tab.start_program('docker', args)
             self._schedule_host_to_container_copy(tab)
@@ -3612,7 +3831,10 @@ class MainWindow(QMainWindow):
                 'compose', 'run', '--rm', '--name', tab.container_name,
                 '--label', f'mobipick.exec={exec_id}', '--label', f'mobipick.tab={tab.key}',
                 *self._compose_env_args(container_name=tab.container_name),
-                'mobipick_cmd', 'bash', '-lc', self._wrap_line_buffered(cmd)
+                self._ros_tool_service(),
+                'bash',
+                '-lc',
+                self._wrap_line_buffered(cmd),
             ]
             tab.start_program('docker', args)
             self._schedule_host_to_container_copy(tab)
@@ -3666,7 +3888,7 @@ class MainWindow(QMainWindow):
             command_parts.extend(self._compose_env_args(env_overrides, container_name=container_name))
             command_parts.extend(
                 [
-                    'mobipick_cmd',
+                    self._ros_tool_service(),
                     'python3',
                     f'{CONTAINER_SCRIPTS_DIR}/enter_host_shell.py',
                     'bash',
@@ -3848,7 +4070,7 @@ class MainWindow(QMainWindow):
                 'compose', 'run', '--rm', '--name', tab.container_name,
                 '--label', f'mobipick.exec={exec_id}', '--label', f'mobipick.tab={key_target}',
                 *self._compose_env_args(container_name=tab.container_name),
-                'mobipick_cmd', 'bash', '-lc', wrapped
+                self._ros_tool_service(), 'bash', '-lc', wrapped
             ]
             tab.start_program('docker', args)
             self._schedule_host_to_container_copy(tab)

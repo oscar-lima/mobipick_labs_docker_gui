@@ -12,6 +12,11 @@ window:
   geometry: [100, 100, 1100, 780]   # main window position (x, y) and size (width, height)
   title: "Mobipick Labs Control"    # title displayed on the window chrome
 
+ros:
+  remote_master_uri: "http://mobipick-os-sensor:11311"  # default external ROS 1 master shown in the GUI
+  remote_service: "mobipick_remote_cmd"                 # host-networked compose service used for remote ROS tools
+  remote_enabled_by_default: false                      # keep local roscore/simulation mode selected on startup
+
 window_layout:
   state_file: "~/.config/mobipick-labs-docker-gui/window_layout.yaml"  # writable per-user window positions
   auto_apply: true                                      # when true, apply saved sizes/positions to matching windows after they appear
