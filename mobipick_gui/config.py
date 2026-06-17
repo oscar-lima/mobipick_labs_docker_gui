@@ -299,31 +299,6 @@ CONFIG_DEFAULTS: Dict[str, Dict] = {
                 ),
             },
             {
-                'ref': 'ozkrelo/x_mobipick_labs:oscar_user_from_1.2',
-                'user': 'host',
-                'supports_host_workspaces': True,
-                'compatible_workspaces': ['clean_mobipick_labs_ws'],
-                'description': (
-                    'Local development image for clean_mobipick_labs_ws.'
-                ),
-            },
-            {
-                'ref': 'ozkrelo/x_mobipick_labs:rae_ws_from_oscar_user',
-                'user': 'host',
-                'supports_host_workspaces': True,
-                'compatible_workspaces': ['rae_upom_mobipick_ws'],
-                'description': (
-                    'Local development image for rae_upom_mobipick_ws.'
-                ),
-            },
-            {
-                'ref': 'ozkrelo/x_mobipick_labs:gpt_ws_from_oscar_user',
-                'user': 'host',
-                'supports_host_workspaces': True,
-                'compatible_workspaces': ['gpt_ws'],
-                'description': 'Local development image for gpt_ws.',
-            },
-            {
                 'match': '*_user*',
                 'user': 'host',
                 'supports_host_workspaces': True,
@@ -343,6 +318,17 @@ CONFIG_DEFAULTS: Dict[str, Dict] = {
         'title': 'Mobipick Terminal',
         'container_prefix': 'mobipick-terminal',
         'drop_to_host_user': True,
+    },
+    'setup_wizard': {
+        'show_on_first_run': True,
+        'public_images': [
+            'ozkrelo/mobipick_labs:noetic',
+            'ozkrelo/x_mobipick_labs:noetic-v1.1',
+            'ozkrelo/x_mobipick_labs:noetic-v1.2',
+        ],
+        'development_base_image': 'ozkrelo/x_mobipick_labs:noetic-v1.2',
+        'development_image_repository': 'ozkrelo/x_mobipick_labs',
+        'development_image_tag_template': '{user}_user_from_1.2',
     },
     'launch_sequence': {
         'config_file': 'auto',
@@ -442,6 +428,34 @@ def _load_config() -> Dict:
 
 
 CONFIG = _load_config()
+
+
+def load_user_config_overrides() -> Dict:
+    """Return the writable per-user GUI settings mapping."""
+    try:
+        if USER_CONFIG_FILE.is_file():
+            with open(USER_CONFIG_FILE, 'r', encoding='utf-8') as handle:
+                data = yaml.safe_load(handle) or {}
+            return data if isinstance(data, dict) else {}
+    except Exception as exc:
+        print(
+            f'Warning: failed to load configuration from {USER_CONFIG_FILE}: {exc}',
+            file=sys.stderr,
+        )
+    return {}
+
+
+def save_user_config_update(updates: Dict) -> Dict:
+    """Merge updates into the per-user config and live CONFIG object."""
+    user_config = load_user_config_overrides()
+    _deep_update(user_config, copy.deepcopy(updates))
+    USER_CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    temporary = USER_CONFIG_FILE.with_suffix(USER_CONFIG_FILE.suffix + '.tmp')
+    with temporary.open('w', encoding='utf-8') as handle:
+        yaml.safe_dump(user_config, handle, sort_keys=False)
+    temporary.replace(USER_CONFIG_FILE)
+    _deep_update(CONFIG, copy.deepcopy(updates))
+    return user_config
 
 
 def load_button_layout(config_path: str | Path | None = None) -> list[dict]:
@@ -684,8 +698,10 @@ __all__ = [
     'DOCKER_CP_CONFIG_FILE',
     'DEFAULT_YAML_PATH',
     'load_docker_cp_config',
+    'load_user_config_overrides',
     'PROJECT_ROOT',
     'SCRIPT_CLEAN',
+    'save_user_config_update',
     'BUTTON_CONFIG_FILE',
     'BUTTON_CONFIG_DEFAULTS',
     'load_button_layout',

@@ -66,6 +66,16 @@ terminal:
   container_prefix: "mobipick-terminal"     # prefix used when naming one-off terminal containers
   drop_to_host_user: true                    # when false, the GUI keeps terminals running as root inside the container
 
+setup_wizard:
+  show_on_first_run: true                    # open setup when user settings have not marked it complete
+  public_images:                             # images the wizard can pull for image-default testing
+    - "ozkrelo/mobipick_labs:noetic"
+    - "ozkrelo/x_mobipick_labs:noetic-v1.1"
+    - "ozkrelo/x_mobipick_labs:noetic-v1.2"
+  development_base_image: "ozkrelo/x_mobipick_labs:noetic-v1.2"
+  development_image_repository: "ozkrelo/x_mobipick_labs"
+  development_image_tag_template: "{user}_user_from_1.2"
+
 images:
   default: "ozkrelo/mobipick_labs:noetic"        # portable base image selected on first launch
   discovery_filters: ["mobipick"]                 # repository substrings used to filter docker images for the dropdown
@@ -96,21 +106,6 @@ images:
       compatible_workspaces: ["Docker image default"]
       workdir: "/root/catkin_ws"
       description: "Public X11 image with a root-owned workspace baked into the image."
-    - ref: "ozkrelo/x_mobipick_labs:oscar_user_from_1.2"
-      user: host
-      supports_host_workspaces: true
-      compatible_workspaces: ["clean_mobipick_labs_ws"]
-      description: "Local development image for clean_mobipick_labs_ws."
-    - ref: "ozkrelo/x_mobipick_labs:rae_ws_from_oscar_user"
-      user: host
-      supports_host_workspaces: true
-      compatible_workspaces: ["rae_upom_mobipick_ws"]
-      description: "Local development image for rae_upom_mobipick_ws."
-    - ref: "ozkrelo/x_mobipick_labs:gpt_ws_from_oscar_user"
-      user: host
-      supports_host_workspaces: true
-      compatible_workspaces: ["gpt_ws"]
-      description: "Local development image for gpt_ws."
     - match: "*_user*"
       user: host
       supports_host_workspaces: true

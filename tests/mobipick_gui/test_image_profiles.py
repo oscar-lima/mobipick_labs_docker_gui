@@ -1,3 +1,4 @@
+import copy
 import os
 from pathlib import Path
 
@@ -29,6 +30,35 @@ def _create_window(monkeypatch, registry_path, images):
     window.poll_timer.stop()
     window._sigint_timer.stop()
     return app, window
+
+
+def _install_private_image_profiles(monkeypatch):
+    images_cfg = copy.deepcopy(CONFIG['images'])
+    profiles = list(images_cfg.get('profiles', []))
+    profiles.extend(
+        [
+            {
+                'ref': 'ozkrelo/x_mobipick_labs:oscar_user_from_1.2',
+                'user': 'host',
+                'supports_host_workspaces': True,
+                'compatible_workspaces': ['clean_mobipick_labs_ws'],
+            },
+            {
+                'ref': 'ozkrelo/x_mobipick_labs:rae_ws_from_oscar_user',
+                'user': 'host',
+                'supports_host_workspaces': True,
+                'compatible_workspaces': ['rae_upom_mobipick_ws'],
+            },
+            {
+                'ref': 'ozkrelo/x_mobipick_labs:gpt_ws_from_oscar_user',
+                'user': 'host',
+                'supports_host_workspaces': True,
+                'compatible_workspaces': ['gpt_ws'],
+            },
+        ]
+    )
+    images_cfg['profiles'] = profiles
+    monkeypatch.setitem(CONFIG, 'images', images_cfg)
 
 
 def _write_registry(tmp_path, image, workspace_name='clean_mobipick_labs_ws'):
@@ -83,6 +113,7 @@ def test_public_root_image_uses_baked_workspace_for_private_workspace(
 
 
 def test_host_user_image_mounts_active_workspace(tmp_path, monkeypatch):
+    _install_private_image_profiles(monkeypatch)
     image = 'ozkrelo/x_mobipick_labs:oscar_user_from_1.2'
     registry_path, workspace_path = _write_registry(tmp_path, image)
 
@@ -110,6 +141,7 @@ def test_workspace_match_highlight_uses_explicit_image_profile(
     tmp_path,
     monkeypatch,
 ):
+    _install_private_image_profiles(monkeypatch)
     images = [
         'ozkrelo/mobipick_labs:noetic',
         'ozkrelo/x_mobipick_labs:rae_ws_from_oscar_user',
@@ -140,6 +172,7 @@ def test_workspace_match_highlight_uses_explicit_image_profile(
 
 
 def test_rae_workspace_only_matches_rae_image(tmp_path, monkeypatch):
+    _install_private_image_profiles(monkeypatch)
     images = [
         'ozkrelo/mobipick_labs:noetic',
         'ozkrelo/x_mobipick_labs:rae_ws_from_oscar_user',
@@ -173,6 +206,7 @@ def test_dependency_workspace_has_no_workspace_match_highlight(
     tmp_path,
     monkeypatch,
 ):
+    _install_private_image_profiles(monkeypatch)
     images = [
         'ozkrelo/mobipick_labs:noetic',
         'ozkrelo/x_mobipick_labs:rae_ws_from_oscar_user',

@@ -127,6 +127,20 @@ configured workspaces and the last active workspace. Selecting **Docker image
 default** skips the host workspace mount and uses the workspace bundled in the
 image.
 
+On first launch, the GUI opens a setup wizard unless the per-user config marks
+it complete. The wizard can pull the public test images, choose the default
+image, and build a local host-user development image. You can reopen the same
+flow with **Setup Wizard**, or jump straight to the development image settings
+with **Build Custom Image**.
+
+The custom image builder writes a Docker build context under
+`~/.local/share/mobipick-labs-docker-gui/image_builds/`, creates a user that
+matches the host UID/GID, installs passwordless sudo, copies the GUI entrypoint,
+and tags the result with the target image selected in the wizard. The image
+profile is saved to the per-user `gui_settings.yaml`, where
+`supports_host_workspaces` controls whether private workspaces can be mounted
+and `compatible_workspaces` controls only the green workspace-match highlight.
+
 General per-user overrides live in
 `~/.config/mobipick-labs-docker-gui/gui_settings.yaml`; set
 `MOBIPICK_GUI_CONFIG` to use another file. Window layouts are stored beside that

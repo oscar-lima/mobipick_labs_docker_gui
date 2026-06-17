@@ -48,17 +48,20 @@ from .config import (
     DEFAULT_YAML_PATH,
     PROJECT_ROOT,
     SCRIPT_CLEAN,
+    USER_DATA_DIR,
     USER_CONFIG_FILE,
     WINDOW_LAYOUT_FILE,
     load_docker_cp_config,
     load_button_layout,
     load_launch_sequence_plan,
+    save_user_config_update,
 )
 
 CONTAINER_SCRIPTS_DIR = str(
     CONFIG.get('process', {}).get('container_scripts_dir', '/scripts_430ofkjl04fsw')
 )
 from .process_tab import ProcessTab
+from .setup_wizard import ImageSetupWizard, SetupWizardSelection
 from .window_layout import WindowLayoutManager
 from .workspace_dialog import WorkspaceManagerDialog
 from .workspaces import WorkspaceRegistry
@@ -176,6 +179,8 @@ class MainWindow(QMainWindow):
         except OSError:
             self._empty_workspace_dir = PROJECT_ROOT / 'empty_workspace'
         self._workspace_dialog: WorkspaceManagerDialog | None = None
+        self._setup_wizard_dialog: ImageSetupWizard | None = None
+        self._setup_wizard_auto_scheduled = False
         self._docker_cp_config = load_docker_cp_config()
         self._synced_container_refs: set[str] = set()
         self._toggle_states: dict[str, str] = {}
@@ -352,6 +357,18 @@ class MainWindow(QMainWindow):
         self.manage_images_button.setToolTip('Remove docker images that match the configured filters')
         self.manage_images_button.clicked.connect(self.manage_images)
 
+        self.setup_wizard_button = QPushButton('Setup Wizard')
+        self.setup_wizard_button.setToolTip('Configure Docker images and first-run setup')
+        self.setup_wizard_button.clicked.connect(
+            lambda _checked=False: self._open_setup_wizard()
+        )
+
+        self.build_custom_image_button = QPushButton('Build Custom Image')
+        self.build_custom_image_button.setToolTip('Build a host-user development Docker image')
+        self.build_custom_image_button.clicked.connect(
+            lambda _checked=False: self._open_custom_image_builder()
+        )
+
         self.execute_docker_cp_button = QPushButton('Execute Docker cp')
         self.execute_docker_cp_button.setToolTip('Copy configured paths from the active container to the host')
         self.execute_docker_cp_button.clicked.connect(self.execute_docker_cp_from_container)
@@ -475,6 +492,8 @@ class MainWindow(QMainWindow):
         controls_row.addWidget(self.clear_all_button)
         controls_row.addWidget(self.commit_current_tab_button)
         controls_row.addWidget(self.manage_images_button)
+        controls_row.addWidget(self.setup_wizard_button)
+        controls_row.addWidget(self.build_custom_image_button)
         controls_row.addWidget(self.execute_docker_cp_button)
         controls_row.addWidget(self.window_layout_button)
 
@@ -525,6 +544,7 @@ class MainWindow(QMainWindow):
         self._console_log(1, f'Mobipick Labs Control ready (verbosity {self._verbosity})')
         if self._workspace_load_error:
             self._console_log(1, self._workspace_load_error)
+        self._schedule_first_run_setup_wizard()
 
         app_instance = QApplication.instance()
         if app_instance:
@@ -1054,6 +1074,373 @@ class MainWindow(QMainWindow):
     def _on_workspace_manager_closed(self, _result: int) -> None:
         self._workspace_dialog = None
         self._populate_workspace_combo()
+
+    # ---------- First-run setup and custom image builds ----------
+
+    def _setup_wizard_cfg(self) -> dict:
+        cfg = CONFIG.get('setup_wizard', {})
+        return cfg if isinstance(cfg, dict) else {}
+
+    def _schedule_first_run_setup_wizard(self) -> None:
+        if self._setup_wizard_auto_scheduled:
+            return
+        if not self._should_auto_show_setup_wizard():
+            return
+        self._setup_wizard_auto_scheduled = True
+        QTimer.singleShot(0, self._open_setup_wizard)
+
+    def _should_auto_show_setup_wizard(self) -> bool:
+        cfg = self._setup_wizard_cfg()
+        if not self._bool_config_value(cfg.get('show_on_first_run', True)):
+            return False
+        if self._bool_config_value(cfg.get('completed', False)):
+            return False
+        if self._image_choices:
+            return False
+        platform = os.environ.get('QT_QPA_PLATFORM', '').strip().lower()
+        return platform != 'offscreen'
+
+    def _can_offer_setup_wizard(self) -> bool:
+        cfg = self._setup_wizard_cfg()
+        if not self._bool_config_value(cfg.get('show_on_first_run', True)):
+            return False
+        platform = os.environ.get('QT_QPA_PLATFORM', '').strip().lower()
+        return platform != 'offscreen'
+
+    @staticmethod
+    def _bool_config_value(value, default: bool = False) -> bool:
+        if value is None:
+            return default
+        if isinstance(value, str):
+            return value.strip().lower() in {'1', 'true', 'yes', 'on'}
+        return bool(value)
+
+    def _open_custom_image_builder(self) -> None:
+        self._open_setup_wizard(build_custom_default=True)
+
+    def _open_setup_wizard(self, *, build_custom_default: bool = False) -> None:
+        if self._setup_wizard_dialog:
+            self._setup_wizard_dialog.raise_()
+            self._setup_wizard_dialog.activateWindow()
+            return
+        cfg = self._setup_wizard_cfg()
+        public_images = self._normalize_image_list(
+            cfg.get('public_images')
+        ) or [
+            str(self._images_cfg.get('default', '') or '').strip()
+        ]
+        default_image = str(
+            self._images_cfg.get('default')
+            or (public_images[0] if public_images else '')
+        ).strip()
+        host_user = str(
+            cfg.get('host_user')
+            or CONFIG['process']['compose_run_env'].get(
+                'MOBIPICK_HOST_USER',
+                '',
+            )
+        ).strip()
+        host_uid = str(
+            cfg.get('host_uid')
+            or CONFIG['process']['compose_run_env'].get('MOBIPICK_UID', '')
+        ).strip()
+        host_gid = str(
+            cfg.get('host_gid')
+            or CONFIG['process']['compose_run_env'].get('MOBIPICK_GID', '')
+        ).strip()
+        base_image = str(
+            cfg.get('development_base_image')
+            or 'ozkrelo/x_mobipick_labs:noetic-v1.2'
+        ).strip()
+        target_image = self._default_custom_image_ref(host_user, cfg)
+        active = self._workspace_registry.active
+        workspace_names = [workspace.name for workspace in self._workspace_registry.workspaces]
+        wizard = ImageSetupWizard(
+            public_images=public_images,
+            default_image=default_image,
+            host_user=host_user,
+            host_uid=host_uid,
+            host_gid=host_gid,
+            base_image=base_image,
+            target_image=target_image,
+            workspace_names=workspace_names,
+            active_workspace=active,
+            build_custom_default=build_custom_default,
+            parent=self,
+        )
+        wizard.accepted.connect(lambda: self._apply_setup_wizard(wizard.selection()))
+        wizard.finished.connect(self._on_setup_wizard_closed)
+        self._setup_wizard_dialog = wizard
+        wizard.show()
+
+    def _on_setup_wizard_closed(self, _result: int) -> None:
+        self._setup_wizard_dialog = None
+
+    def _default_custom_image_ref(self, host_user: str, cfg: dict) -> str:
+        repo = str(
+            cfg.get('development_image_repository')
+            or 'ozkrelo/x_mobipick_labs'
+        ).strip()
+        template = str(
+            cfg.get('development_image_tag_template')
+            or '{user}_user_from_1.2'
+        )
+        safe_user = self._safe_image_tag_part(host_user or 'user')
+        try:
+            tag = template.format(user=safe_user)
+        except (KeyError, ValueError):
+            tag = f'{safe_user}_user_from_1.2'
+        tag = self._safe_image_tag_part(tag)
+        return f'{repo}:{tag}' if repo else tag
+
+    @staticmethod
+    def _safe_image_tag_part(value: str) -> str:
+        cleaned = re.sub(r'[^A-Za-z0-9_.-]+', '-', str(value).strip())
+        cleaned = cleaned.strip('.-')
+        return cleaned or 'user'
+
+    @staticmethod
+    def _normalize_image_list(value) -> list[str]:
+        if isinstance(value, str):
+            raw_items = re.split(r'[\n,]+', value)
+        elif isinstance(value, list):
+            raw_items = value
+        else:
+            raw_items = []
+        images: list[str] = []
+        for item in raw_items:
+            image = str(item).strip()
+            if image and image not in images:
+                images.append(image)
+        return images
+
+    def _apply_setup_wizard(self, selection: SetupWizardSelection) -> None:
+        if selection.default_image:
+            self._images_cfg['default'] = selection.default_image
+        profile = None
+        if selection.build_custom_image:
+            validation_error = self._validate_custom_image_selection(selection)
+            if validation_error:
+                QMessageBox.warning(self, 'Build Custom Image', validation_error)
+                return
+            profile = self._custom_image_profile(selection)
+            self._upsert_runtime_image_profile(profile)
+
+        updates = {
+            'setup_wizard': {
+                'completed': bool(selection.remember_completion),
+                'host_user': selection.host_user,
+                'host_uid': selection.host_uid,
+                'host_gid': selection.host_gid,
+                'public_images': selection.public_images,
+                'development_base_image': selection.base_image,
+                'development_image_repository': self._split_image_ref(
+                    selection.target_image
+                )[0],
+                'development_image_tag_template': (
+                    self._split_image_ref(selection.target_image)[1]
+                    or '{user}_user_from_1.2'
+                ),
+            },
+            'images': {
+                'default': selection.default_image,
+            },
+        }
+        if profile:
+            updates['images']['profiles'] = list(
+                self._images_cfg.get('profiles', [])
+            )
+        try:
+            save_user_config_update(updates)
+        except OSError as exc:
+            QMessageBox.warning(
+                self,
+                'Setup Wizard',
+                f'Failed to save setup settings:\n{exc}',
+            )
+            return
+
+        self._images_cfg = CONFIG['images']
+        self._image_profiles = self._normalize_image_profiles(
+            self._images_cfg.get('profiles', [])
+        )
+
+        if selection.pull_public_images and selection.public_images:
+            self._start_image_pulls(selection.public_images)
+        if selection.build_custom_image:
+            self._start_custom_image_build(selection)
+
+        if self._image_choices:
+            self._load_available_images(show_feedback=False)
+        self._log_info('setup wizard settings saved')
+
+    def _validate_custom_image_selection(
+        self,
+        selection: SetupWizardSelection,
+    ) -> str:
+        if not selection.host_user:
+            return 'Host user is required.'
+        if not selection.host_uid.isdigit() or not selection.host_gid.isdigit():
+            return 'Host UID and GID must be numeric.'
+        if ':' not in selection.base_image:
+            return 'Base image must include a tag, for example image:tag.'
+        if ':' not in selection.target_image:
+            return 'Target image must include a tag, for example image:tag.'
+        return ''
+
+    def _custom_image_profile(self, selection: SetupWizardSelection) -> dict:
+        compatible = (
+            [selection.compatible_workspace]
+            if selection.compatible_workspace
+            else []
+        )
+        return {
+            'ref': selection.target_image,
+            'user': 'host',
+            'supports_host_workspaces': True,
+            'compatible_workspaces': compatible,
+            'description': (
+                'Local development image with a user matching the host.'
+            ),
+        }
+
+    def _upsert_runtime_image_profile(self, profile: dict) -> None:
+        profiles = list(self._images_cfg.get('profiles', []) or [])
+        ref = str(profile.get('ref') or '').strip()
+        updated = False
+        for index, item in enumerate(profiles):
+            if isinstance(item, dict) and str(item.get('ref') or '').strip() == ref:
+                profiles[index] = profile
+                updated = True
+                break
+        if not updated:
+            profiles.append(profile)
+        self._images_cfg['profiles'] = profiles
+        CONFIG['images']['profiles'] = profiles
+        self._image_profiles = self._normalize_image_profiles(profiles)
+
+    def _start_image_pulls(self, images: list[str]) -> None:
+        key = 'setup-pull-images'
+        tab = self._ensure_tab(key, 'Pull Images', closable=True)
+        if tab.is_running():
+            self._focus_tab(key)
+            QMessageBox.information(
+                self,
+                'Pull Images',
+                'An image pull is already running.',
+            )
+            return
+        command = ' && '.join(
+            shlex.join(['docker', 'pull', image])
+            for image in images
+        )
+        if not command:
+            return
+        tab.proc.finished.connect(
+            lambda *_: self._load_available_images(show_feedback=False)
+        )
+        tab.start_program('bash', ['-lc', command])
+        self._focus_tab(key)
+
+    def _start_custom_image_build(self, selection: SetupWizardSelection) -> None:
+        key = 'setup-build-image'
+        tab = self._ensure_tab(key, 'Build Image', closable=True)
+        if tab.is_running():
+            self._focus_tab(key)
+            QMessageBox.information(
+                self,
+                'Build Custom Image',
+                'A custom image build is already running.',
+            )
+            return
+        try:
+            context_dir = self._write_custom_image_build_context(selection)
+        except OSError as exc:
+            QMessageBox.warning(
+                self,
+                'Build Custom Image',
+                f'Failed to prepare Docker build context:\n{exc}',
+            )
+            return
+        args = [
+            'build',
+            '--build-arg',
+            f'USER={selection.host_user}',
+            '--build-arg',
+            f'UID={selection.host_uid}',
+            '--build-arg',
+            f'GID={selection.host_gid}',
+            '-t',
+            selection.target_image,
+            str(context_dir),
+        ]
+        tab.proc.finished.connect(
+            lambda *_: self._load_available_images(show_feedback=False)
+        )
+        tab.start_program('docker', args)
+        self._focus_tab(key)
+
+    def _write_custom_image_build_context(
+        self,
+        selection: SetupWizardSelection,
+    ) -> Path:
+        slug = self._safe_image_tag_part(
+            selection.target_image.replace('/', '_').replace(':', '_')
+        )
+        context_dir = USER_DATA_DIR / 'image_builds' / slug
+        context_dir.mkdir(parents=True, exist_ok=True)
+        dockerfile = context_dir / 'Dockerfile'
+        dockerfile.write_text(
+            self._custom_image_dockerfile(selection.base_image),
+            encoding='utf-8',
+        )
+        entrypoint_source = PROJECT_ROOT / 'custom_entrypoint.sh'
+        entrypoint_target = context_dir / 'entrypoint_user.sh'
+        entrypoint_target.write_text(
+            entrypoint_source.read_text(encoding='utf-8'),
+            encoding='utf-8',
+        )
+        return context_dir
+
+    @staticmethod
+    def _custom_image_dockerfile(base_image: str) -> str:
+        return f"""FROM {base_image}
+
+ARG USER
+ARG UID
+ARG GID
+
+ENV USER=${{USER}} \\
+    HOME=/home/${{USER}}
+
+USER root
+
+RUN set -eux; \\
+    : "${{USER:?USER build-arg required}}"; \\
+    : "${{UID:?UID build-arg required}}"; \\
+    : "${{GID:?GID build-arg required}}"; \\
+    if ! getent group "${{GID}}" >/dev/null 2>&1; then \\
+        groupadd -g "${{GID}}" "${{USER}}"; \\
+    fi; \\
+    if ! id -u "${{USER}}" >/dev/null 2>&1; then \\
+        useradd -m -u "${{UID}}" -g "${{GID}}" -s /bin/bash "${{USER}}"; \\
+    fi
+
+RUN apt-get update && \\
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends sudo && \\
+    rm -rf /var/lib/apt/lists/* && \\
+    echo "${{USER}} ALL=(ALL) NOPASSWD:ALL" > "/etc/sudoers.d/${{USER}}" && \\
+    chmod 0440 "/etc/sudoers.d/${{USER}}"
+
+COPY entrypoint_user.sh /usr/local/bin/entrypoint_user.sh
+RUN chmod 0755 /usr/local/bin/entrypoint_user.sh
+
+USER ${{USER}}
+WORKDIR ${{HOME}}
+
+ENTRYPOINT ["/usr/local/bin/entrypoint_user.sh"]
+CMD ["bash"]
+"""
 
     def _build_active_workspace(self) -> None:
         workspace = self._workspace_registry.active_workspace()
@@ -1841,6 +2228,13 @@ class MainWindow(QMainWindow):
             self.image_combo.setEnabled(False)
             self.image_combo.blockSignals(False)
             self.image_combo.setToolTip('No image selected')
+            if self._can_offer_setup_wizard():
+                self._console_log(
+                    1,
+                    'no matching Docker images found; opening setup wizard'
+                )
+                QTimer.singleShot(0, self._open_setup_wizard)
+                return
             self._inform_no_images_and_exit()
             return
 
@@ -1883,7 +2277,11 @@ class MainWindow(QMainWindow):
         if show_feedback:
             self._console_log(2, f'Available images: {", ".join(ordered_choices)}')
 
-        if default_image and not default_available:
+        if (
+            default_image
+            and not default_available
+            and not self._should_auto_show_setup_wizard()
+        ):
             self._show_missing_default_image_dialog(default_image)
 
         self._update_related_patterns()
