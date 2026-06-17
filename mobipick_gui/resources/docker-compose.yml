@@ -3,9 +3,9 @@ services:
     hostname: mobipick
     # gazebo server
     image: ${MOBIPICK_IMAGE:-ozkrelo/mobipick_labs:noetic}
-    working_dir: ${MOBIPICK_WORKSPACE_PATH:-/tmp}
-    entrypoint: /usr/local/bin/entrypoint_user.sh
-    user: "${USER}"
+    working_dir: ${MOBIPICK_CONTAINER_WORKDIR:-/tmp}
+    entrypoint: ${MOBIPICK_CONTAINER_ENTRYPOINT:-/usr/local/bin/entrypoint_user.sh}
+    user: "${MOBIPICK_CONTAINER_USER:-root}"
     deploy:
       resources:
         reservations:
@@ -58,9 +58,9 @@ services:
     # hostname: mobipick # from mobipick service above
     # gazebo server
     image: ${MOBIPICK_IMAGE:-ozkrelo/mobipick_labs:noetic}
-    working_dir: ${MOBIPICK_WORKSPACE_PATH:-/tmp}
-    entrypoint: /usr/local/bin/entrypoint_user.sh
-    # user: "${USER}" # from mobipick service above
+    working_dir: ${MOBIPICK_CONTAINER_WORKDIR:-/tmp}
+    entrypoint: ${MOBIPICK_CONTAINER_ENTRYPOINT:-/usr/local/bin/entrypoint_user.sh}
+    user: "${MOBIPICK_CONTAINER_USER:-root}"
     deploy:
       resources:
         reservations:
@@ -104,8 +104,9 @@ services:
 
   mobipick_remote_cmd:
     image: ${MOBIPICK_IMAGE:-ozkrelo/mobipick_labs:noetic}
-    working_dir: ${MOBIPICK_WORKSPACE_PATH:-/tmp}
-    entrypoint: /usr/local/bin/entrypoint_user.sh
+    working_dir: ${MOBIPICK_CONTAINER_WORKDIR:-/tmp}
+    entrypoint: ${MOBIPICK_CONTAINER_ENTRYPOINT:-/usr/local/bin/entrypoint_user.sh}
+    user: "${MOBIPICK_CONTAINER_USER:-root}"
     deploy:
       resources:
         reservations:

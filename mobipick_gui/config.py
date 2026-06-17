@@ -261,6 +261,79 @@ CONFIG_DEFAULTS: Dict[str, Dict] = {
         'include_none_tag': False,
         'related_container_keywords': ['mobipick', 'mobipick_cmd', 'mobipick-run', 'rqt', 'rviz'],
         'related_image_keywords': ['mobipick_labs'],
+        'manage_dialog_detail': 'simple',
+        'default_user': 'root',
+        'default_supports_host_workspaces': False,
+        'profiles': [
+            {
+                'ref': 'ozkrelo/mobipick_labs:noetic',
+                'user': 'root',
+                'supports_host_workspaces': False,
+                'compatible_workspaces': ['Docker image default'],
+                'workdir': '/root/catkin_ws',
+                'description': (
+                    'Public image with a root-owned workspace baked into '
+                    'the image.'
+                ),
+            },
+            {
+                'ref': 'ozkrelo/x_mobipick_labs:noetic-v1.1',
+                'user': 'root',
+                'supports_host_workspaces': False,
+                'compatible_workspaces': ['Docker image default'],
+                'workdir': '/root/catkin_ws',
+                'description': (
+                    'Public X11 image with a root-owned workspace baked '
+                    'into the image.'
+                ),
+            },
+            {
+                'ref': 'ozkrelo/x_mobipick_labs:noetic-v1.2',
+                'user': 'root',
+                'supports_host_workspaces': False,
+                'compatible_workspaces': ['Docker image default'],
+                'workdir': '/root/catkin_ws',
+                'description': (
+                    'Public X11 image with a root-owned workspace baked '
+                    'into the image.'
+                ),
+            },
+            {
+                'ref': 'ozkrelo/x_mobipick_labs:oscar_user_from_1.2',
+                'user': 'host',
+                'supports_host_workspaces': True,
+                'compatible_workspaces': ['clean_mobipick_labs_ws'],
+                'description': (
+                    'Local development image for clean_mobipick_labs_ws.'
+                ),
+            },
+            {
+                'ref': 'ozkrelo/x_mobipick_labs:rae_ws_from_oscar_user',
+                'user': 'host',
+                'supports_host_workspaces': True,
+                'compatible_workspaces': ['rae_upom_mobipick_ws'],
+                'description': (
+                    'Local development image for rae_upom_mobipick_ws.'
+                ),
+            },
+            {
+                'ref': 'ozkrelo/x_mobipick_labs:gpt_ws_from_oscar_user',
+                'user': 'host',
+                'supports_host_workspaces': True,
+                'compatible_workspaces': ['gpt_ws'],
+                'description': 'Local development image for gpt_ws.',
+            },
+            {
+                'match': '*_user*',
+                'user': 'host',
+                'supports_host_workspaces': True,
+                'compatible_workspaces': [],
+                'description': (
+                    'Fallback for local development images with a user '
+                    'matching the host.'
+                ),
+            },
+        ],
     },
     'worlds': {
         'default': 'moelk_tables',

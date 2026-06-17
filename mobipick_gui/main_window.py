@@ -12,12 +12,13 @@ import time
 import uuid
 from collections import deque
 from datetime import datetime
+from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Callable, Match, Optional
 from urllib.parse import urlsplit
 
 from PyQt5.QtCore import QIODevice, QProcess, QProcessEnvironment, QTimer, Qt
-from PyQt5.QtGui import QGuiApplication, QTextCursor, QTextDocument
+from PyQt5.QtGui import QColor, QGuiApplication, QTextCursor, QTextDocument
 from PyQt5.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -92,6 +93,9 @@ class MainWindow(QMainWindow):
         self._custom_counter = 0
         self._timers_cfg = CONFIG['timers']
         self._images_cfg = CONFIG['images']
+        self._image_profiles = self._normalize_image_profiles(
+            self._images_cfg.get('profiles', [])
+        )
         self._selected_image = self._images_cfg.get('default', '')
         self._image_choices: list[str] = []
         self._related_patterns: list[str] = []
@@ -543,10 +547,247 @@ class MainWindow(QMainWindow):
     def _workspace_runtime_env(
         self,
         workspace_name: str | None = None,
+        *,
+        force_host_workspace: bool = False,
     ) -> dict[str, str]:
+        requested_name = (
+            self._workspace_registry.active
+            if workspace_name is None
+            else workspace_name
+        )
+        if (
+            requested_name
+            and not force_host_workspace
+            and not self._image_supports_host_workspaces(self._selected_image)
+        ):
+            workspace_name = ''
         return self._workspace_registry.runtime_environment(
             empty_mount_source=self._empty_workspace_dir,
             workspace_name=workspace_name,
+        )
+
+    @staticmethod
+    def _normalize_image_profiles(entries) -> list[dict]:
+        profiles: list[dict] = []
+        if not isinstance(entries, list):
+            return profiles
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            ref = str(entry.get('ref') or '').strip()
+            match = str(entry.get('match') or '').strip()
+            if not ref and not match:
+                continue
+            user = str(
+                entry.get('user')
+                or entry.get('container_user')
+                or ''
+            ).strip()
+            compatible = entry.get('compatible_workspaces', [])
+            if isinstance(compatible, str):
+                compatible_items = [
+                    item.strip()
+                    for item in compatible.split(',')
+                    if item.strip()
+                ]
+            elif isinstance(compatible, list):
+                compatible_items = [
+                    str(item).strip()
+                    for item in compatible
+                    if str(item).strip()
+                ]
+            else:
+                compatible_items = []
+            profiles.append(
+                {
+                    'ref': ref,
+                    'match': match,
+                    'user': user,
+                    'supports_host_workspaces': entry.get(
+                        'supports_host_workspaces',
+                        entry.get('host_workspaces'),
+                    ),
+                    'compatible_workspaces': compatible_items,
+                    'workdir': str(entry.get('workdir') or '').strip(),
+                    'entrypoint': str(
+                        entry.get('entrypoint')
+                        or '/usr/local/bin/entrypoint_user.sh'
+                    ).strip(),
+                    'description': str(
+                        entry.get('description') or ''
+                    ).strip(),
+                }
+            )
+        return profiles
+
+    def _image_profile(self, image_ref: str | None = None) -> dict | None:
+        ref = str(image_ref if image_ref is not None else self._selected_image)
+        ref = ref.strip()
+        if not ref:
+            return None
+        for profile in self._image_profiles:
+            if profile.get('ref') == ref:
+                return profile
+        for profile in self._image_profiles:
+            pattern = profile.get('match') or ''
+            if pattern and fnmatchcase(ref, pattern):
+                return profile
+        return None
+
+    def _image_supports_host_workspaces(
+        self,
+        image_ref: str | None = None,
+    ) -> bool:
+        profile = self._image_profile(image_ref)
+        value = (
+            profile.get('supports_host_workspaces')
+            if profile
+            else self._images_cfg.get('default_supports_host_workspaces')
+        )
+        if isinstance(value, str):
+            return value.strip().lower() in {'1', 'true', 'yes', 'on'}
+        return bool(value)
+
+    def _image_container_user(self, image_ref: str | None = None) -> str:
+        profile = self._image_profile(image_ref)
+        raw_user = (
+            profile.get('user')
+            if profile and profile.get('user')
+            else self._images_cfg.get('default_user', 'root')
+        )
+        user = str(raw_user or 'root').strip()
+        if user.lower() == 'host':
+            return str(
+                CONFIG['process']['compose_run_env'].get(
+                    'MOBIPICK_HOST_USER',
+                    '',
+                )
+            ).strip() or str(os.environ.get('USER') or 'root')
+        if user.lower() in {'', 'root'}:
+            return 'root'
+        return user
+
+    def _image_entrypoint(self, image_ref: str | None = None) -> str:
+        profile = self._image_profile(image_ref)
+        if profile and profile.get('entrypoint'):
+            return str(profile['entrypoint'])
+        return '/usr/local/bin/entrypoint_user.sh'
+
+    def _image_workdir(self, image_ref: str | None = None) -> str:
+        profile = self._image_profile(image_ref)
+        if profile and profile.get('workdir'):
+            return str(profile['workdir'])
+        return ''
+
+    def _image_runtime_env(
+        self,
+        workspace_env: dict[str, str] | None = None,
+    ) -> dict[str, str]:
+        workspace_env = workspace_env or self._workspace_runtime_env()
+        workdir = self._image_workdir(self._selected_image)
+        if not workdir:
+            workdir = workspace_env.get('MOBIPICK_WORKSPACE_PATH') or '/tmp'
+        return {
+            'MOBIPICK_CONTAINER_USER': self._image_container_user(
+                self._selected_image
+            ),
+            'MOBIPICK_CONTAINER_ENTRYPOINT': self._image_entrypoint(
+                self._selected_image
+            ),
+            'MOBIPICK_CONTAINER_WORKDIR': workdir,
+        }
+
+    def _image_compatible_with_workspace(
+        self,
+        image_ref: str,
+        workspace_name: str,
+    ) -> bool | None:
+        profile = self._image_profile(image_ref)
+        if not profile:
+            return None
+        compatible = profile.get('compatible_workspaces') or []
+        if '*' in compatible:
+            return True
+        if workspace_name:
+            return workspace_name in compatible
+        return (
+            ''
+            in compatible
+            or 'Docker image default' in compatible
+            or 'image default' in compatible
+        )
+
+    def _image_choice_label(self, image_ref: str) -> str:
+        active_name = self._workspace_registry.active
+        compatible = self._image_compatible_with_workspace(
+            image_ref,
+            active_name,
+        )
+        if compatible is True:
+            return f'{image_ref}  [workspace match]'
+        if active_name and not self._image_supports_host_workspaces(image_ref):
+            return f'{image_ref}  [image default only]'
+        return image_ref
+
+    def _image_choice_tooltip(self, image_ref: str) -> str:
+        profile = self._image_profile(image_ref)
+        parts = [image_ref]
+        if profile and profile.get('description'):
+            parts.append(str(profile['description']))
+        user = self._image_container_user(image_ref)
+        parts.append(f'Container user: {user}')
+        if self._image_supports_host_workspaces(image_ref):
+            parts.append('Host workspace mount: enabled')
+        else:
+            parts.append('Host workspace mount: disabled; uses image workspace')
+        return '\n'.join(parts)
+
+    def _decorate_image_combo_item(self, index: int, image_ref: str) -> None:
+        self.image_combo.setItemData(
+            index,
+            self._image_choice_tooltip(image_ref),
+            Qt.ToolTipRole,
+        )
+        self.image_combo.setItemData(index, None, Qt.ForegroundRole)
+        if self._image_compatible_with_workspace(
+            image_ref,
+            self._workspace_registry.active,
+        ) is True:
+            self.image_combo.setItemData(
+                index,
+                QColor('#1b7f3a'),
+                Qt.ForegroundRole,
+            )
+        elif (
+            self._workspace_registry.active
+            and not self._image_supports_host_workspaces(image_ref)
+        ):
+            self.image_combo.setItemData(
+                index,
+                QColor('#9a6700'),
+                Qt.ForegroundRole,
+            )
+
+    def _refresh_image_combo_labels(self) -> None:
+        if not hasattr(self, 'image_combo') or not self._image_choices:
+            return
+        self.image_combo.blockSignals(True)
+        for index, image_ref in enumerate(self._image_choices):
+            self.image_combo.setItemText(
+                index,
+                self._image_choice_label(image_ref),
+            )
+            self.image_combo.setItemData(index, image_ref)
+            self._decorate_image_combo_item(index, image_ref)
+        if self._selected_image in self._image_choices:
+            self.image_combo.setCurrentIndex(
+                self._image_choices.index(self._selected_image)
+            )
+        self.image_combo.blockSignals(False)
+        self.image_combo.setToolTip(
+            self._image_choice_tooltip(self._selected_image)
+            if self._selected_image
+            else 'No image selected'
         )
 
     def _workspace_image(self, name: str | None) -> str:
@@ -569,20 +810,31 @@ class MainWindow(QMainWindow):
         self.workspace_combo.setCurrentIndex(index if index >= 0 else 0)
         self.workspace_combo.blockSignals(False)
         active = self._workspace_registry.active_workspace()
-        self.build_workspace_button.setEnabled(active is not None)
+        host_workspace_enabled = self._image_supports_host_workspaces(
+            self._selected_image
+        )
+        self.build_workspace_button.setEnabled(
+            active is not None and host_workspace_enabled
+        )
         if active:
             setup_status = (
                 'built'
                 if self._workspace_registry.is_runtime_built(active)
                 else 'not built; base ROS remains available'
             )
+            mount_status = (
+                'host workspace will be mounted'
+                if host_workspace_enabled
+                else 'selected image uses its baked Docker workspace'
+            )
             self.workspace_combo.setToolTip(
-                f'{active.directory}\n{setup_status}'
+                f'{active.directory}\n{setup_status}\n{mount_status}'
             )
         else:
             self.workspace_combo.setToolTip(
                 'Use the catkin workspace bundled in the selected Docker image.'
             )
+        self._refresh_image_combo_labels()
 
     def _on_workspace_changed(self, index: int) -> None:
         name = str(self.workspace_combo.itemData(index) or '')
@@ -812,6 +1064,15 @@ class MainWindow(QMainWindow):
         workspace = self._workspace_registry.get(name)
         if not workspace:
             return
+        if not self._image_supports_host_workspaces(self._selected_image):
+            QMessageBox.warning(
+                self,
+                'Build Workspace',
+                'The selected Docker image uses its baked workspace and '
+                'does not mount host ROS workspaces. Select a development '
+                'image with a matching host user before building.',
+            )
+            return
         if self._workspace_processes_running():
             QMessageBox.warning(
                 self,
@@ -829,7 +1090,10 @@ class MainWindow(QMainWindow):
         if tab.is_running():
             self._focus_tab(key)
             return
-        workspace_env = self._workspace_runtime_env(workspace.name)
+        workspace_env = self._workspace_runtime_env(
+            workspace.name,
+            force_host_workspace=True,
+        )
         tab.set_environment_overrides(workspace_env)
         exec_id = uuid.uuid4().hex
         tab.exec_id = exec_id
@@ -1089,7 +1353,13 @@ class MainWindow(QMainWindow):
     ) -> list[str]:
         env_args: list[str] = []
         compose_env = dict(CONFIG['process']['compose_run_env'])
-        compose_env.update(self._workspace_runtime_env())
+        workspace_env = self._workspace_runtime_env()
+        effective_workspace_env = dict(workspace_env)
+        if overrides:
+            for key, value in overrides.items():
+                effective_workspace_env[str(key)] = str(value)
+        compose_env.update(workspace_env)
+        compose_env.update(self._image_runtime_env(effective_workspace_env))
         if self._selected_image:
             compose_env['MOBIPICK_IMAGE'] = self._selected_image
         world = self._current_world()
@@ -1242,9 +1512,18 @@ class MainWindow(QMainWindow):
 
     def _build_process_environment(self, extra: Optional[dict[str, str]] = None) -> QProcessEnvironment:
         env = QProcessEnvironment.systemEnvironment()
+        workspace_env = self._workspace_runtime_env()
+        effective_workspace_env = dict(workspace_env)
+        if extra:
+            for key, value in extra.items():
+                effective_workspace_env[str(key)] = str(value)
         for key, value in CONFIG['process']['qprocess_env'].items():
             env.insert(str(key), str(value))
-        for key, value in self._workspace_runtime_env().items():
+        for key, value in workspace_env.items():
+            env.insert(str(key), str(value))
+        for key, value in self._image_runtime_env(
+            effective_workspace_env
+        ).items():
             env.insert(str(key), str(value))
         if self._selected_image:
             env.insert('MOBIPICK_IMAGE', self._selected_image)
@@ -1265,6 +1544,7 @@ class MainWindow(QMainWindow):
             'MOBIPICK_HOST_USER': 'root',
             'MOBIPICK_HOST_GROUP': 'root',
             'MOBIPICK_HOST_HOME': '/root',
+            'MOBIPICK_CONTAINER_USER': 'root',
         }
 
     def _terminal_run_as_root_requested(self) -> bool:
@@ -1279,7 +1559,10 @@ class MainWindow(QMainWindow):
             env = {str(k): str(v) for k, v in env.items()}
         for key, value in CONFIG['process']['qprocess_env'].items():
             env[str(key)] = str(value)
-        for key, value in self._workspace_runtime_env().items():
+        workspace_env = self._workspace_runtime_env()
+        for key, value in workspace_env.items():
+            env[str(key)] = str(value)
+        for key, value in self._image_runtime_env(workspace_env).items():
             env[str(key)] = str(value)
         if self._selected_image:
             env['MOBIPICK_IMAGE'] = self._selected_image
@@ -1581,13 +1864,18 @@ class MainWindow(QMainWindow):
 
         self.image_combo.blockSignals(True)
         self.image_combo.clear()
-        for choice in ordered_choices:
-            self.image_combo.addItem(choice)
+        for index, choice in enumerate(ordered_choices):
+            self.image_combo.addItem(self._image_choice_label(choice), choice)
+            self._decorate_image_combo_item(index, choice)
         index = ordered_choices.index(self._selected_image)
         self.image_combo.setCurrentIndex(index)
         self.image_combo.setEnabled(True)
         self.image_combo.blockSignals(False)
-        self.image_combo.setToolTip(self._selected_image or 'No image selected')
+        self.image_combo.setToolTip(
+            self._image_choice_tooltip(self._selected_image)
+            if self._selected_image
+            else 'No image selected'
+        )
 
         if show_feedback and error_message:
             QMessageBox.warning(self, 'Images', error_message)
@@ -1599,6 +1887,7 @@ class MainWindow(QMainWindow):
             self._show_missing_default_image_dialog(default_image)
 
         self._update_related_patterns()
+        self._populate_workspace_combo()
         self._apply_env_to_all_tabs()
 
     def _apply_env_to_all_tabs(self):
@@ -1677,11 +1966,12 @@ class MainWindow(QMainWindow):
         self.image_combo.blockSignals(True)
         self.image_combo.setCurrentIndex(self._image_choices.index(image_ref))
         self.image_combo.blockSignals(False)
-        self.image_combo.setToolTip(image_ref)
+        self.image_combo.setToolTip(self._image_choice_tooltip(image_ref))
         if changed and log_selection:
             self._console_log(2, f'Selected image: {image_ref}')
         self._update_related_patterns()
         self._apply_env_to_all_tabs()
+        self._populate_workspace_combo()
         return True
 
     def _on_image_changed(self, index: int):
