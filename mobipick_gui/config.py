@@ -556,14 +556,20 @@ def load_launch_sequence_plan(
     def _candidate_paths() -> list[Path]:
         candidates: list[Path] = []
         if launch_config_path:
-            explicit = Path(launch_config_path)
+            raw_explicit = Path(launch_config_path)
+            explicit = raw_explicit
             if not explicit.is_absolute():
                 explicit = PROJECT_ROOT / explicit
+            if not raw_explicit.is_absolute():
+                candidates.append(LAUNCH_SEQUENCE_DIR / raw_explicit.name)
             candidates.append(explicit)
         if raw_path and raw_path.lower() not in {'auto', 'default'}:
-            custom = Path(raw_path)
+            raw_custom = Path(raw_path)
+            custom = raw_custom
             if not custom.is_absolute():
                 custom = PROJECT_ROOT / custom
+            if not raw_custom.is_absolute():
+                candidates.append(LAUNCH_SEQUENCE_DIR / raw_custom.name)
             candidates.append(custom)
         stem_candidates: list[str] = []
         if button_path:
@@ -644,6 +650,47 @@ def load_launch_sequence_plan(
     }
 
 
+def writable_launch_sequence_path(source: str | Path | None) -> Path:
+    """Return a writable path for saving an auto-launch sequence."""
+    raw_path = Path(source).expanduser() if source else LAUNCH_SEQUENCE_DIR / 'launch_sequence.yaml'
+    if not raw_path.is_absolute():
+        raw_path = LAUNCH_SEQUENCE_DIR / raw_path.name
+
+    try:
+        raw_path.relative_to(PROJECT_ROOT)
+    except ValueError:
+        return raw_path
+    return LAUNCH_SEQUENCE_DIR / raw_path.name
+
+
+def save_launch_sequence_plan(
+    path: str | Path,
+    timeline: list[dict],
+    shutdown_order: list[str],
+    button: dict | None = None,
+) -> Path:
+    """Persist an auto-launch sequence to a user-writable YAML file."""
+    destination = Path(path).expanduser()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    data: dict = {
+        'timeline': timeline,
+        'shutdown': {
+            'order': shutdown_order,
+        },
+    }
+    if button:
+        data['button'] = {
+            key: value
+            for key, value in button.items()
+            if value not in (None, '')
+        }
+    temporary = destination.with_suffix(destination.suffix + '.tmp')
+    with open(temporary, 'w', encoding='utf-8') as handle:
+        yaml.safe_dump(data, handle, sort_keys=False)
+    temporary.replace(destination)
+    return destination
+
+
 def load_docker_cp_config() -> Dict[str, Dict[str, list[dict]]]:
     """Load optional docker cp mappings keyed by image references."""
 
@@ -700,6 +747,7 @@ __all__ = [
     'load_user_config_overrides',
     'PROJECT_ROOT',
     'SCRIPT_CLEAN',
+    'save_launch_sequence_plan',
     'save_user_config_update',
     'BUTTON_CONFIG_FILE',
     'BUTTON_CONFIG_DEFAULTS',
@@ -708,4 +756,5 @@ __all__ = [
     'LAUNCH_SEQUENCE_DIR',
     'WINDOW_LAYOUT_FILE',
     'load_launch_sequence_plan',
+    'writable_launch_sequence_path',
 ]

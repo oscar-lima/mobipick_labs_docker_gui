@@ -25,6 +25,7 @@ from PyQt5.QtWidgets import (
     QComboBox,
     QDialog,
     QDialogButtonBox,
+    QDoubleSpinBox,
     QFileDialog,
     QHBoxLayout,
     QLabel,
@@ -54,7 +55,9 @@ from .config import (
     load_docker_cp_config,
     load_button_layout,
     load_launch_sequence_plan,
+    save_launch_sequence_plan,
     save_user_config_update,
+    writable_launch_sequence_path,
 )
 
 CONTAINER_SCRIPTS_DIR = str(
@@ -73,6 +76,85 @@ def trigger_sigint():
     """Signal the GUI to start its shutdown sequence."""
     global _SIGINT_TRIGGERED
     _SIGINT_TRIGGERED = True
+
+
+class AutoLaunchWizard(QDialog):
+    """Collect and persist an auto-launch timeline."""
+
+    def __init__(
+        self,
+        buttons: list[tuple[str, str]],
+        timeline: list[dict],
+        save_path: Path,
+        parent: QWidget | None = None,
+    ):
+        super().__init__(parent)
+        self.setWindowTitle('Configure Auto Launch')
+        self._rows: list[tuple[str, QCheckBox, QDoubleSpinBox]] = []
+
+        existing = {
+            str(entry.get('button')): float(entry.get('at_seconds', 0.0))
+            for entry in timeline
+            if isinstance(entry, dict) and entry.get('button') is not None
+        }
+
+        root = QVBoxLayout(self)
+        root.addWidget(QLabel('Select launch steps and start delays.'))
+
+        for index, (key, label) in enumerate(buttons):
+            row = QHBoxLayout()
+            checkbox = QCheckBox(label)
+            checkbox.setProperty('button_key', key)
+            checked = key in existing
+            if not existing and key != 'terminal':
+                checked = True
+            checkbox.setChecked(checked)
+
+            delay = QDoubleSpinBox()
+            delay.setRange(0.0, 3600.0)
+            delay.setDecimals(1)
+            delay.setSingleStep(1.0)
+            delay.setSuffix(' s')
+            delay.setValue(existing.get(key, float(index * 2)))
+            delay.setEnabled(checkbox.isChecked())
+            checkbox.toggled.connect(delay.setEnabled)
+
+            row.addWidget(checkbox, 1)
+            row.addWidget(QLabel('Delay:'))
+            row.addWidget(delay)
+            root.addLayout(row)
+            self._rows.append((key, checkbox, delay))
+
+        path_label = QLabel(f'Saves to: {save_path}')
+        path_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        root.addWidget(path_label)
+
+        self._button_box = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
+        self._button_box.accepted.connect(self.accept)
+        self._button_box.rejected.connect(self.reject)
+        root.addWidget(self._button_box)
+
+    def timeline(self) -> list[dict]:
+        """Return selected launch steps sorted by delay."""
+        entries = [
+            {
+                'button': key,
+                'at_seconds': delay.value(),
+            }
+            for key, checkbox, delay in self._rows
+            if checkbox.isChecked()
+        ]
+        return sorted(entries, key=lambda entry: (entry['at_seconds'], entry['button']))
+
+    def accept(self):
+        if not self.timeline():
+            QMessageBox.warning(
+                self,
+                'Auto Launch',
+                'Select at least one launch step before saving.',
+            )
+            return
+        super().accept()
 
 
 class MainWindow(QMainWindow):
@@ -3122,11 +3204,18 @@ CMD ["bash"]
     def _start_auto_launch_stack(self):
         timeline = self._launch_plan.get('timeline') if isinstance(self._launch_plan, dict) else []
         if not timeline:
-            QMessageBox.information(
-                self,
-                'Auto Launch',
-                'No launch sequence is configured. Update the auto launch config file to enable automation.',
+            message = QMessageBox(self)
+            message.setIcon(QMessageBox.Information)
+            message.setWindowTitle('Auto Launch')
+            message.setText(
+                'No launch sequence is configured. Configure automation to '
+                'create one from the available buttons.'
             )
+            configure_button = message.addButton('Configure', QMessageBox.ActionRole)
+            message.addButton(QMessageBox.Ok)
+            message.exec_()
+            if message.clickedButton() == configure_button:
+                self._open_auto_launch_wizard()
             self._auto_launch_running = False
             self.set_auto_launch_visual('red', self._auto_launch_start_text(), True)
             return
@@ -3161,6 +3250,53 @@ CMD ["bash"]
             else:
                 self._schedule_auto_launch_step(key, delay_ms)
         self._schedule_recording_after_launch()
+
+    def _auto_launch_wizard_buttons(self) -> list[tuple[str, str]]:
+        buttons: list[tuple[str, str]] = [('roscore', 'Roscore')]
+        for key in self._config_button_order:
+            cfg = self._config_buttons.get(key, {})
+            label = str(cfg.get('label') or key)
+            buttons.append((key, label))
+        buttons.append(('terminal', 'Terminal'))
+        return list(dict.fromkeys(buttons))
+
+    def _open_auto_launch_wizard(self):
+        source = self._launch_plan.get('source') if isinstance(self._launch_plan, dict) else None
+        save_path = writable_launch_sequence_path(source)
+        dialog = AutoLaunchWizard(
+            self._auto_launch_wizard_buttons(),
+            self._launch_plan.get('timeline', []) if isinstance(self._launch_plan, dict) else [],
+            save_path,
+            self,
+        )
+        if dialog.exec_() != QDialog.Accepted:
+            return
+
+        timeline = dialog.timeline()
+        shutdown_order = [entry['button'] for entry in reversed(timeline)]
+        try:
+            saved_path = save_launch_sequence_plan(
+                save_path,
+                timeline,
+                shutdown_order,
+                self._auto_launch_button_cfg(),
+            )
+        except OSError as exc:
+            QMessageBox.warning(
+                self,
+                'Auto Launch',
+                f'Failed to save auto launch configuration:\n{exc}',
+            )
+            return
+
+        self._launch_plan = load_launch_sequence_plan(
+            self._workspace_button_config_path(),
+            self._workspace_launch_config_path(),
+        )
+        self._launch_retry_ms = max(0, int(self._launch_plan.get('retry_delay_ms', 750) or 0))
+        self._launch_max_retry = max(0, int(self._launch_plan.get('max_retry_attempts', 6) or 0))
+        self.set_auto_launch_visual('red', self._auto_launch_start_text(), True)
+        self._log_info(f'saved auto launch configuration to {saved_path}')
 
     def _stop_auto_launch_stack(self):
         self._cancel_auto_launch_timers()

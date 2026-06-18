@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import mobipick_gui.config as config_module
 from mobipick_gui.config import (
     CONFIG,
     CONFIG_FILE,
@@ -7,6 +8,7 @@ from mobipick_gui.config import (
     default_user_data_dir,
     load_button_layout,
     load_launch_sequence_plan,
+    writable_launch_sequence_path,
 )
 
 
@@ -65,3 +67,42 @@ timeline:
     assert [entry['key'] for entry in layout] == ['custom']
     assert plan['source'] == str(launches)
     assert plan['timeline'] == [{'button': 'custom', 'at_seconds': 1.0}]
+
+
+def test_relative_launch_config_can_load_user_config_fallback(monkeypatch, tmp_path):
+    launch_dir = tmp_path / 'launch_sequences'
+    monkeypatch.setattr(config_module, 'LAUNCH_SEQUENCE_DIR', launch_dir)
+    buttons = tmp_path / 'buttons.yaml'
+    buttons.write_text(
+        '''
+buttons:
+  - key: custom
+    label: Custom
+    kind: command
+    command: echo custom
+''',
+        encoding='utf-8',
+    )
+    launches = launch_dir / 'custom_auto.yaml'
+    launches.parent.mkdir(parents=True)
+    launches.write_text(
+        '''
+timeline:
+  - at_seconds: 2
+    button: custom
+''',
+        encoding='utf-8',
+    )
+
+    plan = load_launch_sequence_plan(buttons, 'custom_auto.yaml')
+
+    assert plan['source'] == str(launches)
+    assert plan['timeline'] == [{'button': 'custom', 'at_seconds': 2.0}]
+
+
+def test_writable_launch_sequence_path_avoids_packaged_resources(monkeypatch, tmp_path):
+    launch_dir = tmp_path / 'launch_sequences'
+    monkeypatch.setattr(config_module, 'LAUNCH_SEQUENCE_DIR', launch_dir)
+    source = config_module.PROJECT_ROOT / 'config' / 'custom_auto.yaml'
+
+    assert writable_launch_sequence_path(source) == launch_dir / 'custom_auto.yaml'
