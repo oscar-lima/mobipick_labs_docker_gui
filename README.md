@@ -32,7 +32,7 @@ and performing cleanup logic when you close the application.
 * Python 3.8+ with PyQt5 available (e.g. `pip install PyQt5`).
 * Docker Engine and the Docker Compose plugin accessible to your user.
 * Access to the Mobipick Labs image repository (for example
-  `ozkrelo/mobipick_labs:noetic`).
+  `ozkrelo/x_mobipick_labs:noetic-v1.1`).
 * An X11 server that allows the containers to create GUI windows. The GUI
   issues the required `xhost` commands automatically when needed.
 
@@ -72,7 +72,7 @@ sudo apt install docker-compose-plugin
 # Verify that the Compose plugin is available
 docker compose version
 # pull mobipick labs docker image from docker hub
-docker pull ozkrelo/mobipick_labs:noetic
+docker pull ozkrelo/x_mobipick_labs:noetic-v1.1
 ```
 
 - Optional but strongly recommended if you have an NVIDIA graphics card: install [nvidia-docker2](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/nvidia-docker.html). After installation, restart Docker and test with:

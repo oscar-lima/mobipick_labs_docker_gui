@@ -3,6 +3,7 @@ import os
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
+import pytest
 from PyQt5.QtWidgets import QApplication
 
 from mobipick_gui.config import CONFIG
@@ -61,7 +62,7 @@ def test_setup_wizard_persists_custom_image_profile(
         '_discover_filtered_image_records',
         lambda self: (
             [
-                {'ref': 'ozkrelo/mobipick_labs:noetic'},
+                {'ref': 'ozkrelo/x_mobipick_labs:noetic-v1.1'},
                 {'ref': 'ozkrelo/x_mobipick_labs:gpt_ws_from_oscar_user'},
             ],
             None,
@@ -97,8 +98,8 @@ def test_setup_wizard_persists_custom_image_profile(
 
     selection = SetupWizardSelection(
         pull_public_images=True,
-        public_images=['ozkrelo/mobipick_labs:noetic'],
-        default_image='ozkrelo/mobipick_labs:noetic',
+        public_images=['ozkrelo/x_mobipick_labs:noetic-v1.1'],
+        default_image='ozkrelo/x_mobipick_labs:noetic-v1.1',
         build_custom_image=True,
         host_user='oscar',
         host_uid='1001',
@@ -113,13 +114,13 @@ def test_setup_wizard_persists_custom_image_profile(
 
     updates = saved['updates']
     assert updates['setup_wizard']['completed'] is True
-    assert updates['images']['default'] == 'ozkrelo/mobipick_labs:noetic'
+    assert updates['images']['default'] == 'ozkrelo/x_mobipick_labs:noetic-v1.1'
     assert any(
         profile.get('ref') == 'ozkrelo/x_mobipick_labs:gpt_ws_from_oscar_user'
         and profile.get('compatible_workspaces') == ['gpt_ws']
         for profile in updates['images']['profiles']
     )
-    assert started['pulls'] == ['ozkrelo/mobipick_labs:noetic']
+    assert started['pulls'] == ['ozkrelo/x_mobipick_labs:noetic-v1.1']
     assert started['build'] is selection
 
     window.deleteLater()
@@ -135,7 +136,7 @@ def test_setup_wizard_does_not_auto_open_when_images_are_available(
     monkeypatch.setattr(
         MainWindow,
         '_discover_filtered_image_records',
-        lambda self: ([{'ref': 'ozkrelo/mobipick_labs:noetic'}], None),
+        lambda self: ([{'ref': 'ozkrelo/x_mobipick_labs:noetic-v1.1'}], None),
     )
     monkeypatch.setattr(
         MainWindow,
@@ -149,8 +150,61 @@ def test_setup_wizard_does_not_auto_open_when_images_are_available(
     window._sigint_timer.stop()
     monkeypatch.setenv('QT_QPA_PLATFORM', 'xcb')
 
-    assert window._image_choices == ['ozkrelo/mobipick_labs:noetic']
+    assert window._image_choices == ['ozkrelo/x_mobipick_labs:noetic-v1.1']
     assert not window._should_auto_show_setup_wizard()
+
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_missing_default_image_opens_setup_wizard_when_other_images_exist(
+    tmp_path,
+    monkeypatch,
+):
+    registry_path = tmp_path / 'workspaces.yaml'
+    monkeypatch.setenv('MOBIPICK_WORKSPACE_CONFIG', str(registry_path))
+    images_cfg = copy.deepcopy(CONFIG['images'])
+    images_cfg['default'] = 'ozkrelo/x_mobipick_labs:noetic-v1.1'
+    monkeypatch.setitem(CONFIG, 'images', images_cfg)
+    setup_cfg = copy.deepcopy(CONFIG['setup_wizard'])
+    setup_cfg['completed'] = False
+    monkeypatch.setitem(CONFIG, 'setup_wizard', setup_cfg)
+    monkeypatch.setattr(
+        MainWindow,
+        '_discover_filtered_image_records',
+        lambda self: ([{'ref': 'ozkrelo/x_mobipick_labs:noetic-v1.1'}], None),
+    )
+    monkeypatch.setattr(
+        MainWindow,
+        'update_sim_status_from_poll',
+        lambda self, force=False: None,
+    )
+
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow(verbosity=1)
+    window.poll_timer.stop()
+    window._sigint_timer.stop()
+
+    scheduled = []
+    monkeypatch.setenv('QT_QPA_PLATFORM', 'xcb')
+    monkeypatch.setattr(
+        main_window_module.QTimer,
+        'singleShot',
+        lambda _delay, callback: scheduled.append(callback),
+    )
+    monkeypatch.setattr(
+        MainWindow,
+        '_show_missing_default_image_dialog',
+        lambda self, image_ref: pytest.fail(
+            f'unexpected missing default dialog for {image_ref}'
+        ),
+    )
+    window._images_cfg['default'] = 'ozkrelo/mobipick_labs:noetic'
+
+    window._load_available_images(show_feedback=False)
+
+    assert window._image_choices == ['ozkrelo/x_mobipick_labs:noetic-v1.1']
+    assert scheduled == [window._open_setup_wizard]
 
     window.deleteLater()
     app.processEvents()

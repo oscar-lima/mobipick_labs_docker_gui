@@ -256,7 +256,7 @@ CONFIG_DEFAULTS: Dict[str, Dict] = {
         'docker_stop_timeout': 3,
     },
     'images': {
-        'default': 'ozkrelo/mobipick_labs:noetic',
+        'default': 'ozkrelo/x_mobipick_labs:noetic-v1.1',
         'discovery_filters': ['mobipick'],
         'include_none_tag': False,
         'related_container_keywords': ['mobipick', 'mobipick_cmd', 'mobipick-run', 'rqt', 'rviz'],
@@ -322,7 +322,6 @@ CONFIG_DEFAULTS: Dict[str, Dict] = {
     'setup_wizard': {
         'show_on_first_run': True,
         'public_images': [
-            'ozkrelo/mobipick_labs:noetic',
             'ozkrelo/x_mobipick_labs:noetic-v1.1',
             'ozkrelo/x_mobipick_labs:noetic-v1.2',
         ],

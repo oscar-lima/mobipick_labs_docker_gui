@@ -1100,6 +1100,15 @@ class MainWindow(QMainWindow):
         platform = os.environ.get('QT_QPA_PLATFORM', '').strip().lower()
         return platform != 'offscreen'
 
+    def _should_offer_setup_for_missing_default_image(self) -> bool:
+        cfg = self._setup_wizard_cfg()
+        if not self._bool_config_value(cfg.get('show_on_first_run', True)):
+            return False
+        if self._bool_config_value(cfg.get('completed', False)):
+            return False
+        platform = os.environ.get('QT_QPA_PLATFORM', '').strip().lower()
+        return platform != 'offscreen'
+
     def _can_offer_setup_wizard(self) -> bool:
         cfg = self._setup_wizard_cfg()
         if not self._bool_config_value(cfg.get('show_on_first_run', True)):
@@ -2280,9 +2289,16 @@ CMD ["bash"]
         if (
             default_image
             and not default_available
-            and not self._should_auto_show_setup_wizard()
         ):
-            self._show_missing_default_image_dialog(default_image)
+            if self._should_offer_setup_for_missing_default_image():
+                self._console_log(
+                    1,
+                    'configured default Docker image is missing; '
+                    'opening setup wizard',
+                )
+                QTimer.singleShot(0, self._open_setup_wizard)
+            elif os.environ.get('QT_QPA_PLATFORM', '').strip().lower() != 'offscreen':
+                self._show_missing_default_image_dialog(default_image)
 
         self._update_related_patterns()
         self._populate_workspace_combo()

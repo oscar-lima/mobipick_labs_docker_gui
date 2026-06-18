@@ -69,7 +69,6 @@ terminal:
 setup_wizard:
   show_on_first_run: true                    # open setup when user settings have not marked it complete
   public_images:                             # images the wizard can pull for image-default testing
-    - "ozkrelo/mobipick_labs:noetic"
     - "ozkrelo/x_mobipick_labs:noetic-v1.1"
     - "ozkrelo/x_mobipick_labs:noetic-v1.2"
   development_base_image: "ozkrelo/x_mobipick_labs:noetic-v1.2"
@@ -77,7 +76,7 @@ setup_wizard:
   development_image_tag_template: "{user}_user_from_1.2"
 
 images:
-  default: "ozkrelo/mobipick_labs:noetic"        # portable base image selected on first launch
+  default: "ozkrelo/x_mobipick_labs:noetic-v1.1" # portable base image selected on first launch
   discovery_filters: ["mobipick"]                 # repository substrings used to filter docker images for the dropdown
   include_none_tag: false                     # include dangling (<none>) tags in the image list when true
   related_container_keywords: ["mobipick", "mobipick_cmd", "mobipick-run", "rqt", "rviz"]  # container name fragments treated as related

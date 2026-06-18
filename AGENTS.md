@@ -7,7 +7,7 @@ The PyQt5 application lives in `mobipick_gui/`, with `main_window.py` orchestrat
 - `python -m pip install -e .` installs an editable environment with the GUI dependencies.
 - `mobipick-labs-docker-gui --verbose 2` launches the interface with extra logging; `python -m mobipick_gui` is equivalent when debugging.
 - `python -m build` produces distributable wheels and source archives; run it before publishing.
-Cache Docker images locally (`docker pull ozkrelo/mobipick_labs:noetic`) so the simulator starts promptly during development reviews.
+Cache Docker images locally (`docker pull ozkrelo/x_mobipick_labs:noetic-v1.1`) so the simulator starts promptly during development reviews.
 
 ## Coding Style & Naming Conventions
 Follow PEP 8 with four-space indents and keep functions under 80 columns where practical. Qt derived classes stay in CamelCase, while helpers, signals, and module-level constants use snake_case and UPPER_SNAKE. Continue annotating public APIs with type hints and short docstrings explaining side effects. Prefer logging to the GUI log tab instead of raw `print` to retain colour formatting.
