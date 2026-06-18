@@ -149,6 +149,35 @@ file, while recordings default to
 keep installed package files immutable and prevent local state from entering a
 wheel or source distribution.
 
+### Auto Launch recordings
+
+The **Record Auto Launch** checkbox arms a recording for the next **Auto
+Launch** run; it does not immediately start recording when checked. A recording
+captures screen video and saves the run logs. When recording is armed, the GUI
+starts `ffmpeg` after the auto-launch timeline and window-layout delay finish,
+so the video captures the arranged simulator windows. The main toolbar shows
+`REC armed: press Auto Launch` while waiting and a flashing red `● REC`
+indicator only while `ffmpeg` is actively recording. If no Auto Launch timeline
+exists, recording cannot start until one is configured. The GUI creates one
+timestamped session folder under the selected recording folder and writes the
+MP4 plus `ffmpeg.log` there. For example, choosing `~/Downloads` produces a
+folder such as
+`~/Downloads/1_workspace_18_06_143210/1_workspace_18_06_143210.mp4`.
+
+Recording uses the host `ffmpeg` command with X11 grabbing:
+`ffmpeg -f x11grab -s <resolution> -r 30 -i <display> ... <output>.mp4`.
+The display defaults to the GUI process `DISPLAY` environment variable, falling
+back to `:1`; set `recording.display` in `gui_settings.yaml` to force a
+specific X11 display. The Log tab prints the exact command, session folder, and
+`ffmpeg.log` path for each recording.
+
+A recording stops when **Record Auto Launch** is unchecked, **Stop Recording**
+is pressed in the optional always-on-top recording control window, **Auto
+Launch** is stopped, Roscore stops or exits, or the GUI exits. Use **Recording
+Options** to change the output folder, video resolution, and whether the
+pop-out stop window appears while recording. If no MP4 is produced, the GUI
+logs the failure and points to the session `ffmpeg.log`.
+
 Use **Export Settings** in the workspace manager to create a single portable
 YAML file containing the workspace registry, user GUI overrides, and the
 contents of referenced button and auto-launch profiles. **Import Settings**

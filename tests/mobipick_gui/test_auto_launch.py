@@ -1,5 +1,7 @@
 from types import MethodType, SimpleNamespace
 
+from PyQt5.QtCore import QProcess
+
 from mobipick_gui.main_window import MainWindow
 
 
@@ -70,3 +72,93 @@ def test_auto_launch_stop_waits_for_roscore_shutdown_to_finalize():
     assert events[-1] == ('visual', 'red', 'Auto Launch', True)
     assert harness._auto_launch_stopping is False
     assert harness._auto_launch_active_keys == []
+
+
+def test_record_auto_launch_uncheck_stops_active_recording():
+    events = []
+    harness = SimpleNamespace(
+        _recording_remember_output_dir=True,
+        _cancel_recording_schedule=lambda: events.append('cancel_recording'),
+        _recording_is_active=lambda: True,
+        _stop_screen_recording=lambda **kwargs: events.append(
+            ('stop_recording', kwargs)
+        ),
+        _log_info=lambda message: events.append(('log', message)),
+    )
+    harness._on_record_checkbox_toggled = MethodType(
+        MainWindow._on_record_checkbox_toggled,
+        harness,
+    )
+
+    harness._on_record_checkbox_toggled(False)
+
+    assert events == [
+        'cancel_recording',
+        (
+            'stop_recording',
+            {
+                'save_logs': True,
+                'reason': 'Record Auto Launch unchecked; stopping recording',
+            },
+        ),
+    ]
+
+
+def test_recording_stop_requests_ffmpeg_clean_quit():
+    events = []
+
+    class FakeProcess:
+        def state(self):
+            return QProcess.Running
+
+        def write(self, data):
+            events.append(('write', data))
+
+        def closeWriteChannel(self):
+            events.append('close_stdin')
+
+    session = {}
+    harness = SimpleNamespace(
+        _recording_start_timer=None,
+        _recording_session=session,
+        _recording_proc=FakeProcess(),
+        _cancel_recording_schedule=lambda: events.append('cancel_recording'),
+        _log_info=lambda message: events.append(('log', message)),
+        _request_ffmpeg_stop=MethodType(
+            MainWindow._request_ffmpeg_stop,
+            SimpleNamespace(
+                _log_info=lambda message: events.append(('log', message)),
+                _append_gui_html=lambda key, text: events.append((key, text)),
+            ),
+        ),
+    )
+    harness._stop_screen_recording = MethodType(
+        MainWindow._stop_screen_recording,
+        harness,
+    )
+    harness._terminate_recording_if_running = lambda _proc: None
+
+    harness._stop_screen_recording(save_logs=True, reason='stop test')
+
+    assert session['save_logs'] is True
+    assert session['stop_requested'] is True
+    assert ('write', b'q\n') in events
+    assert 'close_stdin' in events
+
+
+def test_recording_display_prefers_config_then_environment(monkeypatch):
+    harness = SimpleNamespace(_recording_cfg={})
+    harness._recording_display = MethodType(
+        MainWindow._recording_display,
+        harness,
+    )
+
+    monkeypatch.setenv('DISPLAY', ':42')
+    assert harness._recording_display() == ':42'
+
+    harness._recording_cfg = {'display': ':7'}
+    assert harness._recording_display() == ':7'
+
+    monkeypatch.delenv('DISPLAY')
+    harness._recording_cfg = {}
+    assert harness._recording_display() == ':1'

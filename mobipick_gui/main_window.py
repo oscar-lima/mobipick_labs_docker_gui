@@ -27,6 +27,7 @@ from PyQt5.QtWidgets import (
     QDialogButtonBox,
     QDoubleSpinBox,
     QFileDialog,
+    QFormLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -327,6 +328,9 @@ class MainWindow(QMainWindow):
         self._recording_remember_output_dir = bool(
             self._recording_cfg.get('remember_output_dir', False)
         )
+        self._recording_show_control_window = bool(
+            self._recording_cfg.get('show_control_window', True)
+        )
         self._recording_output_root = self._resolve_recording_output_root()
         self._recording_workspace_name = self._normalize_workspace_name(self._recording_cfg.get('workspace_name'))
         active_workspace = self._workspace_registry.active_workspace()
@@ -342,6 +346,8 @@ class MainWindow(QMainWindow):
         self._recording_window: QDialog | None = None
         self._recording_stop_button: QPushButton | None = None
         self._recording_path_label: QLabel | None = None
+        self._recording_indicator_timer: QTimer | None = None
+        self._recording_indicator_on = False
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -482,23 +488,30 @@ class MainWindow(QMainWindow):
         self.auto_launch_button = QPushButton()
         self.auto_launch_button.clicked.connect(self._on_auto_launch_toggle_clicked)
         auto_launch_tooltip = str(self._launch_plan.get('button', {}).get('tooltip') or '').strip()
+        self._auto_launch_base_tooltip = auto_launch_tooltip
         if auto_launch_tooltip:
             self.auto_launch_button.setToolTip(auto_launch_tooltip)
         actions.addWidget(self.auto_launch_button)
         self._button_widgets['auto_launch'] = self.auto_launch_button
 
-        self.record_checkbox = QCheckBox('Record screen')
-        self.record_checkbox.setToolTip('Record the full display after auto launch finishes repositioning windows.')
+        self.record_checkbox = QCheckBox('Record Auto Launch')
+        self.record_checkbox.setToolTip(
+            'Record the Auto Launch run: screen video plus run logs. '
+            'Recording starts after you press Auto Launch and its timeline '
+            'and window-layout delay finish.'
+        )
         self.record_checkbox.setChecked(self._recording_default_checked)
         self.record_checkbox.toggled.connect(self._on_record_checkbox_toggled)
         actions.addWidget(self.record_checkbox)
-        self.record_folder_button = QPushButton('Recording Folder')
-        self.record_folder_button.clicked.connect(
-            self._on_recording_folder_clicked
+        self.recording_indicator = QLabel('REC off')
+        self.recording_indicator.setMinimumWidth(170)
+        self.recording_indicator.setAlignment(Qt.AlignCenter)
+        actions.addWidget(self.recording_indicator)
+        self.recording_options_button = QPushButton('Recording Options')
+        self.recording_options_button.clicked.connect(
+            self._open_recording_options
         )
-        actions.addWidget(self.record_folder_button)
-        self.record_resolution_label = QLabel('Resolution:')
-        actions.addWidget(self.record_resolution_label)
+        actions.addWidget(self.recording_options_button)
         self.record_resolution_combo = QComboBox()
         self.record_resolution_combo.setInsertPolicy(QComboBox.NoInsert)
         self.record_resolution_combo.addItems(self._recording_resolutions)
@@ -508,9 +521,11 @@ class MainWindow(QMainWindow):
             )
         else:
             self.record_resolution_combo.setCurrentIndex(0)
-        self.record_resolution_combo.setToolTip('Select the resolution used for screen recording.')
-        actions.addWidget(self.record_resolution_combo)
+        self.record_resolution_combo.setToolTip('Select the video resolution used for Auto Launch recording.')
         self._update_recording_location_tooltip()
+        self._set_recording_indicator(
+            'armed' if self.record_checkbox.isChecked() else 'off'
+        )
 
         self.world_label = QLabel('world_config:')
         actions.addWidget(self.world_label)
@@ -1121,9 +1136,14 @@ class MainWindow(QMainWindow):
             self._top_controls_layout,
             insert_at=terminal_index,
         )
-        self.auto_launch_button.setToolTip(
-            str(self._launch_plan.get('button', {}).get('tooltip') or '')
+        self._auto_launch_base_tooltip = str(
+            self._launch_plan.get('button', {}).get('tooltip') or ''
         )
+        if getattr(self, 'record_checkbox', None) and self.record_checkbox.isChecked():
+            state = 'active' if self._recording_is_active() else 'armed'
+        else:
+            state = 'off'
+        self._set_auto_launch_recording_hint(state)
         self._update_buttons()
 
     def _open_workspace_manager(self) -> None:
@@ -2830,34 +2850,280 @@ CMD ["bash"]
 
     def _update_recording_location_tooltip(self) -> None:
         text = (
-            'Screen recordings are saved under:\n'
+            'Auto Launch recordings are saved under:\n'
             f'{self._recording_output_root}\n\n'
-            'A timestamped folder is created for each recording.'
+            'A timestamped folder is created for each recording with the '
+            'screen video and saved logs. Recording starts after Auto Launch '
+            'finishes its timeline and window layout delay. It stops when '
+            'Record Auto Launch is unchecked, Stop Recording '
+            'is pressed in the optional pop-out window, Auto Launch is stopped, '
+            'Roscore stops, or the GUI exits.'
         )
         if getattr(self, 'record_checkbox', None):
             self.record_checkbox.setToolTip(text)
-        if getattr(self, 'record_folder_button', None):
-            self.record_folder_button.setToolTip(
+        if getattr(self, 'recording_options_button', None):
+            self.recording_options_button.setToolTip(
                 text + '\n\nClick to choose a different recording folder.'
             )
+        if getattr(self, 'recording_indicator', None):
+            self.recording_indicator.setToolTip(
+                'Red flashing means Auto Launch recording is actively running. '
+                'REC armed means recording is waiting for you to press Auto Launch.'
+            )
+
+    def _on_recording_popup_toggled(self, checked: bool) -> None:
+        self._recording_show_control_window = checked
+        self._recording_cfg['show_control_window'] = checked
+        try:
+            save_user_config_update({
+                'recording': {'show_control_window': checked},
+            })
+        except Exception as exc:
+            self._append_gui_html(
+                'log',
+                '<i>Failed to save recording control window preference: '
+                f'{html.escape(str(exc))}</i>',
+            )
+        if checked and self._recording_session:
+            video_path = self._recording_session.get('video_path')
+            if video_path:
+                self._show_recording_window(Path(video_path))
+        elif not checked and self._recording_window:
+            self._recording_window.hide()
+
+    def _open_recording_options(self) -> None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle('Recording Options')
+        layout = QVBoxLayout(dialog)
+
+        summary = QLabel(
+            'Recording captures the Auto Launch run: screen video plus saved '
+            'GUI logs. It starts after you press Auto Launch and the launch '
+            'timeline/window-layout delay finishes.'
+        )
+        summary.setWordWrap(True)
+        layout.addWidget(summary)
+
+        form = QFormLayout()
+        path_row = QHBoxLayout()
+        path_edit = QLineEdit(str(self._recording_output_root))
+        path_row.addWidget(path_edit)
+        browse = QPushButton('Browse')
+        path_row.addWidget(browse)
+        form.addRow('Save under:', path_row)
+
+        remember = QCheckBox('Remember this folder')
+        remember.setChecked(self._recording_remember_output_dir)
+        form.addRow('', remember)
+
+        resolution = QComboBox()
+        resolution.setInsertPolicy(QComboBox.NoInsert)
+        resolution.addItems(self._recording_resolutions)
+        current = self._current_recording_resolution()
+        index = resolution.findText(current)
+        if index >= 0:
+            resolution.setCurrentIndex(index)
+        form.addRow('Screen resolution:', resolution)
+
+        stop_window = QCheckBox('Show always-on-top Stop Recording window')
+        stop_window.setChecked(self._recording_show_control_window)
+        form.addRow('', stop_window)
+        layout.addLayout(form)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.Save | QDialogButtonBox.Cancel
+        )
+        layout.addWidget(buttons)
+
+        def _browse() -> None:
+            selected = QFileDialog.getExistingDirectory(
+                dialog,
+                'Choose recording folder',
+                path_edit.text().strip() or str(self._recording_output_root),
+            )
+            if selected:
+                path_edit.setText(selected)
+
+        def _save() -> None:
+            raw = path_edit.text().strip()
+            if not raw:
+                QMessageBox.warning(
+                    dialog,
+                    'Recording Options',
+                    'Choose a folder for recordings.',
+                )
+                return
+            output_dir = Path(raw).expanduser()
+            if not output_dir.is_absolute():
+                output_dir = PROJECT_ROOT / output_dir
+            selected_resolution = self._normalize_resolution_string(
+                resolution.currentText()
+            ) or self._select_default_resolution()
+            self._recording_output_root = output_dir
+            self._recording_counter = self._load_recording_counter()
+            self._recording_remember_output_dir = remember.isChecked()
+            self._recording_show_control_window = stop_window.isChecked()
+            self._recording_cfg['output_dir'] = str(output_dir)
+            self._recording_cfg['remember_output_dir'] = (
+                self._recording_remember_output_dir
+            )
+            self._recording_cfg['show_control_window'] = (
+                self._recording_show_control_window
+            )
+            self._recording_cfg['resolution'] = selected_resolution
+            combo_index = self.record_resolution_combo.findText(
+                selected_resolution
+            )
+            if combo_index >= 0:
+                self.record_resolution_combo.setCurrentIndex(combo_index)
+            try:
+                save_user_config_update({
+                    'recording': {
+                        'output_dir': str(output_dir),
+                        'remember_output_dir': (
+                            self._recording_remember_output_dir
+                        ),
+                        'show_control_window': (
+                            self._recording_show_control_window
+                        ),
+                        'resolution': selected_resolution,
+                    },
+                })
+            except Exception as exc:
+                self._append_gui_html(
+                    'log',
+                    '<i>Failed to save recording options: '
+                    f'{html.escape(str(exc))}</i>',
+                )
+            self._update_recording_location_tooltip()
+            self._log_info(f'recording options saved; output folder: {output_dir}')
+            if self._recording_window and not self._recording_show_control_window:
+                self._recording_window.hide()
+            if self._recording_show_control_window and self._recording_session:
+                video_path = self._recording_session.get('video_path')
+                if video_path:
+                    self._show_recording_window(Path(video_path))
+            dialog.accept()
+
+        browse.clicked.connect(_browse)
+        buttons.accepted.connect(_save)
+        buttons.rejected.connect(dialog.reject)
+        dialog.exec_()
+
+    def _set_recording_indicator(self, state: str) -> None:
+        if not getattr(self, 'recording_indicator', None):
+            return
+        if state != 'active':
+            self._stop_recording_indicator_flash()
+        if state == 'active':
+            self.recording_indicator.setText('● REC')
+            self.recording_indicator.setToolTip(
+                'Auto Launch recording is running. Uncheck Record Auto Launch, stop '
+                'Auto Launch, or use the stop window to end it.'
+            )
+            self._set_auto_launch_recording_hint('active')
+            self._start_recording_indicator_flash()
+        elif state == 'armed':
+            self.recording_indicator.setText('REC armed: press Auto Launch')
+            self.recording_indicator.setToolTip(
+                'Recording is armed but has not started. Press Auto Launch '
+                'to trigger the launch timeline; recording starts after that '
+                'timeline and the window-layout delay finish.'
+            )
+            self._set_auto_launch_recording_hint('armed')
+            self.recording_indicator.setStyleSheet(
+                'QLabel { color: #6c3b00; background: #fff3cd; '
+                'border: 1px solid #f0c36d; border-radius: 4px; '
+                'padding: 2px 6px; font-weight: bold; }'
+            )
+        else:
+            self.recording_indicator.setText('REC off')
+            self.recording_indicator.setToolTip(
+                'Check Record Auto Launch to arm a recording for the next Auto Launch.'
+            )
+            self._set_auto_launch_recording_hint('off')
+            self.recording_indicator.setStyleSheet(
+                'QLabel { color: #666666; background: transparent; '
+                'border: 1px solid transparent; padding: 2px 6px; }'
+            )
+
+    def _set_auto_launch_recording_hint(self, state: str) -> None:
+        if not getattr(self, 'auto_launch_button', None):
+            return
+        base = getattr(self, '_auto_launch_base_tooltip', '') or ''
+        if state == 'armed':
+            hint = (
+                'Recording is armed: click Auto Launch to trigger recording. '
+                'Capture starts after the launch timeline and window-layout delay.'
+            )
+        elif state == 'active':
+            hint = 'Recording is active: click Auto Launch to stop the launch stack and recording.'
+        else:
+            hint = ''
+        tooltip = '\n\n'.join(part for part in (base, hint) if part)
+        self.auto_launch_button.setToolTip(tooltip)
+
+    def _start_recording_indicator_flash(self) -> None:
+        if self._recording_indicator_timer is None:
+            timer = QTimer(self)
+            timer.timeout.connect(self._flash_recording_indicator)
+            self._recording_indicator_timer = timer
+        self._recording_indicator_on = True
+        self._flash_recording_indicator()
+        if not self._recording_indicator_timer.isActive():
+            self._recording_indicator_timer.start(500)
+
+    def _stop_recording_indicator_flash(self) -> None:
+        timer = self._recording_indicator_timer
+        if timer is not None and timer.isActive():
+            timer.stop()
+        self._recording_indicator_on = False
+
+    def _flash_recording_indicator(self) -> None:
+        if not getattr(self, 'recording_indicator', None):
+            return
+        if self._recording_indicator_on:
+            self.recording_indicator.setStyleSheet(
+                'QLabel { color: white; background: #d00000; '
+                'border: 1px solid #7a0000; border-radius: 4px; '
+                'padding: 2px 6px; font-weight: bold; }'
+            )
+        else:
+            self.recording_indicator.setStyleSheet(
+                'QLabel { color: #d00000; background: #ffe1e1; '
+                'border: 1px solid #d00000; border-radius: 4px; '
+                'padding: 2px 6px; font-weight: bold; }'
+            )
+        self._recording_indicator_on = not self._recording_indicator_on
 
     def _on_record_checkbox_toggled(self, checked: bool) -> None:
-        if not checked or self._recording_remember_output_dir:
+        if not checked:
+            self._cancel_recording_schedule()
+            if self._recording_is_active():
+                self._stop_screen_recording(
+                    save_logs=True,
+                    reason='Record Auto Launch unchecked; stopping recording',
+                )
+            else:
+                self._set_recording_indicator('off')
+                self._log_info('Auto Launch recording disabled')
+            return
+        if self._recording_remember_output_dir:
+            self._set_recording_indicator('armed')
+            self._log_recording_armed()
             return
         if self._choose_recording_output_root(
             title='Choose Recording Folder',
             remember_default=False,
         ):
+            self._set_recording_indicator('armed')
+            self._log_recording_armed()
             return
         self.record_checkbox.blockSignals(True)
         self.record_checkbox.setChecked(False)
         self.record_checkbox.blockSignals(False)
-
-    def _on_recording_folder_clicked(self) -> None:
-        self._choose_recording_output_root(
-            title='Change Recording Folder',
-            remember_default=self._recording_remember_output_dir,
-        )
+        self._set_recording_indicator('off')
+        self._log_info('Auto Launch recording was not enabled because no folder was selected')
 
     def _choose_recording_output_root(
         self,
@@ -2891,8 +3157,16 @@ CMD ["bash"]
                     f'{html.escape(str(exc))}</i>',
                 )
         self._update_recording_location_tooltip()
-        self._log_info(f'screen recordings will be saved under {output_dir}')
+        self._log_info(f'Auto Launch recordings will be saved under {output_dir}')
         return True
+
+    def _log_recording_armed(self) -> None:
+        self._log_info(
+            'Auto Launch recording armed; press Auto Launch to trigger it. '
+            'Recording starts after Auto Launch finishes its timeline and '
+            f'window layout delay. Output folder: '
+            f'{self._recording_output_root}'
+        )
 
     def _recording_output_dialog(
         self,
@@ -2904,7 +3178,13 @@ CMD ["bash"]
         layout = QVBoxLayout(dialog)
 
         label = QLabel(
-            'Choose the folder that will contain screen recording sessions.'
+            'Choose the folder that will contain Auto Launch recording '
+            'sessions. Each recording saves screen video and logs in a '
+            'timestamped subfolder. Recording is triggered by pressing Auto '
+            'Launch, then starts after Auto Launch finishes its timeline and '
+            'window layout delay. It stops when Record Auto Launch is '
+            'unchecked, Stop Recording is pressed in the optional pop-out '
+            'window, Auto Launch is stopped, Roscore stops, or the GUI exits.'
         )
         label.setWordWrap(True)
         layout.addWidget(label)
@@ -2941,7 +3221,7 @@ CMD ["bash"]
                 QMessageBox.warning(
                     dialog,
                     'Recording Folder',
-                    'Choose a folder for screen recordings.',
+                    'Choose a folder for Auto Launch recordings.',
                 )
                 return
             dialog.accept()
@@ -3051,6 +3331,10 @@ CMD ["bash"]
                 return self._clamp_resolution_to_screen(value)
         return self._clamp_resolution_to_screen(self._select_default_resolution())
 
+    def _recording_display(self) -> str:
+        configured = str(self._recording_cfg.get('display') or '').strip()
+        return configured or os.environ.get('DISPLAY') or ':1'
+
     def _clamp_resolution_to_screen(self, resolution: str) -> str:
         parts = resolution.split('x')
         if len(parts) != 2:
@@ -3095,7 +3379,7 @@ CMD ["bash"]
         if not getattr(self, 'record_checkbox', None):
             return
         if not self.record_checkbox.isChecked():
-            self._console_log(2, 'screen recording skipped (checkbox unchecked)')
+            self._console_log(2, 'Auto Launch recording skipped (checkbox unchecked)')
             return
         if self._recording_is_active():
             return
@@ -3118,7 +3402,7 @@ CMD ["bash"]
         timer.timeout.connect(_fire)
         self._recording_start_timer = timer
         timer.start(delay_ms)
-        self._log_info(f'scheduling screen recording in {delay_ms / 1000:.1f}s')
+        self._log_info(f'scheduling Auto Launch recording in {delay_ms / 1000:.1f}s')
 
     def _cancel_recording_schedule(self):
         timer = self._recording_start_timer
@@ -3199,6 +3483,7 @@ CMD ["bash"]
         except Exception as exc:
             self._append_gui_html('log', f'<i>Failed to prepare recording directory: {html.escape(str(exc))}</i>')
             return
+        self._log_info(f'preparing Auto Launch recording under {self._recording_output_root}')
         now = datetime.now()
         next_idx = max(self._recording_counter, self._load_recording_counter()) + 1
         self._recording_counter = next_idx
@@ -3211,6 +3496,7 @@ CMD ["bash"]
             return
         video_path = base_dir / f'{base_name}.mp4'
         ffmpeg_log = base_dir / 'ffmpeg.log'
+        self._log_info(f'Auto Launch recording session folder: {base_dir}')
         self._recording_session = {
             'base_dir': base_dir,
             'video_path': video_path,
@@ -3227,11 +3513,12 @@ CMD ["bash"]
             # fallback: let ffmpeg print to stdout/stderr
             pass
         requested_res = self._current_recording_resolution()
+        display = self._recording_display()
         args = [
             '-f', 'x11grab',
             '-s', requested_res,
             '-r', '30',
-            '-i', ':1',
+            '-i', display,
             '-vcodec', 'libx264',
             '-pix_fmt', 'yuv420p',
             '-preset', 'veryfast',
@@ -3244,14 +3531,27 @@ CMD ["bash"]
             f'<i>Recording error: {html.escape(proc.errorString())}</i>',
         ))
         self._recording_proc = proc
-        self._log_info(f'starting screen recording at {requested_res} to {video_path}')
+        self._log_info(f'starting Auto Launch recording at {requested_res} to {video_path}')
+        self._log_info(f'recording command: {shlex.join(["ffmpeg", *args])}')
+        self._log_info(f'ffmpeg output log: {ffmpeg_log}')
         proc.start('ffmpeg', args)
         if not proc.waitForStarted(3000):
-            self._append_gui_html('log', '<i>Unable to start ffmpeg; recording cancelled.</i>')
+            self._append_gui_html(
+                'log',
+                '<i>Unable to start ffmpeg; recording cancelled. '
+                f'Check {html.escape(str(ffmpeg_log))}.</i>',
+            )
             self._recording_proc = None
             self._recording_session = None
+            if getattr(self, 'record_checkbox', None):
+                self.record_checkbox.blockSignals(True)
+                self.record_checkbox.setChecked(False)
+                self.record_checkbox.blockSignals(False)
+            self._set_recording_indicator('off')
             return
-        self._show_recording_window(video_path)
+        self._set_recording_indicator('active')
+        if self._recording_show_control_window:
+            self._show_recording_window(video_path)
 
     def _stop_screen_recording(self, *, save_logs: bool, reason: str | None = None):
         self._cancel_recording_schedule()
@@ -3268,10 +3568,49 @@ CMD ["bash"]
         except RuntimeError:
             return
         if proc and state != QProcess.NotRunning:
-            proc.terminate()
-            QTimer.singleShot(2000, lambda: self._force_kill_recording(proc))
+            if not session.get('stop_requested'):
+                session['stop_requested'] = True
+                self._request_ffmpeg_stop(proc)
+                QTimer.singleShot(
+                    5000,
+                    lambda: self._terminate_recording_if_running(proc),
+                )
             return
         self._finalize_recording_session()
+
+    def _request_ffmpeg_stop(self, proc: QProcess) -> None:
+        self._log_info('requesting ffmpeg to finish recording cleanly')
+        try:
+            proc.write(b'q\n')
+            proc.closeWriteChannel()
+        except Exception as exc:
+            self._append_gui_html(
+                'log',
+                '<i>Failed to send clean stop to ffmpeg; terminating: '
+                f'{html.escape(str(exc))}</i>',
+            )
+            try:
+                proc.terminate()
+            except Exception:
+                pass
+
+    def _terminate_recording_if_running(self, proc: QProcess | None):
+        if proc is None:
+            return
+        try:
+            state = proc.state()
+        except RuntimeError:
+            return
+        if state != QProcess.NotRunning:
+            self._append_gui_html(
+                'log',
+                '<i>ffmpeg did not stop after clean quit request; terminating.</i>',
+            )
+            try:
+                proc.terminate()
+            except Exception:
+                pass
+            QTimer.singleShot(2000, lambda: self._force_kill_recording(proc))
 
     def _force_kill_recording(self, proc: QProcess | None):
         if proc is None:
@@ -3298,6 +3637,10 @@ CMD ["bash"]
         self._recording_session = None
         if self._recording_window:
             self._recording_window.hide()
+        if getattr(self, 'record_checkbox', None) and self.record_checkbox.isChecked():
+            self._set_recording_indicator('armed')
+        else:
+            self._set_recording_indicator('off')
         if session is None:
             return
         base_dir = session.get('base_dir')
@@ -3318,10 +3661,15 @@ CMD ["bash"]
                     f'<i>Saved {saved} log file(s) to {html.escape(str(logs_dir))}</i>',
                 )
         if not video_exists:
+            self._append_gui_html(
+                'log',
+                '<i>No recording video was produced. Check '
+                f'{html.escape(str(base_dir / "ffmpeg.log"))}.</i>',
+            )
             QMessageBox.warning(
                 self,
                 'Recording',
-                f'No video file was produced. Check ffmpeg.log in {html.escape(str(base_dir))}.',
+                f'No video file was produced. Check ffmpeg.log in {base_dir}.',
             )
         elif exit_code not in (None, 0):
             # ffmpeg exits non-zero when we terminate it; suppress dialog if video is present.
@@ -3345,10 +3693,21 @@ CMD ["bash"]
             message = QMessageBox(self)
             message.setIcon(QMessageBox.Information)
             message.setWindowTitle('Auto Launch')
-            message.setText(
+            text = (
                 'No launch sequence is configured. Configure automation to '
                 'create one from the available buttons.'
             )
+            if getattr(self, 'record_checkbox', None) and self.record_checkbox.isChecked():
+                text += (
+                    '\n\nRecord Auto Launch is armed, but recording starts only '
+                    'from an Auto Launch run. Configure an Auto Launch '
+                    'sequence first, then press Auto Launch again.'
+                )
+                self._log_info(
+                    'Auto Launch recording is armed but cannot start because no '
+                    'Auto Launch sequence is configured'
+                )
+            message.setText(text)
             configure_button = message.addButton('Configure', QMessageBox.ActionRole)
             message.addButton(QMessageBox.Ok)
             message.exec_()

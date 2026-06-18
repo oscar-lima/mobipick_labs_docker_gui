@@ -195,6 +195,8 @@ CONFIG_DEFAULTS: Dict[str, Dict] = {
         'enabled_by_default': False,
         'output_dir': str(USER_DATA_DIR / 'recordings'),
         'remember_output_dir': False,
+        'display': '',
+        'show_control_window': True,
         'workspace_name': 'workspace',
         'resolution': '3440x1440',
         'presets': ['1920x1080', '2560x1440', '3440x1440'],
