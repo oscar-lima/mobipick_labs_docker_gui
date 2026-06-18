@@ -295,6 +295,7 @@ class MainWindow(QMainWindow):
         self._config_buttons: dict[str, dict] = {}
         self._config_button_order: list[str] = []
         self._auto_launch_running = False
+        self._auto_launch_stopping = False
         self._auto_launch_timers: list[QTimer] = []
         self._auto_launch_active_keys: list[str] = []
         self._auto_launch_run_count = 0
@@ -1058,6 +1059,7 @@ class MainWindow(QMainWindow):
         self._cancel_auto_launch_timers()
         self._cancel_recording_schedule()
         self._auto_launch_running = False
+        self._auto_launch_stopping = False
         self._auto_launch_active_keys.clear()
         self._auto_launch_run_count = 0
         self._script_active_tab_key = None
@@ -3337,6 +3339,7 @@ CMD ["bash"]
             self._start_auto_launch_stack()
 
     def _start_auto_launch_stack(self):
+        self._auto_launch_stopping = False
         timeline = self._launch_plan.get('timeline') if isinstance(self._launch_plan, dict) else []
         if not timeline:
             message = QMessageBox(self)
@@ -3434,17 +3437,34 @@ CMD ["bash"]
         self._log_info(f'saved auto launch configuration to {saved_path}')
 
     def _stop_auto_launch_stack(self):
+        if self._auto_launch_stopping:
+            return
+        self._auto_launch_stopping = True
         self._cancel_auto_launch_timers()
         self._cancel_recording_schedule()
         order = self._auto_launch_shutdown_order()
         self._auto_launch_running = False
         if order:
             self.set_auto_launch_visual('yellow', 'Stopping Auto Launch...', False)
+            self._flush_ui_events()
             for key in order:
                 self._trigger_auto_launch_step(key, target_running=False)
         if self._recording_is_active():
             self._stop_screen_recording(save_logs=True, reason='Stopping recording after auto launch toggle')
+        if self._roscore_stopping:
+            return
+        self._finalize_auto_launch_stop()
+
+    def _finalize_auto_launch_stop(self):
+        self._auto_launch_running = False
+        self._auto_launch_stopping = False
+        self._auto_launch_active_keys.clear()
         self.set_auto_launch_visual('red', self._auto_launch_start_text(), True)
+
+    def _flush_ui_events(self):
+        app = QApplication.instance()
+        if app:
+            app.processEvents()
 
     def _auto_launch_shutdown_order(self) -> list[str]:
         plan_order = []
@@ -4180,10 +4200,10 @@ CMD ["bash"]
     def shutdown_roscore(self):
         if self._roscore_stopping:
             return
+        self._roscore_stopping = True
         self._stop_auto_launch_stack()
         self._log_info('stopping roscore master')
         self.set_roscore_visual('yellow', 'Shutting down...', enabled=False)
-        self._roscore_stopping = True
 
         sim_tab = self.tasks.get('sim')
         sim_running = bool(sim_tab and sim_tab.is_running())
@@ -4284,6 +4304,7 @@ CMD ["bash"]
                     self._terminal_stream_tab_key = None
                 self.set_terminal_visual('red', 'Open Terminal', True)
                 self._update_stop_custom_enabled()
+                self._finalize_auto_launch_stop()
 
             if commands:
                 self._run_command_sequence(commands, on_finished=_finalize, log_key=tab.key)
@@ -5809,10 +5830,9 @@ CMD ["bash"]
             if self._roscore_stopping:
                 self._cancel_auto_launch_timers()
                 self._cancel_recording_schedule()
-                self._auto_launch_running = False
                 if self._recording_is_active():
                     self._stop_screen_recording(save_logs=True, reason='Roscore stopped; ending recording')
-                self.set_auto_launch_visual('red', self._auto_launch_start_text(), True)
+                self._finalize_auto_launch_stop()
                 return
             self._roscore_last_start_ts = None
             self.set_roscore_visual('red', 'Start Roscore', enabled=True)
