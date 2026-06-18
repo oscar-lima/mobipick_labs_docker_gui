@@ -157,6 +157,101 @@ def test_setup_wizard_does_not_auto_open_when_images_are_available(
     app.processEvents()
 
 
+def test_record_screen_prompts_for_output_folder_and_remembers(
+    tmp_path,
+    monkeypatch,
+):
+    registry_path = tmp_path / 'workspaces.yaml'
+    output_dir = tmp_path / 'captures'
+    recording_cfg = copy.deepcopy(CONFIG['recording'])
+    recording_cfg.update({
+        'enabled_by_default': False,
+        'output_dir': str(tmp_path / 'default-captures'),
+        'remember_output_dir': False,
+    })
+    monkeypatch.setenv('MOBIPICK_WORKSPACE_CONFIG', str(registry_path))
+    monkeypatch.setitem(CONFIG, 'recording', recording_cfg)
+    monkeypatch.setattr(
+        MainWindow,
+        '_discover_filtered_image_records',
+        lambda self: ([{'ref': CONFIG['images']['default']}], None),
+    )
+    monkeypatch.setattr(
+        MainWindow,
+        'update_sim_status_from_poll',
+        lambda self, force=False: None,
+    )
+    monkeypatch.setattr(
+        MainWindow,
+        '_recording_output_dialog',
+        lambda self, title, remember_default: (output_dir, True),
+    )
+    saved = {}
+    monkeypatch.setattr(
+        main_window_module,
+        'save_user_config_update',
+        lambda updates: saved.setdefault('updates', updates),
+    )
+
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow(verbosity=1)
+    window.poll_timer.stop()
+    window._sigint_timer.stop()
+
+    window.record_checkbox.setChecked(True)
+
+    assert window.record_checkbox.isChecked()
+    assert window._recording_output_root == output_dir
+    assert window._recording_remember_output_dir is True
+    assert saved['updates'] == {
+        'recording': {
+            'output_dir': str(output_dir),
+            'remember_output_dir': True,
+        },
+    }
+
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_record_screen_cancel_keeps_checkbox_unchecked(tmp_path, monkeypatch):
+    registry_path = tmp_path / 'workspaces.yaml'
+    recording_cfg = copy.deepcopy(CONFIG['recording'])
+    recording_cfg.update({
+        'enabled_by_default': False,
+        'remember_output_dir': False,
+    })
+    monkeypatch.setenv('MOBIPICK_WORKSPACE_CONFIG', str(registry_path))
+    monkeypatch.setitem(CONFIG, 'recording', recording_cfg)
+    monkeypatch.setattr(
+        MainWindow,
+        '_discover_filtered_image_records',
+        lambda self: ([{'ref': CONFIG['images']['default']}], None),
+    )
+    monkeypatch.setattr(
+        MainWindow,
+        'update_sim_status_from_poll',
+        lambda self, force=False: None,
+    )
+    monkeypatch.setattr(
+        MainWindow,
+        '_recording_output_dialog',
+        lambda self, title, remember_default: None,
+    )
+
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow(verbosity=1)
+    window.poll_timer.stop()
+    window._sigint_timer.stop()
+
+    window.record_checkbox.setChecked(True)
+
+    assert not window.record_checkbox.isChecked()
+
+    window.deleteLater()
+    app.processEvents()
+
+
 def test_missing_default_image_opens_setup_wizard_when_other_images_exist(
     tmp_path,
     monkeypatch,

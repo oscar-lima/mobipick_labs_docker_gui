@@ -323,6 +323,9 @@ class MainWindow(QMainWindow):
         self._recording_default_checked = bool(
             self._recording_cfg.get('enabled_by_default', False)
         )
+        self._recording_remember_output_dir = bool(
+            self._recording_cfg.get('remember_output_dir', False)
+        )
         self._recording_output_root = self._resolve_recording_output_root()
         self._recording_workspace_name = self._normalize_workspace_name(self._recording_cfg.get('workspace_name'))
         active_workspace = self._workspace_registry.active_workspace()
@@ -486,7 +489,13 @@ class MainWindow(QMainWindow):
         self.record_checkbox = QCheckBox('Record screen')
         self.record_checkbox.setToolTip('Record the full display after auto launch finishes repositioning windows.')
         self.record_checkbox.setChecked(self._recording_default_checked)
+        self.record_checkbox.toggled.connect(self._on_record_checkbox_toggled)
         actions.addWidget(self.record_checkbox)
+        self.record_folder_button = QPushButton('Recording Folder')
+        self.record_folder_button.clicked.connect(
+            self._on_recording_folder_clicked
+        )
+        actions.addWidget(self.record_folder_button)
         self.record_resolution_label = QLabel('Resolution:')
         actions.addWidget(self.record_resolution_label)
         self.record_resolution_combo = QComboBox()
@@ -500,6 +509,7 @@ class MainWindow(QMainWindow):
             self.record_resolution_combo.setCurrentIndex(0)
         self.record_resolution_combo.setToolTip('Select the resolution used for screen recording.')
         actions.addWidget(self.record_resolution_combo)
+        self._update_recording_location_tooltip()
 
         self.world_label = QLabel('world_config:')
         actions.addWidget(self.world_label)
@@ -2815,6 +2825,131 @@ CMD ["bash"]
         if not path.is_absolute():
             path = PROJECT_ROOT / path
         return path
+
+    def _update_recording_location_tooltip(self) -> None:
+        text = (
+            'Screen recordings are saved under:\n'
+            f'{self._recording_output_root}\n\n'
+            'A timestamped folder is created for each recording.'
+        )
+        if getattr(self, 'record_checkbox', None):
+            self.record_checkbox.setToolTip(text)
+        if getattr(self, 'record_folder_button', None):
+            self.record_folder_button.setToolTip(
+                text + '\n\nClick to choose a different recording folder.'
+            )
+
+    def _on_record_checkbox_toggled(self, checked: bool) -> None:
+        if not checked or self._recording_remember_output_dir:
+            return
+        if self._choose_recording_output_root(
+            title='Choose Recording Folder',
+            remember_default=False,
+        ):
+            return
+        self.record_checkbox.blockSignals(True)
+        self.record_checkbox.setChecked(False)
+        self.record_checkbox.blockSignals(False)
+
+    def _on_recording_folder_clicked(self) -> None:
+        self._choose_recording_output_root(
+            title='Change Recording Folder',
+            remember_default=self._recording_remember_output_dir,
+        )
+
+    def _choose_recording_output_root(
+        self,
+        *,
+        title: str,
+        remember_default: bool,
+    ) -> bool:
+        selection = self._recording_output_dialog(title, remember_default)
+        if selection is None:
+            return False
+        output_dir, remember = selection
+        if not output_dir.is_absolute():
+            output_dir = PROJECT_ROOT / output_dir
+        self._recording_output_root = output_dir
+        self._recording_counter = self._load_recording_counter()
+        self._recording_remember_output_dir = remember
+        self._recording_cfg['output_dir'] = str(output_dir)
+        self._recording_cfg['remember_output_dir'] = remember
+        if remember or remember_default:
+            try:
+                save_user_config_update({
+                    'recording': {
+                        'output_dir': str(output_dir),
+                        'remember_output_dir': remember,
+                    },
+                })
+            except Exception as exc:
+                self._append_gui_html(
+                    'log',
+                    '<i>Failed to save recording folder preference: '
+                    f'{html.escape(str(exc))}</i>',
+                )
+        self._update_recording_location_tooltip()
+        self._log_info(f'screen recordings will be saved under {output_dir}')
+        return True
+
+    def _recording_output_dialog(
+        self,
+        title: str,
+        remember_default: bool,
+    ) -> tuple[Path, bool] | None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle(title)
+        layout = QVBoxLayout(dialog)
+
+        label = QLabel(
+            'Choose the folder that will contain screen recording sessions.'
+        )
+        label.setWordWrap(True)
+        layout.addWidget(label)
+
+        path_row = QHBoxLayout()
+        path_edit = QLineEdit(str(self._recording_output_root))
+        path_edit.setMinimumWidth(420)
+        path_row.addWidget(path_edit)
+        browse = QPushButton('Browse')
+        path_row.addWidget(browse)
+        layout.addLayout(path_row)
+
+        remember = QCheckBox('Remember this folder')
+        remember.setChecked(remember_default)
+        layout.addWidget(remember)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.Ok | QDialogButtonBox.Cancel
+        )
+        layout.addWidget(buttons)
+
+        def _browse() -> None:
+            selected = QFileDialog.getExistingDirectory(
+                dialog,
+                'Choose recording folder',
+                path_edit.text().strip() or str(self._recording_output_root),
+            )
+            if selected:
+                path_edit.setText(selected)
+
+        def _accept() -> None:
+            raw = path_edit.text().strip()
+            if not raw:
+                QMessageBox.warning(
+                    dialog,
+                    'Recording Folder',
+                    'Choose a folder for screen recordings.',
+                )
+                return
+            dialog.accept()
+
+        browse.clicked.connect(_browse)
+        buttons.accepted.connect(_accept)
+        buttons.rejected.connect(dialog.reject)
+        if dialog.exec_() != QDialog.Accepted:
+            return None
+        return Path(path_edit.text().strip()).expanduser(), remember.isChecked()
 
     def _load_recording_counter(self) -> int:
         try:

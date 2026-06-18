@@ -26,6 +26,7 @@ recording:
   enabled_by_default: false             # leave "Record screen" unchecked on startup
   workspace_name: "workspace"           # replaced by the active workspace name when one is selected
   output_dir: "~/.local/share/mobipick-labs-docker-gui/recordings"
+  remember_output_dir: false            # when false, checking "Record screen" asks where to save recordings
   resolution: "3440x1440"               # default ffmpeg capture resolution (-s)
   presets: ["1920x1080", "2560x1440", "3440x1440"]  # options shown in the resolution dropdown
   include_detected_resolution: true     # when true, add the detected primary monitor resolution as a selectable option
