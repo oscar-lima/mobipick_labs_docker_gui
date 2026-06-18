@@ -20,6 +20,7 @@ from urllib.parse import urlsplit
 from PyQt5.QtCore import QIODevice, QProcess, QProcessEnvironment, QTimer, Qt
 from PyQt5.QtGui import QColor, QGuiApplication, QTextCursor, QTextDocument
 from PyQt5.QtWidgets import (
+    QAction,
     QApplication,
     QCheckBox,
     QComboBox,
@@ -44,6 +45,7 @@ from PyQt5.QtWidgets import (
 )
 
 from .ansi import CSI_SEQ_RE, OSC_SEQ_RE, ansi_to_html
+from .bug_report import BugReportDialog
 from .config import (
     BUTTON_CONFIG_FILE,
     CONFIG,
@@ -66,6 +68,7 @@ CONTAINER_SCRIPTS_DIR = str(
 )
 from .process_tab import ProcessTab
 from .setup_wizard import ImageSetupWizard, SetupWizardSelection
+from .version import get_version
 from .window_layout import WindowLayoutManager
 from .workspace_dialog import WorkspaceManagerDialog
 from .workspaces import WorkspaceRegistry
@@ -271,6 +274,8 @@ class MainWindow(QMainWindow):
         self._gui_log_color = str(CONFIG['log'].get('gui_log_color', '#ff00ff'))
         self._command_log_color = str(CONFIG['log'].get('command_log_color', '#4da3ff'))
         self._default_image_dialog_shown = False
+        self._bug_report_dialog: BugReportDialog | None = None
+        self._create_menu_bar()
 
         # sim state
         self._sim_container_name = 'mobipick-run'
@@ -598,20 +603,11 @@ class MainWindow(QMainWindow):
         controls_row = QHBoxLayout()
         controls_row.addWidget(self.clear_button)
         controls_row.addWidget(self.clear_all_button)
-        controls_row.addWidget(self.commit_current_tab_button)
-        controls_row.addWidget(self.manage_images_button)
-        controls_row.addWidget(self.setup_wizard_button)
-        controls_row.addWidget(self.build_custom_image_button)
-        controls_row.addWidget(self.execute_docker_cp_button)
-        controls_row.addWidget(self.window_layout_button)
 
         spacer_controls = QWidget()
         spacer_controls.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         controls_row.addWidget(spacer_controls)
 
-        controls_row.addWidget(self.save_current_button)
-        controls_row.addWidget(self.load_log_button)
-        controls_row.addWidget(self.save_all_button)
         controls_row.addWidget(self.refresh_sim_button)
         root.addLayout(controls_row)
 
@@ -657,6 +653,184 @@ class MainWindow(QMainWindow):
         app_instance = QApplication.instance()
         if app_instance:
             app_instance.aboutToQuit.connect(self._ensure_cleanup_before_exit)
+
+    # ---------- Menu bar ----------
+
+    def _create_menu_bar(self) -> None:
+        menu_bar = self.menuBar()
+
+        workspace_menu = menu_bar.addMenu('Workspace')
+        self._add_menu_action(
+            workspace_menu,
+            'Configure Workspaces',
+            self._open_workspace_manager,
+        )
+        self._add_menu_action(
+            workspace_menu,
+            'Build Active Workspace',
+            self._build_active_workspace,
+        )
+
+        tools_menu = menu_bar.addMenu('Tools')
+        self._add_menu_action(tools_menu, 'Manage Images', self.manage_images)
+        self._add_menu_action(
+            tools_menu,
+            'Setup Wizard',
+            lambda _checked=False: self._open_setup_wizard(),
+        )
+        self._add_menu_action(
+            tools_menu,
+            'Build Custom Image',
+            lambda _checked=False: self._open_custom_image_builder(),
+        )
+        self._add_menu_action(
+            tools_menu,
+            'Commit Current Tab',
+            self.commit_current_tab,
+        )
+        self._add_menu_action(
+            tools_menu,
+            'Execute Docker cp',
+            self.execute_docker_cp_from_container,
+        )
+        self._add_menu_action(
+            tools_menu,
+            'Window Layout',
+            self._on_window_layout_clicked,
+        )
+        tools_menu.addSeparator()
+        self._add_menu_action(
+            tools_menu,
+            'Update Status',
+            self._on_refresh_clicked,
+        )
+
+        logs_menu = menu_bar.addMenu('Logs')
+        self._add_menu_action(logs_menu, 'Save Current Log', self.save_current_log)
+        self._add_menu_action(logs_menu, 'Load Log', self.load_log_file)
+        self._add_menu_action(logs_menu, 'Save All Logs', self.save_all_logs)
+        logs_menu.addSeparator()
+        self._add_menu_action(logs_menu, 'Clear Current Tab', self.clear_current_tab)
+        self._add_menu_action(logs_menu, 'Clear All Tabs', self.clear_all_tabs)
+
+        help_menu = menu_bar.addMenu('Help')
+        self._add_menu_action(
+            help_menu,
+            'File Bug Report...',
+            self._open_bug_report_dialog,
+        )
+        self._add_menu_action(help_menu, 'About', self._show_about_dialog)
+
+    def _add_menu_action(self, menu, text: str, slot) -> QAction:
+        action = QAction(text, self)
+        action.triggered.connect(
+            lambda _checked=False, callback=slot: callback()
+        )
+        menu.addAction(action)
+        return action
+
+    def _show_about_dialog(self) -> None:
+        QMessageBox.about(
+            self,
+            'About Mobipick Labs Control',
+            (
+                'Mobipick Labs Docker GUI\n\n'
+                f'Version: {get_version()}'
+            ),
+        )
+
+    def _open_bug_report_dialog(self) -> None:
+        if self._bug_report_dialog:
+            self._bug_report_dialog.raise_()
+            self._bug_report_dialog.activateWindow()
+            return
+        dialog = BugReportDialog(self._build_bug_report_context, self)
+        dialog.finished.connect(self._on_bug_report_dialog_closed)
+        self._bug_report_dialog = dialog
+        dialog.show()
+
+    def _on_bug_report_dialog_closed(self, _result: int) -> None:
+        self._bug_report_dialog = None
+
+    def _build_bug_report_context(self) -> dict:
+        active = self._workspace_registry.active_workspace()
+        workspaces = []
+        for workspace in self._workspace_registry.workspaces:
+            try:
+                directory = str(workspace.directory)
+            except OSError:
+                directory = workspace.path
+            workspaces.append(
+                {
+                    'name': workspace.name,
+                    'path': directory,
+                    'extends': list(workspace.extends),
+                    'image': workspace.image,
+                    'runtime_built': self._workspace_registry.is_runtime_built(
+                        workspace
+                    ),
+                    'active': workspace.name == self._workspace_registry.active,
+                }
+            )
+
+        return {
+            'generated_at': datetime.now().astimezone().isoformat(
+                timespec='seconds'
+            ),
+            'gui_version': get_version(),
+            'selected_workspace': (
+                {
+                    'name': active.name,
+                    'path': str(active.directory),
+                    'extends': list(active.extends),
+                    'image': active.image,
+                    'runtime_built': self._workspace_registry.is_runtime_built(
+                        active
+                    ),
+                    'active': True,
+                }
+                if active
+                else {}
+            ),
+            'selected_image': self._selected_image or '(none)',
+            'active_workspace_name': self._workspace_registry.active,
+            'workspace_match': self._bug_report_workspace_match(),
+            'host_workspace_mount': (
+                'enabled'
+                if self._selected_image
+                and self._image_supports_host_workspaces(self._selected_image)
+                else 'disabled'
+            ),
+            'workspace_registry_path': str(self._workspace_registry.path),
+            'workspace_master_folder': self._workspace_registry.master_folder,
+            'workspaces': workspaces,
+            'log_tab_text': self._bug_report_log_tab_text(),
+        }
+
+    def _bug_report_workspace_match(self) -> str:
+        image_ref = self._selected_image or ''
+        active_name = self._workspace_registry.active
+        if not image_ref:
+            return 'no Docker image selected'
+        compatible = self._image_compatible_with_workspace(
+            image_ref,
+            active_name,
+        )
+        if compatible is True:
+            return 'workspace match'
+        if compatible is False:
+            return 'image profile does not list the active workspace'
+        if active_name and not self._image_supports_host_workspaces(image_ref):
+            return 'selected image uses its baked workspace'
+        if active_name:
+            return 'unknown (no explicit compatibility profile)'
+        return 'not applicable (Docker image default workspace)'
+
+    def _bug_report_log_tab_text(self) -> str:
+        tab = self.tasks.get('log')
+        if not tab:
+            return ''
+        return tab.output.toPlainText()
 
     # ---------- ROS workspace management ----------
 
