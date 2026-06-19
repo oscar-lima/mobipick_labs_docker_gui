@@ -10,12 +10,17 @@ from PyQt5.QtWidgets import QApplication, QPushButton
 
 from mobipick_gui import main_window as main_window_module
 from mobipick_gui.config import CONFIG
-from mobipick_gui.main_window import MainWindow
+from mobipick_gui.main_window import MainWindow, WorkspaceMatchDialog
 from mobipick_gui.workspaces import RosWorkspace, WorkspaceRegistry
 
 
 def _create_window(monkeypatch, registry_path, images):
     monkeypatch.setenv('MOBIPICK_WORKSPACE_CONFIG', str(registry_path))
+    monkeypatch.setitem(
+        CONFIG,
+        'workspace_mismatch_warning',
+        {'silenced_exceptions': []},
+    )
     monkeypatch.setattr(
         MainWindow,
         '_discover_filtered_image_records',
@@ -178,6 +183,11 @@ def test_workspace_mismatch_exception_is_saved_and_suppresses_warning(
         'save_user_config_update',
         lambda updates: saved_updates.append(updates) or updates,
     )
+    monkeypatch.setattr(
+        main_window_module.QMessageBox,
+        'warning',
+        lambda *args, **kwargs: None,
+    )
 
     app, window = _create_window(
         monkeypatch,
@@ -202,6 +212,152 @@ def test_workspace_mismatch_exception_is_saved_and_suppresses_warning(
     ]
 
     window.deleteLater()
+    app.processEvents()
+
+
+def test_workspace_mismatch_can_be_marked_as_workspace_match(
+    tmp_path,
+    monkeypatch,
+):
+    image = 'ozkrelo/x_mobipick_labs:noetic-v1.2'
+    registry_path, _ = _write_registry(tmp_path, image)
+    saved_updates = []
+    monkeypatch.setattr(
+        main_window_module,
+        'save_user_config_update',
+        lambda updates: saved_updates.append(updates) or updates,
+    )
+
+    app, window = _create_window(
+        monkeypatch,
+        registry_path,
+        ['ozkrelo/mobipick_labs:noetic', image],
+    )
+
+    assert window._workspace_mismatch_warning_reason()
+
+    window._mark_current_image_workspace_match()
+
+    assert window._image_compatible_with_workspace(
+        image,
+        'clean_mobipick_labs_ws',
+    ) is True
+    assert 'workspace match' in window.image_combo.currentText()
+    profiles = saved_updates[-1]['images']['profiles']
+    assert any(
+        profile.get('ref') == image
+        and 'clean_mobipick_labs_ws' in profile.get('compatible_workspaces', [])
+        for profile in profiles
+    )
+
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_build_match_helper_marks_image_as_workspace_match(
+    tmp_path,
+    monkeypatch,
+):
+    _install_private_image_profiles(monkeypatch)
+    image = 'ozkrelo/x_mobipick_labs:oscar_user_from_1.2'
+    registry_path, _ = _write_registry(
+        tmp_path,
+        image,
+        workspace_name='common_tools_ws',
+    )
+    saved_updates = []
+    monkeypatch.setattr(
+        main_window_module,
+        'save_user_config_update',
+        lambda updates: saved_updates.append(updates) or updates,
+    )
+
+    app, window = _create_window(
+        monkeypatch,
+        registry_path,
+        ['ozkrelo/mobipick_labs:noetic', image],
+    )
+    workspace = window._workspace_registry.get('common_tools_ws')
+
+    assert window._image_compatible_with_workspace(image, 'common_tools_ws') is False
+
+    assert window._mark_workspace_build_image_match(workspace)
+
+    assert window._image_compatible_with_workspace(image, 'common_tools_ws') is True
+    profiles = saved_updates[-1]['images']['profiles']
+    assert any(
+        profile.get('ref') == image
+        and 'common_tools_ws' in profile.get('compatible_workspaces', [])
+        for profile in profiles
+    )
+
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_workspace_match_map_can_be_saved_from_editor(
+    tmp_path,
+    monkeypatch,
+):
+    image = 'ozkrelo/x_mobipick_labs:noetic-v1.2'
+    registry_path, _ = _write_registry(tmp_path, image)
+    saved_updates = []
+    monkeypatch.setattr(
+        main_window_module,
+        'save_user_config_update',
+        lambda updates: saved_updates.append(updates) or updates,
+    )
+
+    app, window = _create_window(
+        monkeypatch,
+        registry_path,
+        ['ozkrelo/mobipick_labs:noetic', image],
+    )
+
+    window._save_workspace_match_map({
+        image: ['Docker image default', 'clean_mobipick_labs_ws'],
+    })
+
+    assert window._image_compatible_with_workspace(
+        image,
+        'clean_mobipick_labs_ws',
+    ) is True
+    assert window._image_compatible_with_workspace(image, '') is True
+    profiles = saved_updates[-1]['images']['profiles']
+    assert any(
+        profile.get('ref') == image
+        and profile.get('compatible_workspaces') == [
+            'Docker image default',
+            'clean_mobipick_labs_ws',
+        ]
+        for profile in profiles
+    )
+
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_workspace_match_dialog_edits_image_matches():
+    app = QApplication.instance() or QApplication([])
+    dialog = WorkspaceMatchDialog(
+        ['image:a', 'image:b'],
+        ['base_ws', 'demo_ws'],
+        {'image:a': ['base_ws']},
+    )
+
+    assert dialog._checkboxes['base_ws'].isChecked()
+    assert not dialog._checkboxes['demo_ws'].isChecked()
+
+    dialog._checkboxes['demo_ws'].setChecked(True)
+    dialog.image_combo.setCurrentIndex(1)
+    dialog._checkboxes['Docker image default'].setChecked(True)
+
+    assert dialog.matches() == {
+        'image:a': ['base_ws', 'demo_ws'],
+        'image:b': ['Docker image default'],
+    }
+
+    dialog.deleteLater()
     app.processEvents()
 
 

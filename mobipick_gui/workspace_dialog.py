@@ -11,6 +11,7 @@ import yaml
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QPixmap
 from PyQt5.QtWidgets import (
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
@@ -28,8 +29,20 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
 )
 
+from .config import (
+    BUTTON_CONFIG_FILE,
+    BUTTON_PROFILE_DIR,
+    CONFIG,
+    LAUNCH_SEQUENCE_DIR,
+    PROJECT_ROOT,
+)
 from .settings_transfer import export_settings, import_settings
-from .workspaces import RosWorkspace, WorkspaceRegistry
+from .workspaces import (
+    DEFAULT_IMAGE_WORKSPACE_PATH,
+    IMAGE_WORKSPACE_EXTENDS,
+    RosWorkspace,
+    WorkspaceRegistry,
+)
 
 
 class WorkspaceManagerDialog(QDialog):
@@ -45,10 +58,16 @@ class WorkspaceManagerDialog(QDialog):
         parent=None,
         *,
         replace_allowed: Callable[[], bool] | None = None,
+        image_choices: list[str] | None = None,
+        image_workspace_path: str = '',
     ):
         super().__init__(parent)
         self.registry = registry
         self.replace_allowed = replace_allowed
+        self.image_choices = image_choices or []
+        self.image_workspace_path = image_workspace_path or DEFAULT_IMAGE_WORKSPACE_PATH
+        self._loading_editor = False
+        self._editor_snapshot: dict[str, str] | None = None
         self.setWindowTitle('ROS 1 Workspace Manager')
         self.resize(1000, 650)
 
@@ -115,12 +134,18 @@ class WorkspaceManagerDialog(QDialog):
         form = QFormLayout(editor)
         self.path_edit = QLineEdit()
         form.addRow('Path:', self.path_edit)
-        self.extends_edit = QLineEdit()
-        self.extends_edit.setPlaceholderText('Comma-separated parent workspaces')
-        form.addRow('Extends:', self.extends_edit)
-        self.image_edit = QLineEdit()
-        self.image_edit.setPlaceholderText(
+        self.extends_combo = QComboBox()
+        self.extends_combo.setEditable(False)
+        form.addRow('Extends:', self.extends_combo)
+        self.image_edit = QComboBox()
+        self.image_edit.setEditable(True)
+        self.image_edit.lineEdit().setPlaceholderText(
             'Docker image:tag used when this workspace is activated'
+        )
+        self._populate_combo(
+            self.image_edit,
+            self._image_options(),
+            blank_label='(GUI default)',
         )
         form.addRow('Docker image:', self.image_edit)
         self.sim_command_edit = QLineEdit()
@@ -129,7 +154,13 @@ class WorkspaceManagerDialog(QDialog):
         )
         form.addRow('Simulation command:', self.sim_command_edit)
 
-        self.button_config_edit = QLineEdit()
+        self.button_config_edit = QComboBox()
+        self.button_config_edit.setEditable(True)
+        self._populate_combo(
+            self.button_config_edit,
+            self._button_profile_options(),
+            blank_label='(GUI default)',
+        )
         button_row = QHBoxLayout()
         button_row.addWidget(self.button_config_edit)
         browse_buttons = QPushButton('Browse')
@@ -139,7 +170,13 @@ class WorkspaceManagerDialog(QDialog):
         button_row.addWidget(browse_buttons)
         form.addRow('Button profile:', button_row)
 
-        self.launch_config_edit = QLineEdit()
+        self.launch_config_edit = QComboBox()
+        self.launch_config_edit.setEditable(True)
+        self._populate_combo(
+            self.launch_config_edit,
+            self._launch_profile_options(),
+            blank_label='(Auto)',
+        )
         launch_row = QHBoxLayout()
         launch_row.addWidget(self.launch_config_edit)
         browse_launch = QPushButton('Browse')
@@ -153,11 +190,137 @@ class WorkspaceManagerDialog(QDialog):
         save_profile.clicked.connect(self._save_selected)
         form.addRow('', save_profile)
         root.addWidget(editor)
+        self._connect_editor_dirty_signals()
 
         buttons = QDialogButtonBox(QDialogButtonBox.Close)
         buttons.rejected.connect(self.reject)
         root.addWidget(buttons)
         self.refresh()
+
+    def _connect_editor_dirty_signals(self) -> None:
+        for editor in (self.path_edit, self.sim_command_edit):
+            editor.textChanged.connect(self._on_editor_changed)
+        for combo in (
+            self.extends_combo,
+            self.image_edit,
+            self.button_config_edit,
+            self.launch_config_edit,
+        ):
+            combo.currentIndexChanged.connect(self._on_editor_changed)
+            line_edit = combo.lineEdit()
+            if line_edit is not None:
+                line_edit.textChanged.connect(self._on_editor_changed)
+
+    def _on_editor_changed(self, *args) -> None:
+        if self._loading_editor:
+            return
+
+    @staticmethod
+    def _populate_combo(
+        combo: QComboBox,
+        values: list[str],
+        *,
+        blank_label: str,
+    ) -> None:
+        combo.addItem(blank_label, '')
+        seen = {''}
+        for value in values:
+            text = str(value or '').strip()
+            if text and text not in seen:
+                combo.addItem(text, text)
+                seen.add(text)
+
+    @staticmethod
+    def _combo_text(combo: QComboBox) -> str:
+        text = combo.currentText().strip()
+        index = combo.currentIndex()
+        data = combo.currentData()
+        if index >= 0 and text == combo.itemText(index) and data is not None:
+            return str(data)
+        return text
+
+    @staticmethod
+    def _set_combo_text(combo: QComboBox, value: str) -> None:
+        text = str(value or '').strip()
+        index = combo.findData(text)
+        if index >= 0:
+            combo.setCurrentIndex(index)
+            return
+        combo.setEditText(text)
+
+    def _image_options(self) -> list[str]:
+        return list(self.image_choices)
+
+    def _button_profile_options(self) -> list[str]:
+        values = [
+            str(CONFIG.get('buttons', {}).get('config_file') or ''),
+            str(BUTTON_CONFIG_FILE),
+        ]
+        values.extend(self._yaml_files(PROJECT_ROOT / 'config', 'button*'))
+        values.extend(self._yaml_files(PROJECT_ROOT / 'private' / 'button_configs'))
+        values.extend(self._yaml_files(BUTTON_PROFILE_DIR))
+        values.extend(workspace.button_config for workspace in self.registry.workspaces)
+        return values
+
+    def _launch_profile_options(self) -> list[str]:
+        values = [
+            str(CONFIG.get('launch_sequence', {}).get('config_file') or ''),
+        ]
+        values.extend(self._yaml_files(LAUNCH_SEQUENCE_DIR))
+        values.extend(workspace.launch_config for workspace in self.registry.workspaces)
+        return [
+            value
+            for value in values
+            if str(value or '').strip().lower() not in {'auto', 'default'}
+        ]
+
+    @staticmethod
+    def _yaml_files(directory: Path, pattern: str = '*') -> list[str]:
+        try:
+            return [
+                str(path)
+                for path in sorted(directory.glob(pattern))
+                if path.is_file() and path.suffix.lower() in {'.yaml', '.yml'}
+            ]
+        except OSError:
+            return []
+
+    def _populate_extends_combo(self, workspace: RosWorkspace | None) -> None:
+        selected = workspace.extends[0] if workspace and workspace.extends else ''
+        current_name = workspace.name if workspace else ''
+        self.extends_combo.blockSignals(True)
+        self.extends_combo.clear()
+        self.extends_combo.addItem('ROS noetic only (/opt/ros/noetic)', '')
+        self.extends_combo.addItem(
+            f'Docker image baked workspace ({self.image_workspace_path})',
+            IMAGE_WORKSPACE_EXTENDS,
+        )
+        for candidate in self.registry.workspaces:
+            if candidate.name == current_name:
+                continue
+            if current_name and self._workspace_extends(candidate, current_name):
+                continue
+            if not self.registry.is_runtime_built(candidate):
+                continue
+            label = f'{candidate.name} ({candidate.directory / "devel"})'
+            self.extends_combo.addItem(label, candidate.name)
+        self._set_combo_text(self.extends_combo, selected)
+        self.extends_combo.blockSignals(False)
+
+    def _workspace_extends(self, workspace: RosWorkspace, target: str) -> bool:
+        pending = list(workspace.extends)
+        seen: set[str] = set()
+        while pending:
+            parent_name = pending.pop()
+            if parent_name == target:
+                return True
+            if parent_name in seen:
+                continue
+            seen.add(parent_name)
+            parent = self.registry.get(parent_name)
+            if parent:
+                pending.extend(parent.extends)
+        return False
 
     def _selected_name(self) -> str:
         items = self.tree.selectedItems()
@@ -165,6 +328,25 @@ class WorkspaceManagerDialog(QDialog):
 
     def _selected_workspace(self) -> RosWorkspace | None:
         return self.registry.get(self._selected_name())
+
+    def _editor_values(self) -> dict[str, str]:
+        return {
+            'path': self.path_edit.text().strip(),
+            'extends': self._combo_text(self.extends_combo),
+            'image': self._combo_text(self.image_edit),
+            'sim_command': self.sim_command_edit.text().strip(),
+            'button_config': self._combo_text(self.button_config_edit),
+            'launch_config': self._combo_text(self.launch_config_edit),
+        }
+
+    def _editor_is_dirty(self) -> bool:
+        return (
+            self._editor_snapshot is not None
+            and self._editor_values() != self._editor_snapshot
+        )
+
+    def _remember_editor_snapshot(self) -> None:
+        self._editor_snapshot = self._editor_values()
 
     def refresh(self, select_name: str = '') -> None:
         self.master_label.setText(
@@ -185,7 +367,7 @@ class WorkspaceManagerDialog(QDialog):
                     workspace.name,
                     str(workspace.directory),
                     workspace.image or '(GUI default)',
-                    ', '.join(workspace.extends),
+                    self._extends_display(workspace),
                     status,
                 ]
             )
@@ -202,28 +384,54 @@ class WorkspaceManagerDialog(QDialog):
         else:
             self._clear_editor()
 
+    def _extends_display(self, workspace: RosWorkspace) -> str:
+        if workspace.extends:
+            return ', '.join(
+                'Docker image baked workspace'
+                if item == IMAGE_WORKSPACE_EXTENDS
+                else item
+                for item in workspace.extends
+            )
+        if self.registry.is_runtime_built(workspace):
+            return ', '.join(self.registry.detected_underlays(workspace))
+        return ''
+
     def _clear_editor(self) -> None:
+        self._loading_editor = True
         for editor in (
             self.path_edit,
-            self.extends_edit,
-            self.image_edit,
             self.sim_command_edit,
+        ):
+            editor.clear()
+        self._populate_extends_combo(None)
+        for editor in (
+            self.image_edit,
             self.button_config_edit,
             self.launch_config_edit,
         ):
-            editor.clear()
+            self._set_combo_text(editor, '')
+        self.extends_combo.setEnabled(True)
+        self.extends_combo.setToolTip('')
+        self._editor_snapshot = None
+        self._loading_editor = False
 
     def _load_selected(self) -> None:
         workspace = self._selected_workspace()
         if not workspace:
             self._clear_editor()
             return
+        self._loading_editor = True
         self.path_edit.setText(str(workspace.directory))
-        self.extends_edit.setText(', '.join(workspace.extends))
-        self.image_edit.setText(workspace.image)
+        self._populate_extends_combo(workspace)
+        self.extends_combo.setToolTip(
+            'Select a built workspace to source before building this workspace.'
+        )
+        self._set_combo_text(self.image_edit, workspace.image)
         self.sim_command_edit.setText(workspace.sim_command)
-        self.button_config_edit.setText(workspace.button_config)
-        self.launch_config_edit.setText(workspace.launch_config)
+        self._set_combo_text(self.button_config_edit, workspace.button_config)
+        self._set_combo_text(self.launch_config_edit, workspace.launch_config)
+        self._remember_editor_snapshot()
+        self._loading_editor = False
 
     def _choose_master_folder(self) -> None:
         start = self.registry.master_folder or str(Path.home())
@@ -370,33 +578,68 @@ class WorkspaceManagerDialog(QDialog):
     def _use_image_default(self) -> None:
         self.workspace_activated.emit('')
 
-    def _save_selected(self) -> None:
+    def _save_selected(self) -> bool:
         workspace = self._selected_workspace()
         if not workspace:
-            return
+            return False
         updated = RosWorkspace(
             name=workspace.name,
             path=self.path_edit.text(),
-            image=self.image_edit.text(),
-            extends=[
-                part.strip()
-                for part in self.extends_edit.text().split(',')
-                if part.strip()
-            ],
+            image=self._combo_text(self.image_edit),
+            extends=(
+                [self._combo_text(self.extends_combo)]
+                if self._combo_text(self.extends_combo)
+                else []
+            ),
             sim_command=self.sim_command_edit.text(),
-            button_config=self.button_config_edit.text(),
-            launch_config=self.launch_config_edit.text(),
+            button_config=self._combo_text(self.button_config_edit),
+            launch_config=self._combo_text(self.launch_config_edit),
         )
         try:
             self.registry.upsert(updated)
             self.registry.save()
         except (OSError, ValueError) as exc:
             QMessageBox.critical(self, 'Workspace Settings', str(exc))
-            return
+            return False
         self.refresh(updated.name)
+        return True
 
-    def _browse_yaml(self, target: QLineEdit) -> None:
-        start = target.text().strip() or str(Path.home())
+    def _resolve_unsaved_changes_before_build(self) -> bool:
+        if not self._editor_is_dirty():
+            return True
+        workspace = self._selected_workspace()
+        name = workspace.name if workspace else 'the selected workspace'
+        message = QMessageBox(self)
+        message.setIcon(QMessageBox.Warning)
+        message.setWindowTitle('Unsaved Workspace Settings')
+        message.setText(
+            f'Save or discard changes to {name} before building.'
+        )
+        message.setInformativeText(
+            'Build Selected uses the saved workspace settings. Save the '
+            'current changes, discard them, or cancel the build.'
+        )
+        save_button = message.addButton(
+            'Save and Build',
+            QMessageBox.AcceptRole,
+        )
+        discard_button = message.addButton(
+            'Discard and Build',
+            QMessageBox.DestructiveRole,
+        )
+        message.addButton(QMessageBox.Cancel)
+        message.setDefaultButton(save_button)
+        message.exec_()
+        clicked = message.clickedButton()
+        if clicked == save_button:
+            return self._save_selected()
+        if clicked == discard_button:
+            self._load_selected()
+            return True
+        return False
+
+    def _browse_yaml(self, target: QComboBox) -> None:
+        start = self._combo_text(target) or str(Path.home())
         selected, _ = QFileDialog.getOpenFileName(
             self,
             'Choose YAML configuration',
@@ -404,9 +647,14 @@ class WorkspaceManagerDialog(QDialog):
             'YAML files (*.yaml *.yml);;All files (*)',
         )
         if selected:
-            target.setText(selected)
+            self._set_combo_text(target, selected)
 
     def _build_selected(self) -> None:
+        workspace = self._selected_workspace()
+        if not workspace:
+            return
+        if not self._resolve_unsaved_changes_before_build():
+            return
         workspace = self._selected_workspace()
         if workspace:
             self.build_requested.emit(workspace.name)

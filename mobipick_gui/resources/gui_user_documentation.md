@@ -54,9 +54,20 @@ The workspace manager is used to prepare ROS 1 workspaces for the GUI.
 - **Import Settings** restores a portable settings file and maps workspaces
   under the selected master folder.
 - **Build Selected** builds the selected workspace inside the Docker image.
-- **Save Workspace Settings** saves the selected workspace path, parent
-  workspaces, Docker image, simulator command, button profile, and auto-launch
-  profile.
+  If workspace settings were edited, save or discard those changes before
+  building. Starting a build marks the selected Docker image as a workspace
+  match for that workspace.
+- **Save Workspace Settings** saves the selected workspace path, selected built
+  underlay workspace, Docker image, simulator command, button profile, and
+  auto-launch profile.
+  Docker image choices are locally discovered Mobipick Docker images. Button
+  profile and auto-launch profile fields offer known choices while still
+  accepting custom typed values.
+  **Extends** offers `/opt/ros/noetic`, the Docker image baked workspace, and
+  already-built host workspaces. Choose the baked workspace when the host
+  workspace should be built after sourcing the workspace already inside the
+  selected image. Unbuilt workspaces with no selected underlay show an empty
+  **Extends** value until they are configured and built.
 
 Stop running containers before switching workspaces or importing settings.
 
@@ -243,6 +254,8 @@ The tab search is separate from the documentation window search.
 ## Workspace menu
 
 - **Configure Workspaces** opens the workspace manager.
+- **Configure Workspace Matches** edits which Docker images are marked as
+  valid for each ROS 1 workspace.
 - **Build Active Workspace** builds the currently selected workspace, if one is
   active and the selected image supports host workspaces.
 
@@ -315,6 +328,10 @@ The tab search is separate from the documentation window search.
 
 The GUI warns when a selected Docker image does not clearly match the active
 workspace. Continue only when the image/workspace pair is intentional.
+Use **Mark as Workspace Match** when the current image/workspace pair is known
+to be valid. The GUI adds that workspace to the image profile's
+`compatible_workspaces` setting and updates the image label to
+**workspace match**.
 
 If the selected image does not support host workspace mounting, commands run
 against the workspace inside the image even if a host workspace is selected.

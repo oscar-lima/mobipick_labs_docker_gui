@@ -86,7 +86,7 @@ from .setup_wizard import ImageSetupWizard, SetupWizardSelection
 from .version import get_version
 from .window_layout import WindowLayoutManager
 from .workspace_dialog import WorkspaceManagerDialog
-from .workspaces import WorkspaceRegistry
+from .workspaces import RosWorkspace, WorkspaceRegistry
 
 _SIGINT_TRIGGERED = False
 
@@ -793,6 +793,88 @@ class DockerCpConfigDialog(QDialog):
         super().accept()
 
 
+class WorkspaceMatchDialog(QDialog):
+    """Edit image-to-workspace compatibility profile entries."""
+
+    def __init__(
+        self,
+        images: list[str],
+        workspaces: list[str],
+        matches: dict[str, list[str]],
+        parent=None,
+    ):
+        super().__init__(parent)
+        self.setWindowTitle('Workspace Matches')
+        self.resize(520, 460)
+        self._matches = {
+            image: list(dict.fromkeys(values))
+            for image, values in matches.items()
+        }
+        self._checkboxes: dict[str, QCheckBox] = {}
+
+        layout = QVBoxLayout(self)
+        form = QFormLayout()
+        self.image_combo = QComboBox()
+        for image in images:
+            self.image_combo.addItem(image, image)
+        self.image_combo.currentIndexChanged.connect(self._load_image)
+        form.addRow('Docker image:', self.image_combo)
+        layout.addLayout(form)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        content = QWidget()
+        self.checkbox_layout = QVBoxLayout(content)
+        self._add_checkbox('Docker image default', 'Docker image default')
+        for workspace in workspaces:
+            self._add_checkbox(workspace, workspace)
+        self.checkbox_layout.addStretch(1)
+        scroll.setWidget(content)
+        layout.addWidget(scroll)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.Save | QDialogButtonBox.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+        self._load_image()
+
+    def _add_checkbox(self, label: str, value: str) -> None:
+        checkbox = QCheckBox(label)
+        checkbox.stateChanged.connect(self._store_current_image)
+        self._checkboxes[value] = checkbox
+        self.checkbox_layout.addWidget(checkbox)
+
+    def _current_image(self) -> str:
+        return str(self.image_combo.currentData() or '').strip()
+
+    def _store_current_image(self) -> None:
+        image = self._current_image()
+        if not image:
+            return
+        self._matches[image] = [
+            value
+            for value, checkbox in self._checkboxes.items()
+            if checkbox.isChecked()
+        ]
+
+    def _load_image(self) -> None:
+        image = self._current_image()
+        selected = set(self._matches.get(image, []))
+        for value, checkbox in self._checkboxes.items():
+            checkbox.blockSignals(True)
+            checkbox.setChecked(value in selected)
+            checkbox.blockSignals(False)
+
+    def accept(self) -> None:
+        self._store_current_image()
+        super().accept()
+
+    def matches(self) -> dict[str, list[str]]:
+        return copy.deepcopy(self._matches)
+
+
 class MainWindow(QMainWindow):
     def __init__(self, verbosity: int = 1):
         super().__init__()
@@ -1306,6 +1388,12 @@ class MainWindow(QMainWindow):
             workspace_menu,
             'Configure Workspaces',
             self._open_workspace_manager,
+        )
+        self._add_menu_action(
+            workspace_menu,
+            'Configure Workspace Matches',
+            self._open_workspace_match_editor,
+            tooltip='Edit which Docker images match which ROS workspaces',
         )
         self._add_menu_action(
             workspace_menu,
@@ -2045,6 +2133,202 @@ class MainWindow(QMainWindow):
             },
         })
 
+    def _mark_current_image_workspace_match(self) -> None:
+        image = str(self._selected_image or '').strip()
+        workspace = self._workspace_mismatch_workspace_key()
+        self._mark_image_workspace_match(image, workspace)
+
+    def _mark_image_workspace_match(self, image: str, workspace: str) -> None:
+        image = str(image or '').strip()
+        workspace = str(workspace or '').strip() or 'Docker image default'
+        compatible_workspace = '' if workspace == 'Docker image default' else workspace
+        if not image:
+            return
+        if self._image_compatible_with_workspace(
+            image,
+            compatible_workspace,
+        ) is True:
+            return
+        profiles = copy.deepcopy(self._images_cfg.get('profiles', []) or [])
+        match_profile = self._image_profile(image) or {}
+        updated = False
+        for profile in profiles:
+            if not isinstance(profile, dict):
+                continue
+            if str(profile.get('ref') or '').strip() != image:
+                continue
+            compatible = self._compatible_workspace_list(
+                profile.get('compatible_workspaces')
+            )
+            if workspace not in compatible:
+                compatible.append(workspace)
+            profile['compatible_workspaces'] = compatible
+            updated = True
+            break
+        if not updated:
+            profile = {
+                'ref': image,
+                'user': match_profile.get(
+                    'user',
+                    self._images_cfg.get('default_user', 'root'),
+                ),
+                'supports_host_workspaces': match_profile.get(
+                    'supports_host_workspaces',
+                    self._images_cfg.get('default_supports_host_workspaces'),
+                ),
+                'compatible_workspaces': [workspace],
+            }
+            for key in ('workdir', 'entrypoint', 'description'):
+                value = match_profile.get(key)
+                if value not in (None, ''):
+                    profile[key] = value
+            profiles.append(profile)
+
+        save_user_config_update({'images': {'profiles': profiles}})
+        self._images_cfg['profiles'] = profiles
+        CONFIG['images']['profiles'] = profiles
+        self._image_profiles = self._normalize_image_profiles(
+            self._images_cfg.get('profiles', [])
+        )
+        self._refresh_image_combo_labels()
+        self._log_info(
+            f'marked {image} as a workspace match for {workspace}'
+        )
+
+    def _open_workspace_match_editor(self) -> None:
+        images = list(self._image_choices)
+        if not images:
+            QMessageBox.information(
+                self,
+                'Workspace Matches',
+                'No local Docker images are available to configure.',
+            )
+            return
+        dialog = WorkspaceMatchDialog(
+            images,
+            [workspace.name for workspace in self._workspace_registry.workspaces],
+            self._workspace_match_map(images),
+            self,
+        )
+        if dialog.exec_() != QDialog.Accepted:
+            return
+        try:
+            self._save_workspace_match_map(dialog.matches())
+        except Exception as exc:
+            QMessageBox.warning(
+                self,
+                'Workspace Matches',
+                f'Failed to save workspace matches:\n{exc}',
+            )
+            return
+        self._refresh_image_combo_labels()
+        self._log_info('workspace matches updated')
+
+    def _workspace_match_map(self, images: list[str]) -> dict[str, list[str]]:
+        result: dict[str, list[str]] = {}
+        for image in images:
+            profile = self._image_profile(image) or {}
+            compatible = self._compatible_workspace_list(
+                profile.get('compatible_workspaces')
+            )
+            values = []
+            for item in compatible:
+                if item in {'', 'image default'}:
+                    item = 'Docker image default'
+                if item not in values:
+                    values.append(item)
+            result[image] = values
+        return result
+
+    def _save_workspace_match_map(
+        self,
+        matches: dict[str, list[str]],
+    ) -> None:
+        profiles = copy.deepcopy(self._images_cfg.get('profiles', []) or [])
+        for image, workspaces in matches.items():
+            profiles = self._profiles_with_workspace_matches(
+                profiles,
+                image,
+                workspaces,
+            )
+        save_user_config_update({'images': {'profiles': profiles}})
+        self._images_cfg['profiles'] = profiles
+        CONFIG['images']['profiles'] = profiles
+        self._image_profiles = self._normalize_image_profiles(profiles)
+
+    def _profiles_with_workspace_matches(
+        self,
+        profiles: list,
+        image: str,
+        workspaces: list[str],
+    ) -> list:
+        image = str(image or '').strip()
+        if not image:
+            return profiles
+        compatible = [
+            str(workspace or '').strip() or 'Docker image default'
+            for workspace in workspaces
+            if str(workspace or '').strip()
+        ]
+        compatible = list(dict.fromkeys(compatible))
+        match_profile = self._image_profile(image) or {}
+        for profile in profiles:
+            if not isinstance(profile, dict):
+                continue
+            if str(profile.get('ref') or '').strip() != image:
+                continue
+            profile['compatible_workspaces'] = compatible
+            return profiles
+        profile = {
+            'ref': image,
+            'user': match_profile.get(
+                'user',
+                self._images_cfg.get('default_user', 'root'),
+            ),
+            'supports_host_workspaces': match_profile.get(
+                'supports_host_workspaces',
+                self._images_cfg.get('default_supports_host_workspaces'),
+            ),
+            'compatible_workspaces': compatible,
+        }
+        for key in ('workdir', 'entrypoint', 'description'):
+            value = match_profile.get(key)
+            if value not in (None, ''):
+                profile[key] = value
+        profiles.append(profile)
+        return profiles
+
+    def _mark_workspace_build_image_match(self, workspace: RosWorkspace) -> bool:
+        try:
+            self._mark_image_workspace_match(
+                self._selected_image,
+                workspace.name,
+            )
+        except Exception as exc:
+            QMessageBox.warning(
+                self,
+                'Build Workspace',
+                f'Failed to save image/workspace match:\n{exc}',
+            )
+            return False
+        return True
+
+    @staticmethod
+    def _compatible_workspace_list(value) -> list[str]:
+        if isinstance(value, str):
+            return [
+                item.strip()
+                for item in value.split(',')
+                if item.strip()
+            ]
+        if isinstance(value, list):
+            return [
+                str(item).strip()
+                for item in value
+                if str(item).strip()
+            ]
+        return []
+
     def _confirm_workspace_mismatch_warning(self, action_label: str) -> bool:
         reason = self._workspace_mismatch_warning_reason()
         if not reason or self._workspace_mismatch_exception_exists():
@@ -2065,6 +2349,10 @@ class MainWindow(QMainWindow):
             'Continue only if this image/workspace combination is intentional.'
         )
         continue_button = message.addButton('Continue', QMessageBox.AcceptRole)
+        mark_match_button = message.addButton(
+            'Mark as Workspace Match',
+            QMessageBox.AcceptRole,
+        )
         message.addButton(QMessageBox.Cancel)
         remember = QCheckBox(
             'Do not warn again for this image/workspace pair'
@@ -2072,7 +2360,19 @@ class MainWindow(QMainWindow):
         message.setCheckBox(remember)
         message.setDefaultButton(QMessageBox.Cancel)
         message.exec_()
-        if message.clickedButton() != continue_button:
+        clicked = message.clickedButton()
+        if clicked == mark_match_button:
+            try:
+                self._mark_current_image_workspace_match()
+            except Exception as exc:
+                QMessageBox.warning(
+                    self,
+                    'Workspace Match',
+                    f'Failed to save workspace match:\n{exc}',
+                )
+                return False
+            return True
+        if clicked != continue_button:
             return False
         if remember.isChecked():
             try:
@@ -2404,6 +2704,8 @@ class MainWindow(QMainWindow):
             self._workspace_registry,
             self,
             replace_allowed=lambda: not self._workspace_processes_running(),
+            image_choices=self._image_choices,
+            image_workspace_path=self._image_workdir(self._selected_image),
         )
         dialog.workspace_activated.connect(self._activate_workspace)
         dialog.build_requested.connect(self._build_workspace)
@@ -2849,6 +3151,8 @@ CMD ["bash"]
         if tab.is_running():
             self._focus_tab(key)
             return
+        if not self._mark_workspace_build_image_match(workspace):
+            return
         workspace_env = self._workspace_runtime_env(
             workspace.name,
             force_host_workspace=True,
@@ -2857,7 +3161,10 @@ CMD ["bash"]
         exec_id = uuid.uuid4().hex
         tab.exec_id = exec_id
         tab.container_name = f'mobipick-build-{exec_id[:10]}'
-        command = self._workspace_registry.build_command(workspace)
+        command = self._workspace_registry.build_command(
+            workspace,
+            image_workspace_path=self._image_workdir(self._selected_image),
+        )
         args = [
             'compose',
             'run',

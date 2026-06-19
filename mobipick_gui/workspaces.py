@@ -1,6 +1,7 @@
 """Persistent ROS 1 workspace configuration for the GUI."""
 from __future__ import annotations
 
+import ast
 import json
 import os
 import re
@@ -11,6 +12,8 @@ from typing import Iterable
 import yaml
 
 WORKSPACE_NAME_RE = re.compile(r'^[A-Za-z0-9._-]+$')
+IMAGE_WORKSPACE_EXTENDS = '__image_workspace__'
+DEFAULT_IMAGE_WORKSPACE_PATH = '/root/catkin_ws'
 
 
 def default_registry_path() -> Path:
@@ -151,7 +154,7 @@ class WorkspaceRegistry:
             raise ValueError('Workspace names must be unique.')
         known = set(names)
         for workspace in self.workspaces:
-            unknown = set(workspace.extends) - known
+            unknown = set(workspace.extends) - known - {IMAGE_WORKSPACE_EXTENDS}
             if unknown:
                 raise ValueError(
                     f'{workspace.name} extends unknown workspace(s): '
@@ -163,7 +166,11 @@ class WorkspaceRegistry:
 
     def _ensure_acyclic(self) -> None:
         graph = {
-            workspace.name: list(workspace.extends)
+            workspace.name: [
+                parent
+                for parent in workspace.extends
+                if parent != IMAGE_WORKSPACE_EXTENDS
+            ]
             for workspace in self.workspaces
         }
         visiting: set[str] = set()
@@ -396,6 +403,52 @@ class WorkspaceRegistry:
                 continue
         return False
 
+    def detected_underlays(self, workspace: RosWorkspace) -> list[str]:
+        """Return catkin underlays recorded by a built workspace."""
+        underlays: list[str] = []
+        for setup_util in self._setup_util_candidates(workspace):
+            for prefix in self._read_setup_util_prefixes(setup_util):
+                if prefix not in underlays:
+                    underlays.append(prefix)
+        if underlays:
+            return underlays
+        if self.is_runtime_built(workspace):
+            return ['/opt/ros/noetic']
+        return []
+
+    def _setup_util_candidates(self, workspace: RosWorkspace) -> tuple[Path, ...]:
+        devel = workspace.directory / 'devel'
+        return (
+            devel / '_setup_util.py',
+            devel / '.private' / 'catkin_tools_prebuild' / '_setup_util.py',
+        )
+
+    @staticmethod
+    def _read_setup_util_prefixes(setup_util: Path) -> list[str]:
+        try:
+            lines = setup_util.read_text(encoding='utf-8').splitlines()
+        except OSError:
+            return []
+        for line in lines:
+            stripped = line.strip()
+            if not stripped.startswith('CMAKE_PREFIX_PATH'):
+                continue
+            _name, separator, raw_value = stripped.partition('=')
+            if not separator:
+                continue
+            try:
+                value = ast.literal_eval(raw_value.strip())
+            except (SyntaxError, ValueError):
+                continue
+            if not isinstance(value, str):
+                continue
+            return [
+                item
+                for item in value.split(os.pathsep)
+                if item
+            ]
+        return []
+
     def _container_path(self, path: Path, mount_root: Path) -> Path:
         """Map a host workspace path under the canonical container root."""
         return self.container_workspace_root / path.relative_to(mount_root)
@@ -525,9 +578,25 @@ class WorkspaceRegistry:
             pending.extend(parent.extends)
         return workspaces
 
-    def build_command(self, workspace: RosWorkspace) -> str:
-        """Return a Docker shell command that builds missing underlays first."""
+    def build_command(
+        self,
+        workspace: RosWorkspace,
+        *,
+        image_workspace_path: str | Path | None = None,
+    ) -> str:
+        """Return a Docker shell command that sources underlays before build."""
         commands = ['source /opt/ros/noetic/setup.bash']
+        if IMAGE_WORKSPACE_EXTENDS in workspace.extends:
+            image_workspace = Path(
+                image_workspace_path or DEFAULT_IMAGE_WORKSPACE_PATH
+            )
+            setup_path = image_workspace / 'devel' / 'setup.bash'
+            setup = self._shell_quote(str(setup_path))
+            commands.append(
+                f'if [ -s {setup} ]; then source {setup}; '
+                f'else echo "Baked image workspace is not built: '
+                f'{setup_path}" >&2; exit 1; fi'
+            )
         build_order = self._workspace_build_order(workspace)
         mount_root = self._mount_root(workspace)
         for item in build_order:
@@ -542,14 +611,17 @@ class WorkspaceRegistry:
             if item.name == workspace.name:
                 commands.append(f'cd {directory}')
                 commands.append('catkin build')
+                commands.append(
+                    f'if [ -s {setup} ]; then source {setup}; '
+                    f'else echo "Build did not create {item.setup_file}" >&2; '
+                    'exit 1; fi'
+                )
             else:
                 commands.append(
-                    f'if [ ! -s {setup} ]; then cd {directory} && catkin build; fi'
+                    f'if [ -s {setup} ]; then source {setup}; '
+                    f'else echo "Underlay workspace is not built: '
+                    f'{item.setup_file}" >&2; exit 1; fi'
                 )
-            commands.append(
-                f'if [ -s {setup} ]; then source {setup}; '
-                f'else echo "Build did not create {item.setup_file}" >&2; exit 1; fi'
-            )
         return '; '.join(commands)
 
     def _workspace_build_order(
@@ -563,6 +635,8 @@ class WorkspaceRegistry:
             if item.name in visited:
                 return
             for parent_name in item.extends:
+                if parent_name == IMAGE_WORKSPACE_EXTENDS:
+                    continue
                 parent = self.get(parent_name)
                 if parent:
                     add(parent)
@@ -589,6 +663,8 @@ class WorkspaceRegistry:
             )
         for workspace in self.workspaces:
             for parent in workspace.extends:
+                if parent == IMAGE_WORKSPACE_EXTENDS:
+                    continue
                 lines.append(
                     f'  {json.dumps(parent)} -> {json.dumps(workspace.name)};'
                 )
@@ -670,6 +746,8 @@ class WorkspaceRegistry:
 
 
 __all__ = [
+    'DEFAULT_IMAGE_WORKSPACE_PATH',
+    'IMAGE_WORKSPACE_EXTENDS',
     'RosWorkspace',
     'WorkspaceRegistry',
     'default_registry_path',
