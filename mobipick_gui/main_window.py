@@ -483,10 +483,6 @@ class MainWindow(QMainWindow):
         self.window_layout_button.setToolTip('Open helper to save window positions for wmctrl replay')
         self.window_layout_button.clicked.connect(self._on_window_layout_clicked)
 
-        self.refresh_sim_button = QPushButton('Update Status')
-        self.refresh_sim_button.setToolTip('Re-check running status for toggles')
-        self.refresh_sim_button.clicked.connect(self._on_refresh_clicked)
-
         self.save_current_button = QPushButton('Save Current Log')
         self.save_current_button.clicked.connect(self.save_current_log)
 
@@ -617,7 +613,6 @@ class MainWindow(QMainWindow):
         spacer_controls.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         controls_row.addWidget(spacer_controls)
 
-        controls_row.addWidget(self.refresh_sim_button)
         root.addLayout(controls_row)
 
         # search row (bottom)
@@ -2912,7 +2907,7 @@ CMD ["bash"]
         self.toggle_sim()
 
     def _on_refresh_clicked(self):
-        self._log_button_click(self.refresh_sim_button)
+        self._log_button_click(None, 'Update Status')
         self._log_info('refreshing sim status view')
         self.update_sim_status_from_poll(force=True)
 
