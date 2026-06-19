@@ -6,7 +6,7 @@ import yaml
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
-from PyQt5.QtWidgets import QApplication
+from PyQt5.QtWidgets import QApplication, QPushButton
 
 from mobipick_gui import main_window as main_window_module
 from mobipick_gui.config import CONFIG
@@ -87,6 +87,10 @@ def _combo_texts(window):
     ]
 
 
+def _button_texts(window):
+    return {button.text() for button in window.findChildren(QPushButton)}
+
+
 def test_public_root_image_uses_baked_workspace_for_private_workspace(
     tmp_path,
     monkeypatch,
@@ -106,7 +110,7 @@ def test_public_root_image_uses_baked_workspace_for_private_workspace(
     assert 'MOBIPICK_CONTAINER_WORKDIR=/root/catkin_ws' in env_args
     assert 'MOBIPICK_WORKSPACE_ENABLED=0' in env_args
     assert not any(str(workspace_path) in arg for arg in env_args)
-    assert not window.build_workspace_button.isEnabled()
+    assert 'Build Active Workspace' not in _button_texts(window)
     assert 'image default only' in window.image_combo.currentText()
 
     window.deleteLater()
@@ -219,7 +223,7 @@ def test_host_user_image_mounts_active_workspace(tmp_path, monkeypatch):
     assert 'MOBIPICK_WORKSPACE_ENABLED=1' in env_args
     assert any('MOBIPICK_WORKSPACE_PATH=' in arg for arg in env_args)
     assert str(workspace_path) not in ' '.join(env_args)
-    assert window.build_workspace_button.isEnabled()
+    assert 'Build Active Workspace' not in _button_texts(window)
     assert 'workspace match' in window.image_combo.currentText()
 
     window.deleteLater()

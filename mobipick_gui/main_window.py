@@ -383,11 +383,6 @@ class MainWindow(QMainWindow):
             self._open_workspace_manager
         )
         workspace_row.addWidget(self.manage_workspaces_button)
-        self.build_workspace_button = QPushButton('Build Active Workspace')
-        self.build_workspace_button.clicked.connect(
-            self._build_active_workspace
-        )
-        workspace_row.addWidget(self.build_workspace_button)
         root.addLayout(workspace_row)
 
         ros_master_row = QHBoxLayout()
@@ -1237,9 +1232,6 @@ class MainWindow(QMainWindow):
         active = self._workspace_registry.active_workspace()
         host_workspace_enabled = self._image_supports_host_workspaces(
             self._selected_image
-        )
-        self.build_workspace_button.setEnabled(
-            active is not None and host_workspace_enabled
         )
         if active:
             setup_status = (
