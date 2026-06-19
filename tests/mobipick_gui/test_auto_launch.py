@@ -104,6 +104,25 @@ def test_record_auto_launch_uncheck_stops_active_recording():
     ]
 
 
+def test_recording_start_delay_includes_launch_layout_and_extra_delay():
+    harness = SimpleNamespace(
+        _launch_plan={
+            'timeline': [
+                {'button': 'roscore', 'at_seconds': 1.0},
+                {'button': 'sim', 'at_seconds': 4.5},
+            ],
+            'recording_start_delay_seconds': 2.0,
+        },
+        _window_layout_delay_ms=6000,
+    )
+    harness._recording_start_delay_ms = MethodType(
+        MainWindow._recording_start_delay_ms,
+        harness,
+    )
+
+    assert harness._recording_start_delay_ms() == 8000
+
+
 def test_recording_stop_requests_ffmpeg_clean_quit():
     events = []
 

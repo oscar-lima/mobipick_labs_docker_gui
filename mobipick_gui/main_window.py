@@ -90,6 +90,7 @@ class AutoLaunchWizard(QDialog):
         buttons: list[tuple[str, str]],
         timeline: list[dict],
         save_path: Path,
+        recording_start_delay_seconds: float = 0.0,
         parent: QWidget | None = None,
     ):
         super().__init__(parent)
@@ -129,6 +130,21 @@ class AutoLaunchWizard(QDialog):
             root.addLayout(row)
             self._rows.append((key, checkbox, delay))
 
+        recording_row = QHBoxLayout()
+        recording_row.addWidget(QLabel('Extra recording start delay:'), 1)
+        self._recording_delay = QDoubleSpinBox()
+        self._recording_delay.setRange(0.0, 3600.0)
+        self._recording_delay.setDecimals(1)
+        self._recording_delay.setSingleStep(1.0)
+        self._recording_delay.setSuffix(' s')
+        self._recording_delay.setValue(max(0.0, float(recording_start_delay_seconds or 0)))
+        self._recording_delay.setToolTip(
+            'Additional time to wait after the last launch/layout delay '
+            'before Auto Launch recording starts.'
+        )
+        recording_row.addWidget(self._recording_delay)
+        root.addLayout(recording_row)
+
         path_label = QLabel(f'Saves to: {save_path}')
         path_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         root.addWidget(path_label)
@@ -149,6 +165,10 @@ class AutoLaunchWizard(QDialog):
             if checkbox.isChecked()
         ]
         return sorted(entries, key=lambda entry: (entry['at_seconds'], entry['button']))
+
+    def recording_start_delay_seconds(self) -> float:
+        """Return extra delay before recording starts after the launch timeline."""
+        return max(0.0, float(self._recording_delay.value()))
 
     def accept(self):
         if not self.timeline():
@@ -696,6 +716,11 @@ class MainWindow(QMainWindow):
             tools_menu,
             'Window Layout',
             self._on_window_layout_clicked,
+        )
+        self._add_menu_action(
+            tools_menu,
+            'Configure Auto Launch',
+            self._open_auto_launch_wizard,
         )
         tools_menu.addSeparator()
         self._add_menu_action(
@@ -1396,6 +1421,21 @@ class MainWindow(QMainWindow):
         self._ensure_tab('rqt', 'RQt Tables', closable=False)
         self._ensure_tab('log', 'Log', closable=False)
 
+    def _refresh_launch_plan_settings(self) -> None:
+        self._launch_retry_ms = max(
+            0,
+            int(self._launch_plan.get('retry_delay_ms', 750) or 0),
+        )
+        self._launch_max_retry = max(
+            0,
+            int(self._launch_plan.get('max_retry_attempts', 6) or 0),
+        )
+        if hasattr(self, '_window_layout_cfg'):
+            self._window_layout_delay_ms = self._compute_window_layout_delay_ms()
+            manager = getattr(self, '_window_layout_manager', None)
+            if manager is not None:
+                manager.set_apply_delay_ms(self._window_layout_delay_ms)
+
     def _reload_workspace_profile(self) -> None:
         old_keys = list(self._config_button_order)
         for key in old_keys:
@@ -1410,14 +1450,7 @@ class MainWindow(QMainWindow):
             self._workspace_button_config_path(),
             self._workspace_launch_config_path(),
         )
-        self._launch_retry_ms = max(
-            0,
-            int(self._launch_plan.get('retry_delay_ms', 750) or 0),
-        )
-        self._launch_max_retry = max(
-            0,
-            int(self._launch_plan.get('max_retry_attempts', 6) or 0),
-        )
+        self._refresh_launch_plan_settings()
         terminal_index = self._top_controls_layout.indexOf(
             self.terminal_button
         )
@@ -3664,8 +3697,23 @@ CMD ["bash"]
                 continue
             max_at_ms = max(max_at_ms, int(max(0.0, at_seconds) * 1000))
         layout_delay = max(0, int(self._window_layout_delay_ms))
-        buffer_ms = 500
-        return max(max_at_ms, layout_delay) + buffer_ms
+        try:
+            extra_delay_ms = int(
+                max(
+                    0.0,
+                    float(
+                        self._launch_plan.get(
+                            'recording_start_delay_seconds',
+                            0,
+                        )
+                        or 0
+                    ),
+                )
+                * 1000
+            )
+        except (TypeError, ValueError):
+            extra_delay_ms = 0
+        return max(max_at_ms, layout_delay) + extra_delay_ms
 
     def _schedule_recording_after_launch(self):
         self._cancel_recording_schedule()
@@ -4058,10 +4106,16 @@ CMD ["bash"]
     def _open_auto_launch_wizard(self):
         source = self._launch_plan.get('source') if isinstance(self._launch_plan, dict) else None
         save_path = writable_launch_sequence_path(source)
+        recording_start_delay_seconds = (
+            self._launch_plan.get('recording_start_delay_seconds', 0.0)
+            if isinstance(self._launch_plan, dict)
+            else 0.0
+        )
         dialog = AutoLaunchWizard(
             self._auto_launch_wizard_buttons(),
             self._launch_plan.get('timeline', []) if isinstance(self._launch_plan, dict) else [],
             save_path,
+            recording_start_delay_seconds,
             self,
         )
         if dialog.exec_() != QDialog.Accepted:
@@ -4069,12 +4123,14 @@ CMD ["bash"]
 
         timeline = dialog.timeline()
         shutdown_order = [entry['button'] for entry in reversed(timeline)]
+        recording_delay = dialog.recording_start_delay_seconds()
         try:
             saved_path = save_launch_sequence_plan(
                 save_path,
                 timeline,
                 shutdown_order,
                 self._auto_launch_button_cfg(),
+                recording_delay,
             )
         except OSError as exc:
             QMessageBox.warning(
@@ -4088,8 +4144,7 @@ CMD ["bash"]
             self._workspace_button_config_path(),
             self._workspace_launch_config_path(),
         )
-        self._launch_retry_ms = max(0, int(self._launch_plan.get('retry_delay_ms', 750) or 0))
-        self._launch_max_retry = max(0, int(self._launch_plan.get('max_retry_attempts', 6) or 0))
+        self._refresh_launch_plan_settings()
         self.set_auto_launch_visual('red', self._auto_launch_start_text(), True)
         self._log_info(f'saved auto launch configuration to {saved_path}')
 

@@ -552,6 +552,7 @@ def load_launch_sequence_plan(
     }
     retry_delay_ms = int(cfg.get('retry_delay_ms', 750) or 0)
     max_retry_attempts = int(cfg.get('max_retry_attempts', 6) or 0)
+    recording_start_delay_seconds = 0.0
 
     raw_path = str(cfg.get('config_file') or '').strip()
     raw_button_cfg = button_config_path or CONFIG.get('buttons', {}).get('config_file')
@@ -639,6 +640,24 @@ def load_launch_sequence_plan(
                     merged = dict(button_cfg)
                     merged.update({k: v for k, v in data['button'].items() if v is not None})
                     button_cfg = merged
+                raw_recording = data.get('recording') or {}
+                raw_recording_delay = None
+                if isinstance(raw_recording, dict):
+                    raw_recording_delay = raw_recording.get(
+                        'start_delay_seconds',
+                        raw_recording.get('extra_start_delay_seconds'),
+                    )
+                raw_recording_delay = data.get(
+                    'recording_start_delay_seconds',
+                    raw_recording_delay,
+                )
+                try:
+                    recording_start_delay_seconds = max(
+                        0.0,
+                        float(raw_recording_delay or 0),
+                    )
+                except (TypeError, ValueError):
+                    recording_start_delay_seconds = 0.0
     except Exception as exc:
         print(f'Warning: failed to load auto launch configuration from {path}: {exc}', file=sys.stderr)
 
@@ -653,6 +672,7 @@ def load_launch_sequence_plan(
         'button': button_cfg,
         'retry_delay_ms': retry_delay_ms,
         'max_retry_attempts': max_retry_attempts,
+        'recording_start_delay_seconds': recording_start_delay_seconds,
     }
 
 
@@ -674,6 +694,7 @@ def save_launch_sequence_plan(
     timeline: list[dict],
     shutdown_order: list[str],
     button: dict | None = None,
+    recording_start_delay_seconds: float = 0.0,
 ) -> Path:
     """Persist an auto-launch sequence to a user-writable YAML file."""
     destination = Path(path).expanduser()
@@ -690,6 +711,13 @@ def save_launch_sequence_plan(
             for key, value in button.items()
             if value not in (None, '')
         }
+    try:
+        recording_delay = max(0.0, float(recording_start_delay_seconds or 0))
+    except (TypeError, ValueError):
+        recording_delay = 0.0
+    data['recording'] = {
+        'start_delay_seconds': recording_delay,
+    }
     temporary = destination.with_suffix(destination.suffix + '.tmp')
     with open(temporary, 'w', encoding='utf-8') as handle:
         yaml.safe_dump(data, handle, sort_keys=False)

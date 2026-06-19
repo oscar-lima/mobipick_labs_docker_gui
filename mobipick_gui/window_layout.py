@@ -93,6 +93,10 @@ class WindowLayoutManager:
         self._auto_apply_done = not bool(windows)
         self._start_ts = time.monotonic()
 
+    def set_apply_delay_ms(self, delay_ms: int) -> None:
+        """Update the wait time used before auto-applying saved layouts."""
+        self._apply_delay_ms = max(0, int(delay_ms or 0))
+
     def capture_layout(self, exclude_titles: Iterable[str] | None = None) -> dict | None:
         if not self._wmctrl_available:
             self._warn_missing_tools()

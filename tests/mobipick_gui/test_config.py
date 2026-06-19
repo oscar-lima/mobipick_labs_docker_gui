@@ -8,6 +8,7 @@ from mobipick_gui.config import (
     default_user_data_dir,
     load_button_layout,
     load_launch_sequence_plan,
+    save_launch_sequence_plan,
     writable_launch_sequence_path,
 )
 
@@ -67,6 +68,26 @@ timeline:
     assert [entry['key'] for entry in layout] == ['custom']
     assert plan['source'] == str(launches)
     assert plan['timeline'] == [{'button': 'custom', 'at_seconds': 1.0}]
+    assert plan['recording_start_delay_seconds'] == 0.0
+
+
+def test_launch_sequence_persists_recording_start_delay(tmp_path):
+    launches = tmp_path / 'launches.yaml'
+
+    save_launch_sequence_plan(
+        launches,
+        [{'button': 'custom', 'at_seconds': 1.5}],
+        ['custom'],
+        {'label': 'Auto Launch'},
+        3.25,
+    )
+
+    text = launches.read_text(encoding='utf-8')
+    assert 'recording:' in text
+    assert 'start_delay_seconds: 3.25' in text
+
+    plan = load_launch_sequence_plan(None, launches)
+    assert plan['recording_start_delay_seconds'] == 3.25
 
 
 def test_relative_launch_config_can_load_user_config_fallback(monkeypatch, tmp_path):
