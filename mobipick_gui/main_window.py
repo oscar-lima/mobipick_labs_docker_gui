@@ -185,6 +185,15 @@ class MainWindow(QMainWindow):
         self._image_profiles = self._normalize_image_profiles(
             self._images_cfg.get('profiles', [])
         )
+        self._workspace_warning_cfg = CONFIG.get(
+            'workspace_mismatch_warning',
+            {},
+        )
+        self._workspace_mismatch_session_exceptions = (
+            self._normalize_workspace_mismatch_exceptions(
+                self._workspace_warning_cfg.get('silenced_exceptions', [])
+            )
+        )
         self._selected_image = self._images_cfg.get('default', '')
         self._image_choices: list[str] = []
         self._related_patterns: list[str] = []
@@ -1018,6 +1027,125 @@ class MainWindow(QMainWindow):
             or 'Docker image default' in compatible
             or 'image default' in compatible
         )
+
+    @staticmethod
+    def _normalize_workspace_mismatch_exceptions(value) -> list[dict[str, str]]:
+        if not isinstance(value, list):
+            return []
+        normalized: list[dict[str, str]] = []
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            image = str(item.get('image') or '').strip()
+            workspace = str(item.get('workspace') or '').strip()
+            if not image:
+                continue
+            if not workspace:
+                workspace = 'Docker image default'
+            entry = {'image': image, 'workspace': workspace}
+            if entry not in normalized:
+                normalized.append(entry)
+        return normalized
+
+    def _workspace_mismatch_workspace_key(self) -> str:
+        return (
+            str(self._workspace_registry.active or '').strip()
+            or 'Docker image default'
+        )
+
+    def _workspace_mismatch_exception_entry(self) -> dict[str, str] | None:
+        image = str(self._selected_image or '').strip()
+        if not image:
+            return None
+        workspace = self._workspace_mismatch_workspace_key()
+        return {'image': image, 'workspace': workspace}
+
+    def _workspace_mismatch_exception_exists(self) -> bool:
+        entry = self._workspace_mismatch_exception_entry()
+        if not entry:
+            return False
+        return entry in self._workspace_mismatch_session_exceptions
+
+    def _workspace_mismatch_warning_reason(self) -> str:
+        image = str(self._selected_image or '').strip()
+        if not image:
+            return ''
+        workspace = str(self._workspace_registry.active or '').strip()
+        if self._image_compatible_with_workspace(image, workspace) is True:
+            return ''
+        if not self._image_supports_host_workspaces(image):
+            return (
+                'The selected Docker image does not mount host workspaces. '
+                'Commands will run against the workspace baked into the image.'
+            )
+        if not workspace:
+            return (
+                'The selected Docker image does not declare a workspace match '
+                'for Docker image default.'
+            )
+        return (
+            'The selected Docker image does not declare a workspace match for '
+            'the active ROS 1 workspace.'
+        )
+
+    def _remember_workspace_mismatch_exception(self) -> None:
+        entry = self._workspace_mismatch_exception_entry()
+        if not entry:
+            return
+        exceptions = list(self._workspace_mismatch_session_exceptions)
+        if entry not in exceptions:
+            exceptions.append(entry)
+        self._workspace_mismatch_session_exceptions = exceptions
+        self._workspace_warning_cfg['silenced_exceptions'] = exceptions
+        save_user_config_update({
+            'workspace_mismatch_warning': {
+                'silenced_exceptions': exceptions,
+            },
+        })
+
+    def _confirm_workspace_mismatch_warning(self, action_label: str) -> bool:
+        reason = self._workspace_mismatch_warning_reason()
+        if not reason or self._workspace_mismatch_exception_exists():
+            return True
+
+        workspace = self._workspace_mismatch_workspace_key()
+        image = self._selected_image or '(none)'
+        message = QMessageBox(self)
+        message.setIcon(QMessageBox.Warning)
+        message.setWindowTitle('Workspace/Image Mismatch')
+        message.setText(
+            f'{action_label} is about to run without a workspace match.'
+        )
+        message.setInformativeText(
+            f'Active workspace: {workspace}\n'
+            f'Docker image: {image}\n\n'
+            f'{reason}\n\n'
+            'Continue only if this image/workspace combination is intentional.'
+        )
+        continue_button = message.addButton('Continue', QMessageBox.AcceptRole)
+        message.addButton(QMessageBox.Cancel)
+        remember = QCheckBox(
+            'Do not warn again for this image/workspace pair'
+        )
+        message.setCheckBox(remember)
+        message.setDefaultButton(QMessageBox.Cancel)
+        message.exec_()
+        if message.clickedButton() != continue_button:
+            return False
+        if remember.isChecked():
+            try:
+                self._remember_workspace_mismatch_exception()
+            except Exception as exc:
+                self._append_gui_html(
+                    'log',
+                    '<i>Failed to save workspace mismatch warning '
+                    f'exception: {html.escape(str(exc))}</i>',
+                )
+        else:
+            entry = self._workspace_mismatch_exception_entry()
+            if entry and entry not in self._workspace_mismatch_session_exceptions:
+                self._workspace_mismatch_session_exceptions.append(entry)
+        return True
 
     def _image_choice_label(self, image_ref: str) -> str:
         active_name = self._workspace_registry.active
@@ -1957,6 +2085,8 @@ CMD ["bash"]
             if run_on_host and stop_cmd_for_running:
                 stop_cmd_for_running = self._neutralize_compose_ignore(stop_cmd_for_running)
             self._stop_custom_tab(tab, on_stopped=_done, stop_command=stop_cmd_for_running)
+            return
+        if not run_on_host and not self._confirm_workspace_mismatch_warning(label):
             return
 
         def _apply_env(cmd: str) -> str:
@@ -2946,6 +3076,8 @@ CMD ["bash"]
             self._stop_script_tab()
             return
 
+        if not self._confirm_workspace_mismatch_warning(f'Script "{script}"'):
+            return
         self.set_script_visual('yellow', 'Starting Script...', False)
 
         def _run_script():
@@ -3891,6 +4023,11 @@ CMD ["bash"]
             self.set_auto_launch_visual('red', self._auto_launch_start_text(), True)
             return
 
+        if not self._confirm_workspace_mismatch_warning(self._auto_launch_label()):
+            self._auto_launch_running = False
+            self.set_auto_launch_visual('red', self._auto_launch_start_text(), True)
+            return
+
         if self._auto_launch_run_count > 0:
             self.clear_all_tabs()
             self._append_gui_html('log', '<i>Cleared tabs before starting a new auto launch run.</i>')
@@ -4604,6 +4741,8 @@ CMD ["bash"]
         if self.is_roscore_running():
             self.shutdown_roscore()
         else:
+            if not self._confirm_workspace_mismatch_warning('Roscore'):
+                return
             self.bring_up_roscore()
 
     def toggle_sim(self):
@@ -4855,6 +4994,8 @@ CMD ["bash"]
             )
             return
         if self._killing:
+            return
+        if not self._confirm_workspace_mismatch_warning('Simulation'):
             return
         self.set_toggle_visual('yellow', 'Starting Sim...', False)
 
@@ -5241,6 +5382,8 @@ CMD ["bash"]
             self._focus_tab('tables')
             return
 
+        if not self._confirm_workspace_mismatch_warning('Tables Demo'):
+            return
         self.set_tables_visual('yellow', 'Starting Tables Demo...', False)
 
         def _start_tables():
@@ -5293,6 +5436,8 @@ CMD ["bash"]
             self._focus_tab('rviz')
             return
 
+        if not self._confirm_workspace_mismatch_warning('RViz'):
+            return
         self.set_rviz_visual('yellow', 'Starting RViz...', False)
 
         def _start_rviz():
@@ -5345,6 +5490,8 @@ CMD ["bash"]
             self._focus_tab('rqt')
             return
 
+        if not self._confirm_workspace_mismatch_warning('RQt Tables'):
+            return
         self.set_rqt_visual('yellow', 'Starting RQt Tables...', False)
 
         def _start_rqt():
@@ -5394,6 +5541,8 @@ CMD ["bash"]
 
     def open_terminal(self):
         if self._terminal_stopping or self._terminal_is_active():
+            return
+        if not self._confirm_workspace_mismatch_warning('Terminal'):
             return
         self.set_terminal_visual('yellow', 'Starting Terminal...', False)
 
@@ -5582,6 +5731,8 @@ CMD ["bash"]
     def run_custom_command(self):
         text = self.command_input.text().strip()
         if not text:
+            return
+        if not self._confirm_workspace_mismatch_warning('Custom command'):
             return
 
         def _run_command():

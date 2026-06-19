@@ -8,6 +8,7 @@ os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
 from PyQt5.QtWidgets import QApplication
 
+from mobipick_gui import main_window as main_window_module
 from mobipick_gui.config import CONFIG
 from mobipick_gui.main_window import MainWindow
 from mobipick_gui.workspaces import RosWorkspace, WorkspaceRegistry
@@ -107,6 +108,94 @@ def test_public_root_image_uses_baked_workspace_for_private_workspace(
     assert not any(str(workspace_path) in arg for arg in env_args)
     assert not window.build_workspace_button.isEnabled()
     assert 'image default only' in window.image_combo.currentText()
+
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_workspace_mismatch_warning_detects_non_matching_image(
+    tmp_path,
+    monkeypatch,
+):
+    image = 'ozkrelo/x_mobipick_labs:noetic-v1.2'
+    registry_path, _ = _write_registry(tmp_path, image)
+
+    app, window = _create_window(
+        monkeypatch,
+        registry_path,
+        ['ozkrelo/mobipick_labs:noetic', image],
+    )
+
+    reason = window._workspace_mismatch_warning_reason()
+
+    assert 'does not mount host workspaces' in reason
+    assert not window._workspace_mismatch_exception_exists()
+
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_workspace_mismatch_warning_detects_docker_image_default(
+    tmp_path,
+    monkeypatch,
+):
+    image = 'ozkrelo/x_mobipick_labs:ubuntu_user_from_1.2'
+    registry_path = tmp_path / 'workspaces.yaml'
+
+    app, window = _create_window(
+        monkeypatch,
+        registry_path,
+        ['ozkrelo/x_mobipick_labs:noetic-v1.1', image],
+    )
+    window._select_image(image, log_selection=False)
+
+    reason = window._workspace_mismatch_warning_reason()
+
+    assert window._workspace_registry.active == ''
+    assert 'Docker image default' in reason
+    assert window._workspace_mismatch_exception_entry() == {
+        'image': image,
+        'workspace': 'Docker image default',
+    }
+
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_workspace_mismatch_exception_is_saved_and_suppresses_warning(
+    tmp_path,
+    monkeypatch,
+):
+    image = 'ozkrelo/x_mobipick_labs:noetic-v1.2'
+    registry_path, _ = _write_registry(tmp_path, image)
+    saved_updates = []
+    monkeypatch.setattr(
+        main_window_module,
+        'save_user_config_update',
+        lambda updates: saved_updates.append(updates) or updates,
+    )
+
+    app, window = _create_window(
+        monkeypatch,
+        registry_path,
+        ['ozkrelo/mobipick_labs:noetic', image],
+    )
+
+    window._remember_workspace_mismatch_exception()
+
+    assert window._workspace_mismatch_exception_exists()
+    assert saved_updates == [
+        {
+            'workspace_mismatch_warning': {
+                'silenced_exceptions': [
+                    {
+                        'image': image,
+                        'workspace': 'clean_mobipick_labs_ws',
+                    },
+                ],
+            },
+        },
+    ]
 
     window.deleteLater()
     app.processEvents()

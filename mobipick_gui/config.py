@@ -332,6 +332,9 @@ CONFIG_DEFAULTS: Dict[str, Dict] = {
         'development_image_repository': 'ozkrelo/x_mobipick_labs',
         'development_image_tag_template': '{user}_user_from_1.2',
     },
+    'workspace_mismatch_warning': {
+        'silenced_exceptions': [],
+    },
     'launch_sequence': {
         'config_file': 'auto',
         'label': 'Auto Launch',

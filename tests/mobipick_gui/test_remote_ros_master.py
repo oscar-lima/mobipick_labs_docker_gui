@@ -11,8 +11,12 @@ from mobipick_gui.config import CONFIG
 from mobipick_gui.main_window import MainWindow
 
 
-def _create_window(monkeypatch):
+def _create_window(monkeypatch, tmp_path):
     images = [{'ref': 'ozkrelo/mobipick_labs:noetic'}]
+    monkeypatch.setenv(
+        'MOBIPICK_WORKSPACE_CONFIG',
+        str(tmp_path / 'workspaces.yaml'),
+    )
     monkeypatch.setattr(
         MainWindow,
         '_discover_filtered_image_records',
@@ -55,9 +59,10 @@ def test_remote_master_uri_normalization():
 
 
 def test_remote_mode_injects_master_and_disables_local_stack(
+    tmp_path,
     monkeypatch,
 ):
-    app, window = _create_window(monkeypatch)
+    app, window = _create_window(monkeypatch, tmp_path)
 
     window.remote_master_checkbox.setChecked(True)
 
@@ -76,9 +81,10 @@ def test_remote_mode_injects_master_and_disables_local_stack(
 
 
 def test_rviz_uses_remote_service_without_starting_local_roscore(
+    tmp_path,
     monkeypatch,
 ):
-    app, window = _create_window(monkeypatch)
+    app, window = _create_window(monkeypatch, tmp_path)
     window.remote_master_checkbox.setChecked(True)
     started = {}
     rviz_tab = window.tasks['rviz']
