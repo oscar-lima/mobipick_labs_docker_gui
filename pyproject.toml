@@ -50,6 +50,7 @@ mobipick_gui = [
     "resources/enter_container_manually_test.sh",
     "resources/config/*.yaml",
     "resources/empty_workspace/.gitkeep",
+    "resources/images/*.svg",
     "resources/scripts/enter_host_shell.py",
     "resources/scripts/ros_workspace_setup.bash",
     "resources/scripts/terminal.bashrc",

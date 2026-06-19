@@ -19,7 +19,7 @@ from typing import Callable, Match, Optional
 from urllib.parse import urlsplit
 
 from PyQt5.QtCore import QEvent, QIODevice, QPoint, QProcess, QProcessEnvironment, QTimer, Qt
-from PyQt5.QtGui import QColor, QGuiApplication, QTextCursor, QTextDocument
+from PyQt5.QtGui import QColor, QGuiApplication, QPixmap, QTextCursor, QTextDocument
 from PyQt5.QtWidgets import (
     QAction,
     QApplication,
@@ -1150,14 +1150,44 @@ class MainWindow(QMainWindow):
             controls.setVisible(bool(visible))
 
     def _show_about_dialog(self) -> None:
-        QMessageBox.about(
-            self,
-            'About Mobipick Labs Control',
-            (
-                'Mobipick Labs Docker GUI\n\n'
-                f'Version: {get_version()}'
-            ),
+        dialog = QDialog(self)
+        dialog.setWindowTitle('About Mobipick Labs Control')
+        dialog.setModal(True)
+
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(24, 20, 24, 20)
+        layout.setSpacing(14)
+
+        logo_label = QLabel()
+        logo_label.setAlignment(Qt.AlignCenter)
+        logo = QPixmap(str(PROJECT_ROOT / 'images' / 'dfki_logo.svg'))
+        if logo.isNull():
+            logo_label.setText('DFKI')
+        else:
+            logo_label.setPixmap(logo.scaledToWidth(220, Qt.SmoothTransformation))
+        layout.addWidget(logo_label)
+
+        details = QLabel(
+            '<h2>Mobipick Labs Docker GUI</h2>'
+            f'<p>Version: {html.escape(get_version())}</p>'
+            '<p>Main developer:<br>'
+            'Oscar Lima<br>'
+            '<a href="mailto:oscar.lima@dfki.de">oscar.lima@dfki.de</a></p>'
+            '<p>Mobipick Labs:<br>'
+            '<a href="https://github.com/DFKI-NI/mobipick_labs">'
+            'https://github.com/DFKI-NI/mobipick_labs</a></p>'
         )
+        details.setTextFormat(Qt.RichText)
+        details.setOpenExternalLinks(True)
+        details.setTextInteractionFlags(Qt.TextBrowserInteraction)
+        details.setAlignment(Qt.AlignCenter)
+        layout.addWidget(details)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok)
+        buttons.accepted.connect(dialog.accept)
+        layout.addWidget(buttons)
+
+        dialog.exec_()
 
     def _open_bug_report_dialog(self) -> None:
         if self._bug_report_dialog:
