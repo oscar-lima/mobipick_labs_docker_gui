@@ -6,6 +6,11 @@ sets the environment required by the selected Docker image and ROS workspace,
 streams process output into GUI tabs, and performs cleanup when the application
 closes.
 
+Related project and distribution links:
+
+- Mobipick Labs repository: <https://github.com/DFKI-NI/mobipick_labs>
+- PyPI package: <https://pypi.org/project/mobipick-labs-docker-gui/>
+
 This README is developer documentation for maintaining and extending the
 application. User-facing button and menu documentation lives in the
 [`gui_user_documentation.md`](mobipick_gui/resources/gui_user_documentation.md)
