@@ -70,6 +70,7 @@ from .config import (
     writable_docker_cp_config_path,
     writable_launch_sequence_path,
 )
+from .documentation_dialog import DocumentationDialog
 
 CONTAINER_SCRIPTS_DIR = str(
     CONFIG.get('process', {}).get('container_scripts_dir', '/scripts_430ofkjl04fsw')
@@ -559,6 +560,7 @@ class MainWindow(QMainWindow):
         self._command_log_color = str(CONFIG['log'].get('command_log_color', '#4da3ff'))
         self._default_image_dialog_shown = False
         self._bug_report_dialog: BugReportDialog | None = None
+        self._documentation_dialog: DocumentationDialog | None = None
         self._view_actions: dict[str, QAction] = {}
         self._active_menu_tooltip_action: QAction | None = None
         self._create_menu_bar()
@@ -1045,6 +1047,11 @@ class MainWindow(QMainWindow):
         help_menu = self._add_menu(menu_bar, 'Help')
         self._add_menu_action(
             help_menu,
+            'Documentation',
+            self._open_documentation_dialog,
+        )
+        self._add_menu_action(
+            help_menu,
             'File Bug Report...',
             self._open_bug_report_dialog,
         )
@@ -1188,6 +1195,22 @@ class MainWindow(QMainWindow):
         layout.addWidget(buttons)
 
         dialog.exec_()
+
+    def _open_documentation_dialog(self) -> None:
+        if self._documentation_dialog:
+            self._documentation_dialog.raise_()
+            self._documentation_dialog.activateWindow()
+            return
+        dialog = DocumentationDialog(
+            PROJECT_ROOT / 'gui_user_documentation.md',
+            self,
+        )
+        dialog.finished.connect(self._on_documentation_dialog_closed)
+        self._documentation_dialog = dialog
+        dialog.show()
+
+    def _on_documentation_dialog_closed(self, _result: int) -> None:
+        self._documentation_dialog = None
 
     def _open_bug_report_dialog(self) -> None:
         if self._bug_report_dialog:

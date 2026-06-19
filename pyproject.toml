@@ -48,6 +48,7 @@ mobipick_gui = [
     "resources/custom_entrypoint.sh",
     "resources/docker-compose.yml",
     "resources/enter_container_manually_test.sh",
+    "resources/gui_user_documentation.md",
     "resources/config/*.yaml",
     "resources/empty_workspace/.gitkeep",
     "resources/images/*.svg",
