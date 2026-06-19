@@ -248,6 +248,12 @@ The tab search is separate from the documentation window search.
 
 ## Tools menu
 
+- **Configure Toolbar Buttons** edits the active workspace toolbar button
+  profile. You can add, remove, reorder, and edit configured command buttons.
+  **Sim** and **RViz** cannot be removed, but their command fields can be
+  changed. **Roscore** and **Terminal** are fixed buttons and cannot be edited
+  from this profile.
+
 ### Docker
 
 - **Manage Images** lists Docker images matching the GUI filters and lets you

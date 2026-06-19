@@ -22,6 +22,7 @@ from PyQt5.QtCore import QEvent, QIODevice, QPoint, QProcess, QProcessEnvironmen
 from PyQt5.QtGui import QColor, QGuiApplication, QPixmap, QTextCursor, QTextDocument
 from PyQt5.QtWidgets import (
     QAction,
+    QAbstractItemView,
     QApplication,
     QCheckBox,
     QComboBox,
@@ -64,9 +65,11 @@ from .config import (
     load_docker_cp_user_config,
     load_button_layout,
     load_launch_sequence_plan,
+    save_button_layout,
     save_docker_cp_config,
     save_launch_sequence_plan,
     save_user_config_update,
+    writable_button_config_path,
     writable_docker_cp_config_path,
     writable_launch_sequence_path,
 )
@@ -89,6 +92,281 @@ def trigger_sigint():
     """Signal the GUI to start its shutdown sequence."""
     global _SIGINT_TRIGGERED
     _SIGINT_TRIGGERED = True
+
+
+class ButtonProfileDialog(QDialog):
+    """Edit the configurable top-row command buttons."""
+
+    COLUMNS = [
+        ('key', 'Key'),
+        ('label', 'Label'),
+        ('kind', 'Kind'),
+        ('action', 'Action'),
+        ('command', 'Command'),
+        ('tooltip', 'Tooltip'),
+        ('requires_roscore', 'Requires roscore'),
+        ('reuse_tab', 'Reuse tab'),
+        ('world_config_required', 'World cfg'),
+        ('world_arg_name', 'World arg'),
+        ('setup', 'Setup'),
+        ('host', 'Host'),
+        ('stop_command', 'Stop command'),
+        ('log_command', 'Log command'),
+        ('pass_ros_master_uri', 'Pass ROS_MASTER_URI'),
+    ]
+    BOOL_FIELDS = {
+        'requires_roscore',
+        'reuse_tab',
+        'world_config_required',
+        'host',
+        'pass_ros_master_uri',
+    }
+    REQUIRED_KEYS = {'sim', 'rviz'}
+    RESERVED_KEYS = {'roscore', 'terminal'}
+    KEY_RE = re.compile(r'^[A-Za-z0-9_.-]+$')
+
+    def __init__(
+        self,
+        entries: list[dict],
+        source_path: Path,
+        save_path: Path,
+        parent: QWidget | None = None,
+    ):
+        super().__init__(parent)
+        self.setWindowTitle('Configure Toolbar Buttons')
+        self.resize(1220, 620)
+        self._source_path = source_path
+        self._save_path = save_path
+
+        root = QVBoxLayout(self)
+        note = QLabel(
+            'Roscore and Terminal are always present and are not editable here. '
+            'Sim and RViz cannot be removed, but their command fields can be '
+            'overridden.'
+        )
+        note.setWordWrap(True)
+        root.addWidget(note)
+
+        path_label = QLabel(
+            f'Loaded from: {source_path}\nSaves to: {save_path}'
+        )
+        path_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        root.addWidget(path_label)
+
+        self.table = QTableWidget(0, len(self.COLUMNS))
+        self.table.setHorizontalHeaderLabels([label for _key, label in self.COLUMNS])
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.table.horizontalHeader().setStretchLastSection(True)
+        root.addWidget(self.table, 1)
+
+        for entry in entries:
+            self._append_row(entry)
+
+        actions = QHBoxLayout()
+        add_button = QPushButton('Add Command')
+        add_button.clicked.connect(self._add_command_row)
+        actions.addWidget(add_button)
+        remove_button = QPushButton('Remove Selected')
+        remove_button.clicked.connect(self._remove_selected_row)
+        actions.addWidget(remove_button)
+        up_button = QPushButton('Move Up')
+        up_button.clicked.connect(lambda: self._move_selected_row(-1))
+        actions.addWidget(up_button)
+        down_button = QPushButton('Move Down')
+        down_button.clicked.connect(lambda: self._move_selected_row(1))
+        actions.addWidget(down_button)
+        actions.addStretch(1)
+        root.addLayout(actions)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.Save | QDialogButtonBox.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        root.addWidget(buttons)
+
+    def _append_row(self, entry: dict) -> None:
+        row = self.table.rowCount()
+        self.table.insertRow(row)
+        key_text = str(entry.get('key') or '').strip()
+        locked = key_text in self.REQUIRED_KEYS
+        for column, (field, _label) in enumerate(self.COLUMNS):
+            if field in self.BOOL_FIELDS:
+                item = QTableWidgetItem()
+                item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsUserCheckable)
+                item.setCheckState(
+                    Qt.Checked if bool(entry.get(field, False)) else Qt.Unchecked
+                )
+            else:
+                value = entry.get(field, '')
+                item = QTableWidgetItem('' if value is None else str(value))
+                flags = Qt.ItemIsEnabled | Qt.ItemIsSelectable
+                if not (
+                    locked
+                    and field in {'key', 'kind', 'action'}
+                ):
+                    flags |= Qt.ItemIsEditable
+                item.setFlags(flags)
+            if column == 0:
+                item.setData(Qt.UserRole, copy.deepcopy(entry))
+            self.table.setItem(row, column, item)
+
+    def _selected_row(self) -> int:
+        indexes = self.table.selectionModel().selectedRows()
+        return indexes[0].row() if indexes else -1
+
+    def _field_column(self, field: str) -> int:
+        return next(
+            index
+            for index, (candidate, _label) in enumerate(self.COLUMNS)
+            if candidate == field
+        )
+
+    def _row_key(self, row: int) -> str:
+        item = self.table.item(row, self._field_column('key'))
+        return item.text().strip() if item else ''
+
+    def _next_command_key(self) -> str:
+        existing = {
+            self._row_key(row)
+            for row in range(self.table.rowCount())
+        }
+        index = 1
+        while f'command_{index}' in existing:
+            index += 1
+        return f'command_{index}'
+
+    def _add_command_row(self) -> None:
+        key = self._next_command_key()
+        self._append_row(
+            {
+                'key': key,
+                'label': key.replace('_', ' ').title(),
+                'kind': 'command',
+                'action': '',
+                'command': '',
+                'requires_roscore': True,
+                'reuse_tab': False,
+                'world_config_required': False,
+                'world_arg_name': 'world_config',
+                'host': False,
+                'pass_ros_master_uri': False,
+            }
+        )
+        self.table.selectRow(self.table.rowCount() - 1)
+
+    def _remove_selected_row(self) -> None:
+        row = self._selected_row()
+        if row < 0:
+            return
+        key = self._row_key(row)
+        if key in self.REQUIRED_KEYS:
+            QMessageBox.information(
+                self,
+                'Toolbar Buttons',
+                'Sim and RViz cannot be removed.',
+            )
+            return
+        self.table.removeRow(row)
+
+    def _move_selected_row(self, direction: int) -> None:
+        row = self._selected_row()
+        target = row + direction
+        if row < 0 or target < 0 or target >= self.table.rowCount():
+            return
+        values = [self._row_snapshot(row), self._row_snapshot(target)]
+        self.table.removeRow(max(row, target))
+        self.table.removeRow(min(row, target))
+        insert_first = min(row, target)
+        ordered = values if direction < 0 else values[::-1]
+        for offset, entry in enumerate(ordered):
+            self._insert_snapshot(insert_first + offset, entry)
+        self.table.selectRow(target)
+
+    def _insert_snapshot(self, row: int, entry: dict) -> None:
+        self.table.insertRow(row)
+        self._write_snapshot_to_row(row, entry)
+
+    def _write_snapshot_to_row(self, row: int, entry: dict) -> None:
+        key_text = str(entry.get('key') or '').strip()
+        locked = key_text in self.REQUIRED_KEYS
+        for column, (field, _label) in enumerate(self.COLUMNS):
+            if field in self.BOOL_FIELDS:
+                item = QTableWidgetItem()
+                item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsUserCheckable)
+                item.setCheckState(
+                    Qt.Checked if bool(entry.get(field, False)) else Qt.Unchecked
+                )
+            else:
+                item = QTableWidgetItem(str(entry.get(field, '') or ''))
+                flags = Qt.ItemIsEnabled | Qt.ItemIsSelectable
+                if not (
+                    locked
+                    and field in {'key', 'kind', 'action'}
+                ):
+                    flags |= Qt.ItemIsEditable
+                item.setFlags(flags)
+            if column == 0:
+                item.setData(Qt.UserRole, copy.deepcopy(entry))
+            self.table.setItem(row, column, item)
+
+    def _row_snapshot(self, row: int) -> dict:
+        base_item = self.table.item(row, 0)
+        base = copy.deepcopy(base_item.data(Qt.UserRole) if base_item else {})
+        if not isinstance(base, dict):
+            base = {}
+        for column, (field, _label) in enumerate(self.COLUMNS):
+            item = self.table.item(row, column)
+            if field in self.BOOL_FIELDS:
+                base[field] = bool(item and item.checkState() == Qt.Checked)
+            else:
+                base[field] = item.text().strip() if item else ''
+        return base
+
+    def button_layout(self) -> list[dict]:
+        return [
+            self._row_snapshot(row)
+            for row in range(self.table.rowCount())
+        ]
+
+    def _validation_error(self, entries: list[dict]) -> str:
+        keys: list[str] = []
+        for entry in entries:
+            key = str(entry.get('key') or '').strip()
+            if not key:
+                return 'Every button needs a key.'
+            if not self.KEY_RE.fullmatch(key):
+                return (
+                    f'Button key "{key}" may contain only letters, numbers, '
+                    'dot, underscore, and hyphen.'
+                )
+            if key in self.RESERVED_KEYS:
+                return 'Roscore and Terminal are fixed buttons and cannot be edited here.'
+            if key in keys:
+                return f'Button key "{key}" is duplicated.'
+            keys.append(key)
+            kind = str(entry.get('kind') or 'builtin').strip().lower()
+            entry['kind'] = kind
+            if key in self.REQUIRED_KEYS:
+                required_action = key
+                if kind != 'builtin' or str(entry.get('action') or key) != required_action:
+                    return 'Sim and RViz must keep their builtin actions.'
+                entry['action'] = required_action
+            if kind == 'command' and not str(entry.get('command') or '').strip():
+                return f'Command button "{key}" needs a command.'
+        missing = sorted(self.REQUIRED_KEYS - set(keys))
+        if missing:
+            return f'Missing required button(s): {", ".join(missing)}.'
+        return ''
+
+    def accept(self) -> None:
+        entries = self.button_layout()
+        error = self._validation_error(entries)
+        if error:
+            QMessageBox.warning(self, 'Toolbar Buttons', error)
+            return
+        super().accept()
 
 
 class AutoLaunchWizard(QDialog):
@@ -958,6 +1236,13 @@ class MainWindow(QMainWindow):
         )
 
         tools_menu = self._add_menu(menu_bar, 'Tools')
+        self._add_menu_action(
+            tools_menu,
+            'Configure Toolbar Buttons',
+            self._open_button_profile_dialog,
+            tooltip='Edit the active workspace toolbar button profile',
+        )
+        tools_menu.addSeparator()
 
         docker_menu = self._add_menu(tools_menu, 'Docker')
         self._add_menu_action(docker_menu, 'Manage Images', self.manage_images)
@@ -1311,13 +1596,78 @@ class MainWindow(QMainWindow):
         workspace = self._workspace_registry.active_workspace()
         if workspace and workspace.button_config:
             return workspace.button_config
-        return str(BUTTON_CONFIG_FILE)
+        return (
+            str(CONFIG.get('buttons', {}).get('config_file') or '')
+            or str(BUTTON_CONFIG_FILE)
+        )
 
     def _workspace_launch_config_path(self) -> str | None:
         workspace = self._workspace_registry.active_workspace()
         if workspace and workspace.launch_config:
             return workspace.launch_config
         return None
+
+    def _resolved_button_config_path(self) -> Path:
+        raw_path = Path(self._workspace_button_config_path() or BUTTON_CONFIG_FILE)
+        raw_path = raw_path.expanduser()
+        if not raw_path.is_absolute():
+            raw_path = PROJECT_ROOT / raw_path
+        return raw_path
+
+    def _open_button_profile_dialog(self) -> None:
+        if self._workspace_processes_running():
+            QMessageBox.warning(
+                self,
+                'Toolbar Buttons',
+                'Stop running workspace processes before editing toolbar buttons.',
+            )
+            return
+        source_path = self._resolved_button_config_path()
+        save_path = writable_button_config_path(source_path)
+        dialog = ButtonProfileDialog(
+            self._button_layout,
+            source_path,
+            save_path,
+            self,
+        )
+        if dialog.exec_() != QDialog.Accepted:
+            return
+        try:
+            saved_path = save_button_layout(save_path, dialog.button_layout())
+            self._remember_button_profile_path(saved_path, source_path)
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(
+                self,
+                'Toolbar Buttons',
+                f'Failed to save toolbar button profile:\n{exc}',
+            )
+            return
+
+        self._reset_workspace_tabs()
+        self._reload_workspace_profile()
+        self._create_workspace_tabs()
+        self._apply_env_to_all_tabs()
+        self._log_info(f'saved toolbar button profile to {saved_path}')
+
+    def _remember_button_profile_path(
+        self,
+        saved_path: Path,
+        source_path: Path,
+    ) -> None:
+        if saved_path == source_path:
+            return
+        workspace = self._workspace_registry.active_workspace()
+        if workspace is not None:
+            workspace.button_config = str(saved_path)
+            self._workspace_registry.save()
+            if self._workspace_dialog:
+                self._workspace_dialog.refresh(self._workspace_registry.active)
+            return
+        save_user_config_update({
+            'buttons': {
+                'config_file': str(saved_path),
+            },
+        })
 
     def _workspace_runtime_env(
         self,
@@ -2403,6 +2753,10 @@ CMD ["bash"]
         self._focus_tab(key)
 
     def _workspace_sim_command(self) -> str:
+        sim_cfg = getattr(self, '_config_buttons', {}).get('sim', {})
+        command = str(sim_cfg.get('command') or '').strip()
+        if command:
+            return command
         workspace = self._workspace_registry.active_workspace()
         if workspace and workspace.sim_command:
             return workspace.sim_command
@@ -2410,6 +2764,17 @@ CMD ["bash"]
         return (
             'roslaunch tables_demo_bringup demo_sim.launch '
             f'world_config:={self._sh_quote(world)}'
+        )
+
+    def _rviz_command(self) -> str:
+        rviz_cfg = getattr(self, '_config_buttons', {}).get('rviz', {})
+        command = str(rviz_cfg.get('command') or '').strip()
+        if command:
+            return command
+        return (
+            'rosrun rviz rviz -d '
+            '$(rospack find tables_demo_bringup)/config/pick_n_place.rviz '
+            '__ns:=mobipick'
         )
 
     def _get_button_widget(self, key: str) -> QPushButton | None:
@@ -4699,18 +5064,6 @@ CMD ["bash"]
         if key == 'roscore':
             self.toggle_roscore()
             return True
-        if key == 'sim':
-            self.toggle_sim()
-            return True
-        if key == 'tables':
-            self.toggle_tables_demo()
-            return True
-        if key == 'rviz':
-            self.toggle_rviz()
-            return True
-        if key == 'rqt':
-            self.toggle_rqt_tables_demo()
-            return True
         if key == 'terminal':
             self.toggle_terminal()
             return True
@@ -5938,7 +6291,7 @@ CMD ["bash"]
             tab.exec_id = exec_id
             tab.container_name = f'mpcmd-{exec_id[:10]}'
             self._claim_xhost(tab, 'rviz', log_key=tab.key)
-            rviz_cmd = 'rosrun rviz rviz -d $(rospack find tables_demo_bringup)/config/pick_n_place.rviz __ns:=mobipick'
+            rviz_cmd = self._rviz_command()
             args = [
                 'compose', 'run', '--rm', '--name', tab.container_name,
                 '--label', f'mobipick.exec={exec_id}', '--label', f'mobipick.tab={tab.key}',

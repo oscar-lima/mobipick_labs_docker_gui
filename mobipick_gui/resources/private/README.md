@@ -22,6 +22,10 @@ NOTE: Don't manually edit `select_ros1_ws.sh` unless you are adding a new worksp
 1. Edit select_ros1_ws.sh by adding it to the list.
 2. Edit config.yml with the command you wan't to run when clicking bringup sim button.
 
+The current GUI can also edit the active toolbar button profile from
+**Tools > Configure Toolbar Buttons**. This is preferred for adding, removing,
+or changing workspace-specific command buttons after migration.
+
 ---
 
 ## Contents

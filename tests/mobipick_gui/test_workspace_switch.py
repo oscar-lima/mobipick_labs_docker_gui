@@ -100,7 +100,7 @@ buttons:
     assert window._activate_workspace('rae_upom_mobipick_ws')
     assert window._workspace_registry.active == 'rae_upom_mobipick_ws'
     assert window._selected_image == 'example/mobipick:rae'
-    assert window._config_button_order == ['rae-action']
+    assert window._config_button_order == ['sim', 'rae-action', 'rviz']
     assert 'custom-stale' not in window.tasks
     assert window.tabs.indexOf(stale_output) == -1
     env_args = window._compose_env_args()

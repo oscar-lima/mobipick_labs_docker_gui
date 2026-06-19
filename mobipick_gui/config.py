@@ -92,6 +92,7 @@ def default_user_config_path() -> Path:
 USER_CONFIG_FILE = default_user_config_path()
 USER_DATA_DIR = default_user_data_dir()
 LAUNCH_SEQUENCE_DIR = default_user_config_dir() / 'launch_sequences'
+BUTTON_PROFILE_DIR = default_user_config_dir() / 'button_profiles'
 WINDOW_LAYOUT_FILE = default_user_config_dir() / 'window_layout.yaml'
 USER_DOCKER_CP_CONFIG_FILE = default_user_config_dir() / 'docker_cp_image_tag.yaml'
 
@@ -406,6 +407,8 @@ BUTTON_CONFIG_DEFAULTS = [
     },
 ]
 
+REQUIRED_BUTTON_KEYS = ('sim', 'rviz')
+
 
 def _deep_update(base: Dict, updates: Dict) -> Dict:
     for key, value in updates.items():
@@ -464,6 +467,34 @@ def save_user_config_update(updates: Dict) -> Dict:
     return user_config
 
 
+def _button_default(key: str) -> dict:
+    for entry in BUTTON_CONFIG_DEFAULTS:
+        if entry.get('key') == key:
+            return copy.deepcopy(entry)
+    return {'key': key, 'label': key, 'kind': 'builtin', 'action': key}
+
+
+def ensure_required_button_layout(entries: list[dict]) -> list[dict]:
+    """Return button entries with non-removable profile buttons present."""
+    result: list[dict] = []
+    seen: set[str] = set()
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        key = str(entry.get('key') or '').strip()
+        if not key or key in {'roscore', 'terminal'} or key in seen:
+            continue
+        result.append(entry)
+        seen.add(key)
+
+    if 'sim' not in seen:
+        result.insert(0, _button_default('sim'))
+        seen.add('sim')
+    if 'rviz' not in seen:
+        result.append(_button_default('rviz'))
+    return result
+
+
 def load_button_layout(config_path: str | Path | None = None) -> list[dict]:
     """Load configurable command buttons."""
     entries = copy.deepcopy(BUTTON_CONFIG_DEFAULTS)
@@ -516,7 +547,41 @@ def load_button_layout(config_path: str | Path | None = None) -> list[dict]:
             f'Warning: failed to load button configuration from {path}: {exc}',
             file=sys.stderr,
         )
-    return entries
+    return ensure_required_button_layout(entries)
+
+
+def writable_button_config_path(source: str | Path | None) -> Path:
+    """Return a writable path for saving a button profile."""
+    raw_path = Path(source).expanduser() if source else BUTTON_CONFIG_FILE
+    if not raw_path.is_absolute():
+        raw_path = PROJECT_ROOT / raw_path
+
+    try:
+        raw_path.relative_to(PROJECT_ROOT)
+    except ValueError:
+        return raw_path
+    return BUTTON_PROFILE_DIR / raw_path.name
+
+
+def save_button_layout(path: str | Path, entries: list[dict]) -> Path:
+    """Persist a normalized button profile."""
+    destination = Path(path).expanduser()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    data = {
+        'buttons': [
+            {
+                key: value
+                for key, value in entry.items()
+                if value not in (None, '')
+            }
+            for entry in ensure_required_button_layout(entries)
+        ]
+    }
+    temporary = destination.with_suffix(destination.suffix + '.tmp')
+    with temporary.open('w', encoding='utf-8') as handle:
+        yaml.safe_dump(data, handle, sort_keys=False)
+    temporary.replace(destination)
+    return destination
 
 
 def load_launch_sequence_plan(
@@ -850,6 +915,7 @@ __all__ = [
     'CONFIG',
     'CONFIG_DEFAULTS',
     'CONFIG_FILE',
+    'BUTTON_PROFILE_DIR',
     'USER_CONFIG_FILE',
     'USER_DOCKER_CP_CONFIG_FILE',
     'USER_DATA_DIR',
@@ -864,15 +930,19 @@ __all__ = [
     'PROJECT_ROOT',
     'SCRIPT_CLEAN',
     'save_launch_sequence_plan',
+    'save_button_layout',
     'save_docker_cp_config',
     'save_user_config_update',
     'BUTTON_CONFIG_FILE',
     'BUTTON_CONFIG_DEFAULTS',
+    'REQUIRED_BUTTON_KEYS',
+    'ensure_required_button_layout',
     'load_button_layout',
     'DOCKER_COMPOSE_FILE',
     'LAUNCH_SEQUENCE_DIR',
     'WINDOW_LAYOUT_FILE',
     'load_launch_sequence_plan',
     'writable_docker_cp_config_path',
+    'writable_button_config_path',
     'writable_launch_sequence_path',
 ]

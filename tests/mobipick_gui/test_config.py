@@ -9,8 +9,10 @@ from mobipick_gui.config import (
     load_button_layout,
     load_docker_cp_config,
     load_launch_sequence_plan,
+    save_button_layout,
     save_docker_cp_config,
     save_launch_sequence_plan,
+    writable_button_config_path,
     writable_launch_sequence_path,
 )
 
@@ -67,10 +69,60 @@ timeline:
     layout = load_button_layout(Path(buttons))
     plan = load_launch_sequence_plan(buttons, launches)
 
-    assert [entry['key'] for entry in layout] == ['custom']
+    assert [entry['key'] for entry in layout] == ['sim', 'custom', 'rviz']
     assert plan['source'] == str(launches)
     assert plan['timeline'] == [{'button': 'custom', 'at_seconds': 1.0}]
     assert plan['recording_start_delay_seconds'] == 0.0
+
+
+def test_button_layout_keeps_sim_and_rviz_required(tmp_path):
+    buttons = tmp_path / 'buttons.yaml'
+    buttons.write_text(
+        '''
+buttons:
+  - key: custom
+    label: Custom
+    kind: command
+    command: echo custom
+''',
+        encoding='utf-8',
+    )
+
+    layout = load_button_layout(Path(buttons))
+
+    assert [entry['key'] for entry in layout] == ['sim', 'custom', 'rviz']
+
+
+def test_save_button_layout_persists_required_buttons(tmp_path):
+    target = tmp_path / 'buttons.yaml'
+
+    save_button_layout(
+        target,
+        [
+            {
+                'key': 'custom',
+                'label': 'Custom',
+                'kind': 'command',
+                'command': 'echo custom',
+            }
+        ],
+    )
+
+    text = target.read_text(encoding='utf-8')
+    assert 'key: sim' in text
+    assert 'key: custom' in text
+    assert 'key: rviz' in text
+
+
+def test_writable_button_config_path_avoids_packaged_resources(
+    monkeypatch,
+    tmp_path,
+):
+    profile_dir = tmp_path / 'button_profiles'
+    monkeypatch.setattr(config_module, 'BUTTON_PROFILE_DIR', profile_dir)
+    source = config_module.PROJECT_ROOT / 'config' / 'buttons.yaml'
+
+    assert writable_button_config_path(source) == profile_dir / 'buttons.yaml'
 
 
 def test_launch_sequence_persists_recording_start_delay(tmp_path):

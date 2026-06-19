@@ -181,3 +181,23 @@ def test_recording_display_prefers_config_then_environment(monkeypatch):
     monkeypatch.delenv('DISPLAY')
     harness._recording_cfg = {}
     assert harness._recording_display() == ':1'
+
+
+def test_builtin_sim_and_rviz_commands_can_be_overridden():
+    harness = SimpleNamespace(
+        _config_buttons={
+            'sim': {'command': 'roslaunch custom sim.launch'},
+            'rviz': {'command': 'rviz -d /tmp/custom.rviz'},
+        },
+        _workspace_registry=SimpleNamespace(active_workspace=lambda: None),
+        _current_world=lambda: 'demo_world',
+        _sh_quote=lambda value: value,
+    )
+    harness._workspace_sim_command = MethodType(
+        MainWindow._workspace_sim_command,
+        harness,
+    )
+    harness._rviz_command = MethodType(MainWindow._rviz_command, harness)
+
+    assert harness._workspace_sim_command() == 'roslaunch custom sim.launch'
+    assert harness._rviz_command() == 'rviz -d /tmp/custom.rviz'

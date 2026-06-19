@@ -280,6 +280,9 @@ to the wizard fields.
 Default toolbar buttons are loaded from
 `resources/config/button_commands_labs.yaml`. `load_button_layout()` supports
 workspace-specific replacements through the workspace registry.
+Use **Tools > Configure Toolbar Buttons** to edit the active profile from the
+GUI. Packaged profiles are saved as writable per-user copies and the active
+workspace or global settings are updated to point at the copy.
 
 Button entries can be:
 
@@ -301,6 +304,12 @@ Command entries can declare:
 
 The GUI normalizes all entries and creates matching process tabs and
 start/stop visual state.
+
+`roscore` and `terminal` are fixed top-row buttons and are not stored in button
+profiles. `sim` and `rviz` are required profile buttons: they cannot be
+removed, but their `command` fields can override the default simulation and
+RViz launch commands. Other profile buttons can be added, removed, reordered,
+or changed.
 
 ## Auto Launch
 
