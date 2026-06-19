@@ -15,6 +15,9 @@ Follow PEP 8 with four-space indents and keep functions under 80 columns where p
 ## Testing Guidelines
 Add regression tests under a top-level `tests/` package (create it if missing) and mirror the package path (e.g., `tests/mobipick_gui/test_process_tab.py`). Use `pytest` plus `pytest-qt` for widget exercises, and stub Docker subprocesses with `unittest.mock` so tests run without containers. Name tests after the scenario (`test_roscore_button_disables_when_process_stops`) and include a smoke test that launches the application headless to verify resource loading.
 
+## Documentation Updates
+Consider whether every considerable code, configuration, or workflow change also needs documentation updates. Use `README.md` for developer and maintainer documentation, and `mobipick_gui/resources/gui_user_documentation.md` for user-facing GUI behavior rendered from **Help > Documentation**. If a change affects deprecated private workspace templating under `mobipick_gui/resources/private/`, update `mobipick_gui/resources/private/README.md` as well. Skip documentation edits for trivial internal changes that do not alter behavior, setup, configuration, or maintenance expectations.
+
 ## Commit & Pull Request Guidelines
 Git history favours concise, imperative subject lines such as `use gpu to run the simulation inside the container`; stay under 72 characters and focus each commit on one concern. After code or documentation changes, end the final response with a suggested commit message. If multiple changes are made in the same conversation thread, keep updating that suggestion as one squashed commit message that covers the accumulated work rather than listing separate per-turn messages. Pull requests should describe the user impact, note Docker or configuration changes, link relevant issues, and attach GUI screenshots when adjusting visuals or button flows.
 
