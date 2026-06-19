@@ -7,7 +7,9 @@ from mobipick_gui.config import (
     default_user_config_dir,
     default_user_data_dir,
     load_button_layout,
+    load_docker_cp_config,
     load_launch_sequence_plan,
+    save_docker_cp_config,
     save_launch_sequence_plan,
     writable_launch_sequence_path,
 )
@@ -127,3 +129,115 @@ def test_writable_launch_sequence_path_avoids_packaged_resources(monkeypatch, tm
     source = config_module.PROJECT_ROOT / 'config' / 'custom_auto.yaml'
 
     assert writable_launch_sequence_path(source) == launch_dir / 'custom_auto.yaml'
+
+
+def test_docker_cp_user_config_overrides_bundled_config(monkeypatch, tmp_path):
+    bundled = tmp_path / 'bundled.yaml'
+    user = tmp_path / 'user.yaml'
+    bundled.write_text(
+        '''
+default:
+  container_to_host:
+    - container: /container/default.rviz
+      host: ~/Downloads/default.rviz
+image:tag:
+  host_to_container:
+    - host: ~/Downloads/bundled.rviz
+      container: /container/bundled.rviz
+''',
+        encoding='utf-8',
+    )
+    user.write_text(
+        '''
+image:tag:
+  host_to_container:
+    - host: ~/Downloads/user.rviz
+      container: /container/user.rviz
+''',
+        encoding='utf-8',
+    )
+    monkeypatch.setattr(config_module, 'DOCKER_CP_CONFIG_FILE', bundled)
+    monkeypatch.setattr(config_module, 'USER_DOCKER_CP_CONFIG_FILE', user)
+
+    config = load_docker_cp_config()
+
+    assert config['default']['container_to_host'] == [
+        {
+            'container': '/container/default.rviz',
+            'host': '~/Downloads/default.rviz',
+        }
+    ]
+    assert config['image:tag']['host_to_container'] == [
+        {
+            'container': '/container/user.rviz',
+            'host': '~/Downloads/user.rviz',
+        }
+    ]
+
+
+def test_save_docker_cp_config_writes_user_file(monkeypatch, tmp_path):
+    target = tmp_path / 'config' / 'docker_cp_image_tag.yaml'
+    monkeypatch.setattr(config_module, 'USER_DOCKER_CP_CONFIG_FILE', target)
+
+    saved = save_docker_cp_config(
+        {
+            ' default ': {
+                'host_to_container': [
+                    {
+                        'host': ' ~/Downloads/source.rviz ',
+                        'container': ' /container/source.rviz ',
+                    },
+                    {
+                        'host': '',
+                        'container': '/ignored',
+                    },
+                ],
+                'container_to_host': [],
+            },
+            'empty': {
+                'host_to_container': [],
+                'container_to_host': [],
+            },
+        }
+    )
+
+    assert saved == target
+    text = target.read_text(encoding='utf-8')
+    assert 'default:' in text
+    assert 'host: ~/Downloads/source.rviz' in text
+    assert 'container: /container/source.rviz' in text
+    assert 'empty:' in text
+
+
+def test_empty_docker_cp_user_profile_disables_bundled_default(
+    monkeypatch,
+    tmp_path,
+):
+    bundled = tmp_path / 'bundled.yaml'
+    user = tmp_path / 'user.yaml'
+    bundled.write_text(
+        '''
+default:
+  host_to_container:
+    - host: ~/Downloads/source.rviz
+      container: /container/source.rviz
+''',
+        encoding='utf-8',
+    )
+    user.write_text(
+        '''
+default:
+  host_to_container: []
+  container_to_host: []
+''',
+        encoding='utf-8',
+    )
+    monkeypatch.setattr(config_module, 'DOCKER_CP_CONFIG_FILE', bundled)
+    monkeypatch.setattr(config_module, 'USER_DOCKER_CP_CONFIG_FILE', user)
+
+    config = load_docker_cp_config()
+
+    assert config['default'] == {
+        'host_to_container': [],
+        'container_to_host': [],
+    }

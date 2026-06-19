@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import html
 import json
 import os
@@ -39,6 +40,8 @@ from PyQt5.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QTabBar,
+    QTableWidget,
+    QTableWidgetItem,
     QTabWidget,
     QTextEdit,
     QToolTip,
@@ -58,10 +61,13 @@ from .config import (
     USER_CONFIG_FILE,
     WINDOW_LAYOUT_FILE,
     load_docker_cp_config,
+    load_docker_cp_user_config,
     load_button_layout,
     load_launch_sequence_plan,
+    save_docker_cp_config,
     save_launch_sequence_plan,
     save_user_config_update,
+    writable_docker_cp_config_path,
     writable_launch_sequence_path,
 )
 
@@ -180,6 +186,253 @@ class AutoLaunchWizard(QDialog):
                 'Select at least one launch step before saving.',
             )
             return
+        super().accept()
+
+
+class DockerCpConfigDialog(QDialog):
+    """Edit persistent docker cp path mappings."""
+
+    def __init__(
+        self,
+        effective_config: dict[str, dict[str, list[dict]]],
+        user_config: dict[str, dict[str, list[dict]]],
+        selected_image: str,
+        save_path: Path,
+        parent: QWidget | None = None,
+    ):
+        super().__init__(parent)
+        self.setWindowTitle('Configure Docker cp Paths')
+        self.resize(900, 620)
+        self._effective_config = copy.deepcopy(effective_config or {})
+        self._user_config = copy.deepcopy(user_config or {})
+        self._selected_image = (selected_image or '').strip()
+
+        root = QVBoxLayout(self)
+
+        profile_row = QHBoxLayout()
+        profile_row.addWidget(QLabel('Profile:'))
+        self.profile_combo = QComboBox()
+        self.profile_combo.addItems(self._profile_keys())
+        self.profile_combo.currentIndexChanged.connect(self._load_selected_profile)
+        profile_row.addWidget(self.profile_combo, 1)
+        profile_row.addWidget(QLabel('Save as:'))
+        self.profile_key_input = QLineEdit()
+        self.profile_key_input.setPlaceholderText('default or image reference')
+        self.profile_key_input.textChanged.connect(
+            lambda _text: self._update_preview()
+        )
+        profile_row.addWidget(self.profile_key_input, 1)
+        root.addLayout(profile_row)
+
+        self.tabs = QTabWidget()
+        self.host_to_container_table = self._make_table(
+            'Host source path',
+            'Container destination path',
+        )
+        self.container_to_host_table = self._make_table(
+            'Container source path',
+            'Host destination path',
+        )
+        self.tabs.addTab(
+            self._table_page(self.host_to_container_table),
+            'Host to Container',
+        )
+        self.tabs.addTab(
+            self._table_page(self.container_to_host_table),
+            'Container to Host',
+        )
+        root.addWidget(self.tabs, 1)
+
+        self.preview = QTextEdit()
+        self.preview.setReadOnly(True)
+        self.preview.setMinimumHeight(110)
+        root.addWidget(self.preview)
+
+        path_label = QLabel(f'Saves to: {save_path}')
+        path_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        root.addWidget(path_label)
+
+        self._button_box = QDialogButtonBox(
+            QDialogButtonBox.Save | QDialogButtonBox.Cancel
+        )
+        self._button_box.accepted.connect(self.accept)
+        self._button_box.rejected.connect(self.reject)
+        root.addWidget(self._button_box)
+
+        self._load_selected_profile()
+
+    def _profile_keys(self) -> list[str]:
+        keys = ['default']
+        if self._selected_image:
+            repo, tag = MainWindow._split_image_ref(self._selected_image)
+            keys.extend(key for key in (self._selected_image, repo, tag) if key)
+        keys.extend(self._effective_config.keys())
+        keys.extend(self._user_config.keys())
+        return list(dict.fromkeys(str(key) for key in keys if str(key).strip()))
+
+    def _make_table(self, first_header: str, second_header: str) -> QTableWidget:
+        table = QTableWidget(0, 2)
+        table.setHorizontalHeaderLabels([first_header, second_header])
+        table.horizontalHeader().setStretchLastSection(True)
+        table.itemChanged.connect(lambda _item: self._update_preview())
+        return table
+
+    def _table_page(self, table: QTableWidget) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.addWidget(table)
+
+        row = QHBoxLayout()
+        add_button = QPushButton('Add Row')
+        add_button.clicked.connect(
+            lambda _checked=False, tbl=table: self._add_row(tbl)
+        )
+        row.addWidget(add_button)
+        remove_button = QPushButton('Remove Selected')
+        remove_button.clicked.connect(
+            lambda _checked=False, tbl=table: self._remove_selected_rows(tbl)
+        )
+        row.addWidget(remove_button)
+        row.addStretch(1)
+        layout.addLayout(row)
+        return page
+
+    def _profile_section(self, key: str) -> dict[str, list[dict]]:
+        if key in self._user_config:
+            return copy.deepcopy(self._user_config.get(key) or {})
+        return copy.deepcopy(self._effective_config.get(key) or {})
+
+    def _load_selected_profile(self) -> None:
+        key = self.profile_combo.currentText().strip() or 'default'
+        self.profile_key_input.setText(key)
+        section = self._profile_section(key)
+        self._set_table_entries(
+            self.host_to_container_table,
+            section.get('host_to_container', []),
+            host_first=True,
+        )
+        self._set_table_entries(
+            self.container_to_host_table,
+            section.get('container_to_host', []),
+            host_first=False,
+        )
+        self._update_preview()
+
+    def _set_table_entries(
+        self,
+        table: QTableWidget,
+        entries: list[dict],
+        *,
+        host_first: bool,
+    ) -> None:
+        table.blockSignals(True)
+        table.setRowCount(0)
+        for entry in entries or []:
+            if not isinstance(entry, dict):
+                continue
+            host = str(entry.get('host') or '').strip()
+            container = str(entry.get('container') or '').strip()
+            if not host or not container:
+                continue
+            if host_first:
+                self._add_row(table, host, container)
+            else:
+                self._add_row(table, container, host)
+        table.blockSignals(False)
+
+    def _add_row(
+        self,
+        table: QTableWidget,
+        first: str = '',
+        second: str = '',
+    ) -> None:
+        row = table.rowCount()
+        table.insertRow(row)
+        table.setItem(row, 0, QTableWidgetItem(first))
+        table.setItem(row, 1, QTableWidgetItem(second))
+        self._update_preview()
+
+    def _remove_selected_rows(self, table: QTableWidget) -> None:
+        rows = {index.row() for index in table.selectedIndexes()}
+        for row in sorted(rows, reverse=True):
+            table.removeRow(row)
+        self._update_preview()
+
+    def _table_entries(
+        self,
+        table: QTableWidget,
+        *,
+        host_first: bool,
+    ) -> list[dict[str, str]]:
+        entries: list[dict[str, str]] = []
+        for row in range(table.rowCount()):
+            first_item = table.item(row, 0)
+            second_item = table.item(row, 1)
+            first = first_item.text().strip() if first_item else ''
+            second = second_item.text().strip() if second_item else ''
+            if not first and not second:
+                continue
+            if not first or not second:
+                raise ValueError('Every docker cp row needs both paths.')
+            host, container = (first, second) if host_first else (second, first)
+            entries.append({'host': host, 'container': container})
+        return entries
+
+    def _current_section(self) -> dict[str, list[dict[str, str]]]:
+        return {
+            'host_to_container': self._table_entries(
+                self.host_to_container_table,
+                host_first=True,
+            ),
+            'container_to_host': self._table_entries(
+                self.container_to_host_table,
+                host_first=False,
+            ),
+        }
+
+    def _update_preview(self) -> None:
+        key = (
+            self.profile_key_input.text().strip()
+            or self.profile_combo.currentText().strip()
+        )
+        try:
+            section = self._current_section()
+        except ValueError:
+            self.preview.setPlainText(
+                'Complete both paths in each row to preview commands.'
+            )
+            return
+        lines = [f'Profile: {key or "default"}']
+        for entry in section['host_to_container']:
+            lines.append(
+                f'docker cp {entry["host"]} <container>:{entry["container"]}'
+            )
+        for entry in section['container_to_host']:
+            lines.append(
+                f'docker cp <container>:{entry["container"]} {entry["host"]}'
+            )
+        if len(lines) == 1:
+            lines.append('No docker cp commands configured for this profile.')
+        self.preview.setPlainText('\n'.join(lines))
+
+    def docker_cp_config(self) -> dict[str, dict[str, list[dict]]]:
+        return copy.deepcopy(self._user_config)
+
+    def accept(self):
+        key = self.profile_key_input.text().strip()
+        if not key:
+            QMessageBox.warning(
+                self,
+                'Docker cp Paths',
+                'Enter a profile key before saving.',
+            )
+            return
+        try:
+            section = self._current_section()
+        except ValueError as exc:
+            QMessageBox.warning(self, 'Docker cp Paths', str(exc))
+            return
+        self._user_config[key] = section
         super().accept()
 
 
@@ -727,6 +980,12 @@ class MainWindow(QMainWindow):
             'Execute Docker cp',
             self.execute_docker_cp_from_container,
             tooltip='Copy configured paths from the active container to the host',
+        )
+        self._add_menu_action(
+            docker_menu,
+            'Configure Docker cp Paths',
+            self._open_docker_cp_config_dialog,
+            tooltip='Edit persistent docker cp paths for default or image-specific profiles',
         )
 
         layout_menu = self._add_menu(tools_menu, 'Layout')
@@ -6464,6 +6723,34 @@ CMD ["bash"]
 
         self._append_gui_html(key, '<i>Copying configured container paths to the host...</i>')
         self._run_command_sequence(commands, log_key=key)
+
+    def _open_docker_cp_config_dialog(self):
+        dialog = DockerCpConfigDialog(
+            self._docker_cp_config,
+            load_docker_cp_user_config(),
+            self._selected_image,
+            writable_docker_cp_config_path(),
+            self,
+        )
+        if dialog.exec_() != QDialog.Accepted:
+            return
+        try:
+            saved_path = save_docker_cp_config(dialog.docker_cp_config())
+        except Exception as exc:
+            QMessageBox.warning(
+                self,
+                'Docker cp Paths',
+                f'Failed to save docker cp paths:\n{exc}',
+            )
+            return
+        self._docker_cp_config = load_docker_cp_config()
+        self._synced_container_refs.clear()
+        self._log_info(f'docker cp paths saved to {saved_path}')
+        QMessageBox.information(
+            self,
+            'Docker cp Paths',
+            f'Docker cp paths saved to:\n{saved_path}',
+        )
 
     def save_current_log(self):
         index = self.tabs.currentIndex()

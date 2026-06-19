@@ -93,6 +93,7 @@ USER_CONFIG_FILE = default_user_config_path()
 USER_DATA_DIR = default_user_data_dir()
 LAUNCH_SEQUENCE_DIR = default_user_config_dir() / 'launch_sequences'
 WINDOW_LAYOUT_FILE = default_user_config_dir() / 'window_layout.yaml'
+USER_DOCKER_CP_CONFIG_FILE = default_user_config_dir() / 'docker_cp_image_tag.yaml'
 
 
 def _detect_numeric_id(getter_name: str, env_candidates: tuple[str, ...], fallback: str) -> str:
@@ -725,52 +726,132 @@ def save_launch_sequence_plan(
     return destination
 
 
-def load_docker_cp_config() -> Dict[str, Dict[str, list[dict]]]:
-    """Load optional docker cp mappings keyed by image references."""
+def _normalize_docker_cp_entries(entries) -> list[dict]:
+    """Return valid docker cp mapping rows."""
+    if not isinstance(entries, list):
+        return []
+    normalized: list[dict] = []
+    for item in entries:
+        if not isinstance(item, dict):
+            continue
+        host = item.get('host') or item.get('host_path')
+        container = item.get('container') or item.get('container_path')
+        if not isinstance(host, str) or not isinstance(container, str):
+            continue
+        host = host.strip()
+        container = container.strip()
+        if not host or not container:
+            continue
+        normalized.append({'host': host, 'container': container})
+    return normalized
 
-    def _normalize(entries) -> list[dict]:
-        if not isinstance(entries, list):
-            return []
-        normalized: list[dict] = []
-        for item in entries:
-            if not isinstance(item, dict):
-                continue
-            host = item.get('host') or item.get('host_path')
-            container = item.get('container') or item.get('container_path')
-            if not isinstance(host, str) or not isinstance(container, str):
-                continue
-            normalized.append({'host': host, 'container': container})
-        return normalized
 
+def _load_docker_cp_config_file(
+    path: Path,
+    *,
+    include_empty: bool = False,
+) -> Dict[str, Dict[str, list[dict]]]:
+    """Load one docker cp config file."""
     config: Dict[str, Dict[str, list[dict]]] = {}
+    if not path.is_file():
+        return config
+    with open(path, 'r', encoding='utf-8') as handle:
+        data = yaml.safe_load(handle) or {}
+    if not isinstance(data, dict):
+        return config
+    for key, section in data.items():
+        if not isinstance(section, dict):
+            continue
+        host_to_container = _normalize_docker_cp_entries(
+            section.get('host_to_container')
+        )
+        container_to_host = _normalize_docker_cp_entries(
+            section.get('container_to_host')
+        )
+        if not include_empty and not host_to_container and not container_to_host:
+            continue
+        config[str(key)] = {
+            'host_to_container': host_to_container,
+            'container_to_host': container_to_host,
+        }
+    return config
+
+
+def load_docker_cp_config() -> Dict[str, Dict[str, list[dict]]]:
+    """Load bundled docker cp mappings plus per-user overrides."""
+    config: Dict[str, Dict[str, list[dict]]] = {}
+    for path, include_empty in (
+        (DOCKER_CP_CONFIG_FILE, False),
+        (USER_DOCKER_CP_CONFIG_FILE, True),
+    ):
+        try:
+            config.update(
+                _load_docker_cp_config_file(path, include_empty=include_empty)
+            )
+        except Exception as exc:  # pragma: no cover - defensive logging
+            print(
+                f'Warning: failed to load docker cp configuration from {path}: {exc}',
+                file=sys.stderr,
+            )
+    return config
+
+
+def load_docker_cp_user_config() -> Dict[str, Dict[str, list[dict]]]:
+    """Load only the persistent per-user docker cp mappings."""
     try:
-        if DOCKER_CP_CONFIG_FILE.is_file():
-            with open(DOCKER_CP_CONFIG_FILE, 'r', encoding='utf-8') as handle:
-                data = yaml.safe_load(handle) or {}
-            if isinstance(data, dict):
-                for key, section in data.items():
-                    if not isinstance(section, dict):
-                        continue
-                    host_to_container = _normalize(section.get('host_to_container'))
-                    container_to_host = _normalize(section.get('container_to_host'))
-                    if not host_to_container and not container_to_host:
-                        continue
-                    config[str(key)] = {
-                        'host_to_container': host_to_container,
-                        'container_to_host': container_to_host,
-                    }
+        return _load_docker_cp_config_file(
+            USER_DOCKER_CP_CONFIG_FILE,
+            include_empty=True,
+        )
     except Exception as exc:  # pragma: no cover - defensive logging
         print(
-            f'Warning: failed to load docker cp configuration from {DOCKER_CP_CONFIG_FILE}: {exc}',
+            'Warning: failed to load docker cp configuration from '
+            f'{USER_DOCKER_CP_CONFIG_FILE}: {exc}',
             file=sys.stderr,
         )
-    return config
+    return {}
+
+
+def save_docker_cp_config(config: Dict[str, Dict[str, list[dict]]]) -> Path:
+    """Persist docker cp mappings to the per-user configuration file."""
+    normalized: Dict[str, Dict[str, list[dict]]] = {}
+    for key, section in (config or {}).items():
+        if not isinstance(section, dict):
+            continue
+        key_text = str(key).strip()
+        if not key_text:
+            continue
+        host_to_container = _normalize_docker_cp_entries(
+            section.get('host_to_container')
+        )
+        container_to_host = _normalize_docker_cp_entries(
+            section.get('container_to_host')
+        )
+        normalized[key_text] = {
+            'host_to_container': host_to_container,
+            'container_to_host': container_to_host,
+        }
+
+    USER_DOCKER_CP_CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    temporary = USER_DOCKER_CP_CONFIG_FILE.with_suffix(
+        USER_DOCKER_CP_CONFIG_FILE.suffix + '.tmp'
+    )
+    with temporary.open('w', encoding='utf-8') as handle:
+        yaml.safe_dump(normalized, handle, sort_keys=False)
+    temporary.replace(USER_DOCKER_CP_CONFIG_FILE)
+    return USER_DOCKER_CP_CONFIG_FILE
+
+
+def writable_docker_cp_config_path() -> Path:
+    """Return the per-user docker cp configuration path."""
+    return USER_DOCKER_CP_CONFIG_FILE
 
 __all__ = [
     'CONFIG',
     'CONFIG_DEFAULTS',
     'CONFIG_FILE',
     'USER_CONFIG_FILE',
+    'USER_DOCKER_CP_CONFIG_FILE',
     'USER_DATA_DIR',
     'default_user_config_dir',
     'default_user_config_path',
@@ -778,10 +859,12 @@ __all__ = [
     'DOCKER_CP_CONFIG_FILE',
     'DEFAULT_YAML_PATH',
     'load_docker_cp_config',
+    'load_docker_cp_user_config',
     'load_user_config_overrides',
     'PROJECT_ROOT',
     'SCRIPT_CLEAN',
     'save_launch_sequence_plan',
+    'save_docker_cp_config',
     'save_user_config_update',
     'BUTTON_CONFIG_FILE',
     'BUTTON_CONFIG_DEFAULTS',
@@ -790,5 +873,6 @@ __all__ = [
     'LAUNCH_SEQUENCE_DIR',
     'WINDOW_LAYOUT_FILE',
     'load_launch_sequence_plan',
+    'writable_docker_cp_config_path',
     'writable_launch_sequence_path',
 ]
