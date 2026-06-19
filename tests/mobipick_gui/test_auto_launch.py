@@ -187,7 +187,9 @@ def test_builtin_sim_and_rviz_commands_can_be_overridden():
     harness = SimpleNamespace(
         _config_buttons={
             'sim': {'command': 'roslaunch custom sim.launch'},
+            'tables': {'command': 'rosrun custom tables.py'},
             'rviz': {'command': 'rviz -d /tmp/custom.rviz'},
+            'rqt': {'command': 'roslaunch custom rqt.launch'},
         },
         _workspace_registry=SimpleNamespace(active_workspace=lambda: None),
         _current_world=lambda: 'demo_world',
@@ -197,7 +199,21 @@ def test_builtin_sim_and_rviz_commands_can_be_overridden():
         MainWindow._workspace_sim_command,
         harness,
     )
+    harness._profile_button_command = MethodType(
+        MainWindow._profile_button_command,
+        harness,
+    )
     harness._rviz_command = MethodType(MainWindow._rviz_command, harness)
+    harness._tables_demo_command = MethodType(
+        MainWindow._tables_demo_command,
+        harness,
+    )
+    harness._rqt_tables_command = MethodType(
+        MainWindow._rqt_tables_command,
+        harness,
+    )
 
     assert harness._workspace_sim_command() == 'roslaunch custom sim.launch'
+    assert harness._tables_demo_command() == 'rosrun custom tables.py'
     assert harness._rviz_command() == 'rviz -d /tmp/custom.rviz'
+    assert harness._rqt_tables_command() == 'roslaunch custom rqt.launch'

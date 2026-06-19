@@ -55,6 +55,7 @@ from .bug_report import BugReportDialog
 from .config import (
     BUTTON_CONFIG_FILE,
     CONFIG,
+    DEFAULT_BUTTON_COMMANDS,
     DEFAULT_YAML_PATH,
     PROJECT_ROOT,
     SCRIPT_CLEAN,
@@ -72,6 +73,7 @@ from .config import (
     writable_button_config_path,
     writable_docker_cp_config_path,
     writable_launch_sequence_path,
+    writable_workspace_button_config_path,
 )
 from .documentation_dialog import DocumentationDialog
 from .external_links import open_external_url
@@ -101,27 +103,10 @@ class ButtonProfileDialog(QDialog):
     COLUMNS = [
         ('key', 'Key'),
         ('label', 'Label'),
-        ('kind', 'Kind'),
-        ('action', 'Action'),
         ('command', 'Command'),
         ('tooltip', 'Tooltip'),
-        ('requires_roscore', 'Requires roscore'),
-        ('reuse_tab', 'Reuse tab'),
-        ('world_config_required', 'World cfg'),
-        ('world_arg_name', 'World arg'),
-        ('setup', 'Setup'),
-        ('host', 'Host'),
-        ('stop_command', 'Stop command'),
-        ('log_command', 'Log command'),
-        ('pass_ros_master_uri', 'Pass ROS_MASTER_URI'),
     ]
-    BOOL_FIELDS = {
-        'requires_roscore',
-        'reuse_tab',
-        'world_config_required',
-        'host',
-        'pass_ros_master_uri',
-    }
+    BOOL_FIELDS: set[str] = set()
     REQUIRED_KEYS = {'sim', 'rviz'}
     RESERVED_KEYS = {'roscore', 'terminal'}
     KEY_RE = re.compile(r'^[A-Za-z0-9_.-]+$')
@@ -133,17 +118,19 @@ class ButtonProfileDialog(QDialog):
         save_path: Path,
         parent: QWidget | None = None,
     ):
-        super().__init__(parent)
+        super().__init__(None)
         self.setWindowTitle('Configure Toolbar Buttons')
-        self.resize(1220, 620)
+        self.setWindowFlag(Qt.Window, True)
+        self.resize(960, 560)
+        self._owner = parent
         self._source_path = source_path
         self._save_path = save_path
 
         root = QVBoxLayout(self)
         note = QLabel(
             'Roscore and Terminal are always present and are not editable here. '
-            'Sim and RViz cannot be removed, but their command fields can be '
-            'overridden.'
+            'Every listed button runs its command in its own tab. Sim and RViz '
+            'cannot be removed.'
         )
         note.setWordWrap(True)
         root.addWidget(note)
@@ -177,6 +164,12 @@ class ButtonProfileDialog(QDialog):
         down_button = QPushButton('Move Down')
         down_button.clicked.connect(lambda: self._move_selected_row(1))
         actions.addWidget(down_button)
+        load_button = QPushButton('Load Profile')
+        load_button.clicked.connect(self._load_profile)
+        actions.addWidget(load_button)
+        export_button = QPushButton('Export Profile')
+        export_button.clicked.connect(self._export_profile)
+        actions.addWidget(export_button)
         actions.addStretch(1)
         root.addLayout(actions)
 
@@ -257,6 +250,80 @@ class ButtonProfileDialog(QDialog):
         )
         self.table.selectRow(self.table.rowCount() - 1)
 
+    def _replace_rows(self, entries: list[dict]) -> None:
+        self.table.setRowCount(0)
+        for entry in entries:
+            self._append_row(entry)
+
+    def _profile_dialog_start_dir(self) -> str:
+        for path in (self._save_path, self._source_path):
+            try:
+                if path.parent:
+                    return str(path.parent)
+            except AttributeError:
+                continue
+        return str(Path.home())
+
+    def _validated_layout(self) -> list[dict] | None:
+        entries = self.button_layout()
+        error = self._validation_error(entries)
+        if error:
+            QMessageBox.warning(self, 'Toolbar Buttons', error)
+            return None
+        return entries
+
+    def _export_profile(self) -> None:
+        entries = self._validated_layout()
+        if entries is None:
+            return
+        path, _selected_filter = QFileDialog.getSaveFileName(
+            self,
+            'Export Toolbar Button Profile',
+            self._profile_dialog_start_dir(),
+            'YAML files (*.yaml *.yml);;All files (*)',
+        )
+        if not path:
+            return
+        target = Path(path).expanduser()
+        if not target.suffix:
+            target = target.with_suffix('.yaml')
+        try:
+            saved_path = save_button_layout(target, entries)
+        except OSError as exc:
+            QMessageBox.warning(
+                self,
+                'Toolbar Buttons',
+                f'Failed to export toolbar button profile:\n{exc}',
+            )
+            return
+        QMessageBox.information(
+            self,
+            'Toolbar Buttons',
+            f'Exported toolbar button profile to:\n{saved_path}',
+        )
+
+    def _load_profile(self) -> None:
+        path, _selected_filter = QFileDialog.getOpenFileName(
+            self,
+            'Load Toolbar Button Profile',
+            self._profile_dialog_start_dir(),
+            'YAML files (*.yaml *.yml);;All files (*)',
+        )
+        if not path:
+            return
+        source = Path(path).expanduser()
+        try:
+            entries = load_button_layout(source)
+        except Exception as exc:
+            QMessageBox.warning(
+                self,
+                'Toolbar Buttons',
+                f'Failed to load toolbar button profile:\n{exc}',
+            )
+            return
+        self._replace_rows(entries)
+        self.table.selectRow(0)
+
     def _remove_selected_row(self) -> None:
         row = self._selected_row()
         if row < 0:
@@ -317,12 +384,22 @@ class ButtonProfileDialog(QDialog):
         base = copy.deepcopy(base_item.data(Qt.UserRole) if base_item else {})
         if not isinstance(base, dict):
             base = {}
+        original_key = str(base.get('key') or '').strip()
         for column, (field, _label) in enumerate(self.COLUMNS):
             item = self.table.item(row, column)
             if field in self.BOOL_FIELDS:
                 base[field] = bool(item and item.checkState() == Qt.Checked)
             else:
                 base[field] = item.text().strip() if item else ''
+        current_key = str(base.get('key') or '').strip()
+        if (
+            original_key
+            and current_key
+            and current_key != original_key
+            and current_key not in self.REQUIRED_KEYS
+        ):
+            base['kind'] = 'command'
+            base['action'] = ''
         return base
 
     def button_layout(self) -> list[dict]:
@@ -354,8 +431,8 @@ class ButtonProfileDialog(QDialog):
                 if kind != 'builtin' or str(entry.get('action') or key) != required_action:
                     return 'Sim and RViz must keep their builtin actions.'
                 entry['action'] = required_action
-            if kind == 'command' and not str(entry.get('command') or '').strip():
-                return f'Command button "{key}" needs a command.'
+            if not str(entry.get('command') or '').strip():
+                return f'Button "{key}" needs a command.'
         missing = sorted(self.REQUIRED_KEYS - set(keys))
         if missing:
             return f'Missing required button(s): {", ".join(missing)}.'
@@ -1624,6 +1701,12 @@ class MainWindow(QMainWindow):
             raw_path = PROJECT_ROOT / raw_path
         return raw_path
 
+    def _button_profile_save_path(self, source_path: Path) -> Path:
+        workspace = self._workspace_registry.active_workspace()
+        if workspace is None:
+            return writable_button_config_path(source_path)
+        return writable_workspace_button_config_path(source_path, workspace.name)
+
     def _open_button_profile_dialog(self) -> None:
         if self._workspace_processes_running():
             QMessageBox.warning(
@@ -1633,18 +1716,23 @@ class MainWindow(QMainWindow):
             )
             return
         source_path = self._resolved_button_config_path()
-        save_path = writable_button_config_path(source_path)
+        save_path = self._button_profile_save_path(source_path)
         dialog = ButtonProfileDialog(
-            self._button_layout,
+            self._button_layout_for_editor(),
             source_path,
             save_path,
             self,
         )
         if dialog.exec_() != QDialog.Accepted:
             return
+        button_layout = dialog.button_layout()
         try:
-            saved_path = save_button_layout(save_path, dialog.button_layout())
-            self._remember_button_profile_path(saved_path, source_path)
+            saved_path = save_button_layout(save_path, button_layout)
+            self._remember_button_profile_path(
+                saved_path,
+                source_path,
+                button_layout,
+            )
         except (OSError, ValueError) as exc:
             QMessageBox.warning(
                 self,
@@ -1663,21 +1751,51 @@ class MainWindow(QMainWindow):
         self,
         saved_path: Path,
         source_path: Path,
+        entries: list[dict],
     ) -> None:
-        if saved_path == source_path:
-            return
         workspace = self._workspace_registry.active_workspace()
         if workspace is not None:
-            workspace.button_config = str(saved_path)
-            self._workspace_registry.save()
+            changed = False
+            if saved_path != source_path:
+                workspace.button_config = str(saved_path)
+                changed = True
+            if workspace.sim_command and self._entry_command(entries, 'sim'):
+                workspace.sim_command = ''
+                changed = True
+            if changed:
+                self._workspace_registry.save()
             if self._workspace_dialog:
                 self._workspace_dialog.refresh(self._workspace_registry.active)
+            return
+        if saved_path == source_path:
             return
         save_user_config_update({
             'buttons': {
                 'config_file': str(saved_path),
             },
         })
+
+    @staticmethod
+    def _entry_command(entries: list[dict], key: str) -> str:
+        for entry in entries:
+            if str(entry.get('key') or '').strip() == key:
+                return str(entry.get('command') or '').strip()
+        return ''
+
+    def _button_layout_for_editor(self) -> list[dict]:
+        entries = copy.deepcopy(self._button_layout)
+        effective_commands = {
+            'sim': self._workspace_sim_command(),
+            'tables': self._tables_demo_command(),
+            'rviz': self._rviz_command(),
+            'rqt': self._rqt_tables_command(),
+        }
+        for entry in entries:
+            key = str(entry.get('key') or '').strip()
+            command = effective_commands.get(key)
+            if command:
+                entry['command'] = command
+        return entries
 
     def _workspace_runtime_env(
         self,
@@ -2763,29 +2881,36 @@ CMD ["bash"]
         self._focus_tab(key)
 
     def _workspace_sim_command(self) -> str:
+        workspace = self._workspace_registry.active_workspace()
         sim_cfg = getattr(self, '_config_buttons', {}).get('sim', {})
         command = str(sim_cfg.get('command') or '').strip()
-        if command:
+        if command and not (
+            sim_cfg.get('command_is_default')
+            and workspace
+            and workspace.sim_command
+        ):
             return command
-        workspace = self._workspace_registry.active_workspace()
         if workspace and workspace.sim_command:
             return workspace.sim_command
-        world = self._current_world()
-        return (
-            'roslaunch tables_demo_bringup demo_sim.launch '
-            f'world_config:={self._sh_quote(world)}'
-        )
+        return DEFAULT_BUTTON_COMMANDS['sim']
 
     def _rviz_command(self) -> str:
-        rviz_cfg = getattr(self, '_config_buttons', {}).get('rviz', {})
-        command = str(rviz_cfg.get('command') or '').strip()
+        command = self._profile_button_command('rviz')
         if command:
             return command
-        return (
-            'rosrun rviz rviz -d '
-            '$(rospack find tables_demo_bringup)/config/pick_n_place.rviz '
-            '__ns:=mobipick'
-        )
+        return DEFAULT_BUTTON_COMMANDS['rviz']
+
+    def _tables_demo_command(self) -> str:
+        command = self._profile_button_command('tables')
+        return command or DEFAULT_BUTTON_COMMANDS['tables']
+
+    def _rqt_tables_command(self) -> str:
+        command = self._profile_button_command('rqt')
+        return command or DEFAULT_BUTTON_COMMANDS['rqt']
+
+    def _profile_button_command(self, key: str) -> str:
+        cfg = getattr(self, '_config_buttons', {}).get(key, {})
+        return str(cfg.get('command') or '').strip()
 
     def _get_button_widget(self, key: str) -> QPushButton | None:
         return self._button_widgets.get(key)
@@ -6247,7 +6372,7 @@ CMD ["bash"]
             tab.exec_id = exec_id
             tab.container_name = f'mpcmd-{exec_id[:10]}'
             self._claim_xhost(tab, 'tables', log_key=tab.key)
-            inner = 'rosrun tables_demo_planning tables_demo_node.py'
+            inner = self._tables_demo_command()
             args = [
                 'compose', 'run', '--rm', '--name', tab.container_name,
                 '--label', f'mobipick.exec={exec_id}', '--label', f'mobipick.tab={tab.key}',
@@ -6356,7 +6481,7 @@ CMD ["bash"]
             tab.exec_id = exec_id
             tab.container_name = f'mpcmd-{exec_id[:10]}'
             self._claim_xhost(tab, 'rqt', log_key=tab.key)
-            cmd = f'roslaunch rqt_tables_demo rqt_tables_demo.launch namespace:=mobipick world_config:={self._sh_quote(world)}'
+            cmd = self._rqt_tables_command()
             args = [
                 'compose', 'run', '--rm', '--name', tab.container_name,
                 '--label', f'mobipick.exec={exec_id}', '--label', f'mobipick.tab={tab.key}',

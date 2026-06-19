@@ -286,8 +286,17 @@ Default toolbar buttons are loaded from
 `resources/config/button_commands_labs.yaml`. `load_button_layout()` supports
 workspace-specific replacements through the workspace registry.
 Use **Tools > Configure Toolbar Buttons** to edit the active profile from the
-GUI. Packaged profiles are saved as writable per-user copies and the active
-workspace or global settings are updated to point at the copy.
+GUI. Workspace edits are saved as writable per-user copies named for the active
+workspace, and that workspace is updated to point at its copy. Packaged global
+profiles are also copied before saving. The dialog shows the editable button
+key, label, command, and tooltip; internal execution fields are preserved but
+not shown.
+
+Use **Load Profile** and **Export Profile** in that dialog to move complete
+button configurations as one YAML file. The automatic save location is the
+per-user XDG config directory so an installed package is never modified at
+runtime; exporting is the way to place a profile in a private repository or
+share it with another setup.
 
 Button entries can be:
 
@@ -295,6 +304,12 @@ Button entries can be:
   `rqt_tables`;
 - `kind: command` with an arbitrary command executed either in Docker or on the
   host.
+
+Every editable top-row button has a `command`. Default commands for the bundled
+`sim`, `tables`, `rviz`, and `rqt` buttons live in the button profile and are
+used by their builtin start/stop wrappers. Legacy workspace `sim_command`
+values remain supported and are written into the button profile when saved from
+the GUI editor.
 
 Command entries can declare:
 

@@ -1,9 +1,12 @@
 from pathlib import Path
 
+import yaml
+
 import mobipick_gui.config as config_module
 from mobipick_gui.config import (
     CONFIG,
     CONFIG_FILE,
+    DEFAULT_BUTTON_COMMANDS,
     default_user_config_dir,
     default_user_data_dir,
     load_button_layout,
@@ -13,6 +16,7 @@ from mobipick_gui.config import (
     save_docker_cp_config,
     save_launch_sequence_plan,
     writable_button_config_path,
+    writable_workspace_button_config_path,
     writable_launch_sequence_path,
 )
 
@@ -70,6 +74,8 @@ timeline:
     plan = load_launch_sequence_plan(buttons, launches)
 
     assert [entry['key'] for entry in layout] == ['sim', 'custom', 'rviz']
+    assert layout[0]['command'] == DEFAULT_BUTTON_COMMANDS['sim']
+    assert layout[2]['command'] == DEFAULT_BUTTON_COMMANDS['rviz']
     assert plan['source'] == str(launches)
     assert plan['timeline'] == [{'button': 'custom', 'at_seconds': 1.0}]
     assert plan['recording_start_delay_seconds'] == 0.0
@@ -91,6 +97,8 @@ buttons:
     layout = load_button_layout(Path(buttons))
 
     assert [entry['key'] for entry in layout] == ['sim', 'custom', 'rviz']
+    assert layout[0]['command'] == DEFAULT_BUTTON_COMMANDS['sim']
+    assert layout[2]['command'] == DEFAULT_BUTTON_COMMANDS['rviz']
 
 
 def test_save_button_layout_persists_required_buttons(tmp_path):
@@ -109,9 +117,60 @@ def test_save_button_layout_persists_required_buttons(tmp_path):
     )
 
     text = target.read_text(encoding='utf-8')
+    data = yaml.safe_load(text)
+    commands = {
+        entry['key']: entry.get('command')
+        for entry in data['buttons']
+    }
     assert 'key: sim' in text
     assert 'key: custom' in text
     assert 'key: rviz' in text
+    assert 'reuse_tab:' not in text
+    assert 'requires_roscore:' not in text
+    assert 'pass_ros_master_uri:' not in text
+    assert commands['sim'] == DEFAULT_BUTTON_COMMANDS['sim']
+    assert commands['rviz'] == DEFAULT_BUTTON_COMMANDS['rviz']
+
+
+def test_button_layout_save_load_round_trip_single_file(tmp_path):
+    target = tmp_path / 'exported_buttons.yaml'
+    save_button_layout(
+        target,
+        [
+            {
+                'key': 'sim',
+                'label': 'Sim',
+                'kind': 'builtin',
+                'action': 'sim',
+                'command': 'roslaunch custom sim.launch',
+                'tooltip': 'Custom sim',
+            },
+            {
+                'key': 'custom_tool',
+                'label': 'Custom Tool',
+                'kind': 'command',
+                'command': 'rosrun custom tool.py',
+                'tooltip': 'Run custom tool',
+            },
+            {
+                'key': 'rviz',
+                'label': 'RViz',
+                'kind': 'builtin',
+                'action': 'rviz',
+                'command': 'rviz -d /tmp/custom.rviz',
+                'tooltip': 'Custom rviz',
+            },
+        ],
+    )
+
+    loaded = load_button_layout(target)
+    by_key = {entry['key']: entry for entry in loaded}
+
+    assert list(by_key) == ['sim', 'custom_tool', 'rviz']
+    assert by_key['sim']['command'] == 'roslaunch custom sim.launch'
+    assert by_key['custom_tool']['command'] == 'rosrun custom tool.py'
+    assert by_key['custom_tool']['tooltip'] == 'Run custom tool'
+    assert by_key['rviz']['command'] == 'rviz -d /tmp/custom.rviz'
 
 
 def test_writable_button_config_path_avoids_packaged_resources(
@@ -123,6 +182,31 @@ def test_writable_button_config_path_avoids_packaged_resources(
     source = config_module.PROJECT_ROOT / 'config' / 'buttons.yaml'
 
     assert writable_button_config_path(source) == profile_dir / 'buttons.yaml'
+
+
+def test_writable_workspace_button_config_path_is_workspace_specific(
+    monkeypatch,
+    tmp_path,
+):
+    profile_dir = tmp_path / 'button_profiles'
+    monkeypatch.setattr(config_module, 'BUTTON_PROFILE_DIR', profile_dir)
+    source = config_module.PROJECT_ROOT / 'config' / 'button_commands_labs.yaml'
+
+    assert writable_workspace_button_config_path(
+        source,
+        'gpt_ws',
+    ) == profile_dir / 'gpt_ws_button_commands_labs.yaml'
+
+
+def test_writable_workspace_button_config_path_keeps_existing_workspace_copy(
+    monkeypatch,
+    tmp_path,
+):
+    profile_dir = tmp_path / 'button_profiles'
+    monkeypatch.setattr(config_module, 'BUTTON_PROFILE_DIR', profile_dir)
+    source = profile_dir / 'gpt_ws_button_commands_labs.yaml'
+
+    assert writable_workspace_button_config_path(source, 'gpt_ws') == source
 
 
 def test_launch_sequence_persists_recording_start_delay(tmp_path):

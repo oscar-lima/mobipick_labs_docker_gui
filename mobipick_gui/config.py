@@ -439,6 +439,24 @@ def _load_config() -> Dict:
 CONFIG = _load_config()
 
 
+DEFAULT_BUTTON_COMMANDS = {
+    'sim': (
+        'roslaunch tables_demo_bringup demo_sim.launch '
+        'world_config:=${MOBIPICK_WORLD:-moelk_tables}'
+    ),
+    'tables': 'rosrun tables_demo_planning tables_demo_node.py',
+    'rviz': (
+        'rosrun rviz rviz -d '
+        '$(rospack find tables_demo_bringup)/config/pick_n_place.rviz '
+        '__ns:=mobipick'
+    ),
+    'rqt': (
+        'roslaunch rqt_tables_demo rqt_tables_demo.launch '
+        'namespace:=mobipick world_config:=${MOBIPICK_WORLD:-moelk_tables}'
+    ),
+}
+
+
 def load_user_config_overrides() -> Dict:
     """Return the writable per-user GUI settings mapping."""
     try:
@@ -470,8 +488,57 @@ def save_user_config_update(updates: Dict) -> Dict:
 def _button_default(key: str) -> dict:
     for entry in BUTTON_CONFIG_DEFAULTS:
         if entry.get('key') == key:
-            return copy.deepcopy(entry)
-    return {'key': key, 'label': key, 'kind': 'builtin', 'action': key}
+            default = copy.deepcopy(entry)
+            command = _default_button_command(key, default.get('action'))
+            if command:
+                default['command'] = command
+                default['command_is_default'] = True
+            return default
+    default = {'key': key, 'label': key, 'kind': 'builtin', 'action': key}
+    command = _default_button_command(key)
+    if command:
+        default['command'] = command
+        default['command_is_default'] = True
+    return default
+
+
+def _default_button_command(key: str, action: str | None = None) -> str:
+    key_text = str(key or '').strip()
+    action_text = str(action or '').strip()
+    for candidate in (key_text, action_text):
+        if candidate in DEFAULT_BUTTON_COMMANDS:
+            return DEFAULT_BUTTON_COMMANDS[candidate]
+    return ''
+
+
+def _normalize_button_entry(item: dict) -> dict | None:
+    key = str(item.get('key', '')).strip()
+    if not key:
+        return None
+    action = item.get('action')
+    raw_command = item.get('command')
+    command_is_default = raw_command in (None, '')
+    command = raw_command
+    if command_is_default:
+        command = _default_button_command(key, action)
+    return {
+        'key': key,
+        'label': item.get('label') or item.get('text') or key,
+        'kind': item.get('kind') or item.get('type') or 'builtin',
+        'action': action,
+        'command': command,
+        'command_is_default': command_is_default and bool(command),
+        'tooltip': item.get('tooltip'),
+        'requires_roscore': item.get('requires_roscore', True),
+        'reuse_tab': item.get('reuse_tab', False),
+        'world_config_required': item.get('world_config_required', False),
+        'world_arg_name': item.get('world_arg_name', 'world_config'),
+        'setup': item.get('setup') or item.get('pre_command') or item.get('prologue'),
+        'host': bool(item.get('host', False)),
+        'stop_command': item.get('stop_command'),
+        'log_command': item.get('log_command'),
+        'pass_ros_master_uri': item.get('pass_ros_master_uri', False),
+    }
 
 
 def ensure_required_button_layout(entries: list[dict]) -> list[dict]:
@@ -481,10 +548,11 @@ def ensure_required_button_layout(entries: list[dict]) -> list[dict]:
     for entry in entries:
         if not isinstance(entry, dict):
             continue
-        key = str(entry.get('key') or '').strip()
+        normalized = _normalize_button_entry(entry) or {}
+        key = str(normalized.get('key') or '').strip()
         if not key or key in {'roscore', 'terminal'} or key in seen:
             continue
-        result.append(entry)
+        result.append(normalized)
         seen.add(key)
 
     if 'sim' not in seen:
@@ -518,28 +586,9 @@ def load_button_layout(config_path: str | Path | None = None) -> list[dict]:
                 for item in raw:
                     if not isinstance(item, dict):
                         continue
-                    key = str(item.get('key', '')).strip()
-                    if not key:
-                        continue
-                    normalized.append(
-                        {
-                            'key': key,
-                            'label': item.get('label') or item.get('text') or key,
-                            'kind': item.get('kind') or item.get('type') or 'builtin',
-                            'action': item.get('action'),
-                            'command': item.get('command'),
-                            'tooltip': item.get('tooltip'),
-                            'requires_roscore': item.get('requires_roscore', True),
-                            'reuse_tab': item.get('reuse_tab', False),
-                            'world_config_required': item.get('world_config_required', False),
-                            'world_arg_name': item.get('world_arg_name', 'world_config'),
-                            'setup': item.get('setup') or item.get('pre_command') or item.get('prologue'),
-                            'host': bool(item.get('host', False)),
-                            'stop_command': item.get('stop_command'),
-                            'log_command': item.get('log_command'),
-                            'pass_ros_master_uri': item.get('pass_ros_master_uri', False),
-                        }
-                    )
+                    entry = _normalize_button_entry(item)
+                    if entry:
+                        normalized.append(entry)
             if normalized:
                 entries = normalized
     except Exception as exc:
@@ -563,17 +612,60 @@ def writable_button_config_path(source: str | Path | None) -> Path:
     return BUTTON_PROFILE_DIR / raw_path.name
 
 
+def _safe_button_profile_part(value: str) -> str:
+    cleaned = ''.join(
+        char if char.isalnum() or char in '._-' else '_'
+        for char in str(value or '').strip()
+    ).strip('._-')
+    return cleaned or 'workspace'
+
+
+def writable_workspace_button_config_path(
+    source: str | Path | None,
+    workspace_name: str,
+) -> Path:
+    """Return a workspace-specific writable button profile path."""
+    raw_path = Path(source).expanduser() if source else BUTTON_CONFIG_FILE
+    name = raw_path.name or BUTTON_CONFIG_FILE.name
+    workspace = _safe_button_profile_part(workspace_name)
+    if (
+        raw_path.parent == BUTTON_PROFILE_DIR
+        and raw_path.stem.startswith(f'{workspace}_')
+    ):
+        return raw_path
+    return BUTTON_PROFILE_DIR / f'{workspace}_{name}'
+
+
+def _button_entry_for_save(entry: dict) -> dict:
+    saved: dict = {}
+    for key in ('key', 'label', 'kind', 'action', 'command', 'tooltip'):
+        value = entry.get(key)
+        if value not in (None, ''):
+            saved[key] = value
+
+    if bool(entry.get('world_config_required')):
+        saved['world_config_required'] = True
+        world_arg = entry.get('world_arg_name')
+        if world_arg and world_arg != 'world_config':
+            saved['world_arg_name'] = world_arg
+    for key in ('setup', 'stop_command', 'log_command'):
+        value = entry.get(key)
+        if value not in (None, ''):
+            saved[key] = value
+    if bool(entry.get('host')):
+        saved['host'] = True
+    if bool(entry.get('pass_ros_master_uri')):
+        saved['pass_ros_master_uri'] = True
+    return saved
+
+
 def save_button_layout(path: str | Path, entries: list[dict]) -> Path:
     """Persist a normalized button profile."""
     destination = Path(path).expanduser()
     destination.parent.mkdir(parents=True, exist_ok=True)
     data = {
         'buttons': [
-            {
-                key: value
-                for key, value in entry.items()
-                if value not in (None, '')
-            }
+            _button_entry_for_save(entry)
             for entry in ensure_required_button_layout(entries)
         ]
     }
@@ -915,6 +1007,7 @@ __all__ = [
     'CONFIG',
     'CONFIG_DEFAULTS',
     'CONFIG_FILE',
+    'DEFAULT_BUTTON_COMMANDS',
     'BUTTON_PROFILE_DIR',
     'USER_CONFIG_FILE',
     'USER_DOCKER_CP_CONFIG_FILE',
@@ -944,5 +1037,6 @@ __all__ = [
     'load_launch_sequence_plan',
     'writable_docker_cp_config_path',
     'writable_button_config_path',
+    'writable_workspace_button_config_path',
     'writable_launch_sequence_path',
 ]
