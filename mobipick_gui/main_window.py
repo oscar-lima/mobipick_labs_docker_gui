@@ -74,6 +74,7 @@ from .config import (
     writable_launch_sequence_path,
 )
 from .documentation_dialog import DocumentationDialog
+from .external_links import open_external_url
 
 CONTAINER_SCRIPTS_DIR = str(
     CONFIG.get('process', {}).get('container_scripts_dir', '/scripts_430ofkjl04fsw')
@@ -1470,9 +1471,10 @@ class MainWindow(QMainWindow):
             'https://github.com/DFKI-NI/mobipick_labs</a></p>'
         )
         details.setTextFormat(Qt.RichText)
-        details.setOpenExternalLinks(True)
+        details.setOpenExternalLinks(False)
         details.setTextInteractionFlags(Qt.TextBrowserInteraction)
         details.setAlignment(Qt.AlignCenter)
+        details.linkActivated.connect(self._open_about_link)
         layout.addWidget(details)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok)
@@ -1480,6 +1482,14 @@ class MainWindow(QMainWindow):
         layout.addWidget(buttons)
 
         dialog.exec_()
+
+    def _open_about_link(self, link: str) -> None:
+        if not open_external_url(link):
+            QMessageBox.warning(
+                self,
+                'About',
+                'Unable to open the selected link.',
+            )
 
     def _open_documentation_dialog(self) -> None:
         if self._documentation_dialog:

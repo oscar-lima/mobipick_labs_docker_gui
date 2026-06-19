@@ -8,7 +8,7 @@ from typing import Callable
 from urllib.parse import quote
 
 from PyQt5.QtCore import QProcess, QTimer, Qt, QUrl
-from PyQt5.QtGui import QDesktopServices, QFont
+from PyQt5.QtGui import QFont
 from PyQt5.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -24,6 +24,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from .external_links import open_external_url
 from .version import get_version
 
 BUG_REPORT_EMAIL = 'oscar.lima@dfki.de'
@@ -377,7 +378,7 @@ class BugReportDialog(QDialog):
             f'?subject={quote(subject, safe="")}'
             f'&body={quote(body, safe="")}'
         )
-        if not QDesktopServices.openUrl(url):
+        if not open_external_url(url):
             QMessageBox.warning(
                 self,
                 'Bug Report',

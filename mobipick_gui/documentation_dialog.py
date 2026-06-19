@@ -19,6 +19,8 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from .external_links import open_external_url
+
 
 class DocumentationDialog(QDialog):
     """Render user documentation and search within it."""
@@ -54,7 +56,9 @@ class DocumentationDialog(QDialog):
         root.addLayout(search_row)
 
         self.viewer = QTextBrowser()
-        self.viewer.setOpenExternalLinks(True)
+        self.viewer.setOpenLinks(False)
+        self.viewer.setOpenExternalLinks(False)
+        self.viewer.anchorClicked.connect(self._open_documentation_link)
         root.addWidget(self.viewer, 1)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Close)
@@ -148,6 +152,17 @@ class DocumentationDialog(QDialog):
         self.viewer.setExtraSelections([])
         self.match_label.clear()
         self._last_pattern = ''
+
+    def _open_documentation_link(self, url) -> None:
+        if url.isRelative() and not url.scheme():
+            self.viewer.setSource(url)
+            return
+        if not open_external_url(url):
+            QMessageBox.warning(
+                self,
+                'Documentation',
+                'Unable to open the selected link.',
+            )
 
 
 __all__ = ['DocumentationDialog']
