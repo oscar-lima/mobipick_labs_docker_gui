@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Callable, Match, Optional
 from urllib.parse import urlsplit
 
-from PyQt5.QtCore import QIODevice, QProcess, QProcessEnvironment, QTimer, Qt
+from PyQt5.QtCore import QEvent, QIODevice, QPoint, QProcess, QProcessEnvironment, QTimer, Qt
 from PyQt5.QtGui import QColor, QGuiApplication, QTextCursor, QTextDocument
 from PyQt5.QtWidgets import (
     QAction,
@@ -33,6 +33,7 @@ from PyQt5.QtWidgets import (
     QLabel,
     QLineEdit,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QPushButton,
     QScrollArea,
@@ -40,6 +41,7 @@ from PyQt5.QtWidgets import (
     QTabBar,
     QTabWidget,
     QTextEdit,
+    QToolTip,
     QVBoxLayout,
     QWidget,
 )
@@ -305,6 +307,7 @@ class MainWindow(QMainWindow):
         self._default_image_dialog_shown = False
         self._bug_report_dialog: BugReportDialog | None = None
         self._view_actions: dict[str, QAction] = {}
+        self._active_menu_tooltip_action: QAction | None = None
         self._create_menu_bar()
 
         # sim state
@@ -687,7 +690,7 @@ class MainWindow(QMainWindow):
     def _create_menu_bar(self) -> None:
         menu_bar = self.menuBar()
 
-        workspace_menu = menu_bar.addMenu('Workspace')
+        workspace_menu = self._add_menu(menu_bar, 'Workspace')
         self._add_menu_action(
             workspace_menu,
             'Configure Workspaces',
@@ -699,9 +702,9 @@ class MainWindow(QMainWindow):
             self._build_active_workspace,
         )
 
-        tools_menu = menu_bar.addMenu('Tools')
+        tools_menu = self._add_menu(menu_bar, 'Tools')
 
-        docker_menu = tools_menu.addMenu('Docker')
+        docker_menu = self._add_menu(tools_menu, 'Docker')
         self._add_menu_action(docker_menu, 'Manage Images', self.manage_images)
         self._add_menu_action(
             docker_menu,
@@ -712,6 +715,7 @@ class MainWindow(QMainWindow):
             docker_menu,
             'Build Custom Image',
             lambda _checked=False: self._open_custom_image_builder(),
+            tooltip='Build a host-user development Docker image',
         )
         self._add_menu_action(
             docker_menu,
@@ -722,16 +726,18 @@ class MainWindow(QMainWindow):
             docker_menu,
             'Execute Docker cp',
             self.execute_docker_cp_from_container,
+            tooltip='Copy configured paths from the active container to the host',
         )
 
-        layout_menu = tools_menu.addMenu('Layout')
+        layout_menu = self._add_menu(tools_menu, 'Layout')
         self._add_menu_action(
             layout_menu,
             'Window Layout',
             self._on_window_layout_clicked,
+            tooltip='Open helper to save window positions for wmctrl replay',
         )
 
-        automation_menu = tools_menu.addMenu('Automation')
+        automation_menu = self._add_menu(tools_menu, 'Automation')
         self._add_menu_action(
             automation_menu,
             'Configure Auto Launch',
@@ -742,9 +748,10 @@ class MainWindow(QMainWindow):
             tools_menu,
             'Update Status',
             self._on_refresh_clicked,
+            tooltip='Refresh Docker container status',
         )
 
-        view_menu = menu_bar.addMenu('View')
+        view_menu = self._add_menu(menu_bar, 'View')
         self._view_actions['recording'] = self._add_checkable_menu_action(
             view_menu,
             'Recording Controls',
@@ -768,7 +775,7 @@ class MainWindow(QMainWindow):
         view_menu.addSeparator()
         self._add_menu_action(view_menu, 'Refresh Images', self._reload_images)
 
-        logs_menu = menu_bar.addMenu('Logs')
+        logs_menu = self._add_menu(menu_bar, 'Logs')
         self._add_menu_action(logs_menu, 'Save Current Log', self.save_current_log)
         self._add_menu_action(logs_menu, 'Load Log', self.load_log_file)
         self._add_menu_action(logs_menu, 'Save All Logs', self.save_all_logs)
@@ -776,7 +783,7 @@ class MainWindow(QMainWindow):
         self._add_menu_action(logs_menu, 'Clear Current Tab', self.clear_current_tab)
         self._add_menu_action(logs_menu, 'Clear All Tabs', self.clear_all_tabs)
 
-        help_menu = menu_bar.addMenu('Help')
+        help_menu = self._add_menu(menu_bar, 'Help')
         self._add_menu_action(
             help_menu,
             'File Bug Report...',
@@ -784,8 +791,53 @@ class MainWindow(QMainWindow):
         )
         self._add_menu_action(help_menu, 'About', self._show_about_dialog)
 
-    def _add_menu_action(self, menu, text: str, slot) -> QAction:
+    def _add_menu(self, parent, text: str):
+        menu = parent.addMenu(text)
+        menu.setMouseTracking(True)
+        menu.installEventFilter(self)
+        return menu
+
+    def eventFilter(self, watched, event):  # noqa: N802 - Qt API
+        if isinstance(watched, QMenu):
+            if event.type() == QEvent.MouseMove:
+                self._update_menu_tooltip(watched, event)
+            elif event.type() in (QEvent.Leave, QEvent.Hide):
+                self._hide_menu_tooltip()
+        return super().eventFilter(watched, event)
+
+    def _update_menu_tooltip(self, menu: QMenu, event) -> None:
+        action = menu.actionAt(event.pos())
+        tooltip = ''
+        if action is not None:
+            tooltip = str(action.property('mobipick_menu_tooltip') or '')
+        if action is None or not tooltip:
+            self._hide_menu_tooltip()
+            return
+        if action is self._active_menu_tooltip_action and QToolTip.isVisible():
+            return
+
+        self._active_menu_tooltip_action = action
+        action_rect = menu.actionGeometry(action)
+        tooltip_pos = event.globalPos() + QPoint(12, 16)
+        QToolTip.showText(tooltip_pos, tooltip, menu, action_rect)
+
+    def _hide_menu_tooltip(self) -> None:
+        self._active_menu_tooltip_action = None
+        QToolTip.hideText()
+
+    def _add_menu_action(
+        self,
+        menu,
+        text: str,
+        slot,
+        *,
+        tooltip: str = '',
+    ) -> QAction:
         action = QAction(text, self)
+        if tooltip:
+            action.setProperty('mobipick_menu_tooltip', tooltip)
+            action.setToolTip(tooltip)
+            action.setStatusTip(tooltip)
         action.triggered.connect(
             lambda _checked=False, callback=slot: callback()
         )
