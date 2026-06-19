@@ -700,34 +700,40 @@ class MainWindow(QMainWindow):
         )
 
         tools_menu = menu_bar.addMenu('Tools')
-        self._add_menu_action(tools_menu, 'Manage Images', self.manage_images)
+
+        docker_menu = tools_menu.addMenu('Docker')
+        self._add_menu_action(docker_menu, 'Manage Images', self.manage_images)
         self._add_menu_action(
-            tools_menu,
+            docker_menu,
             'Setup Wizard',
             lambda _checked=False: self._open_setup_wizard(),
         )
         self._add_menu_action(
-            tools_menu,
+            docker_menu,
             'Build Custom Image',
             lambda _checked=False: self._open_custom_image_builder(),
         )
         self._add_menu_action(
-            tools_menu,
+            docker_menu,
             'Commit Current Tab',
             self.commit_current_tab,
         )
         self._add_menu_action(
-            tools_menu,
+            docker_menu,
             'Execute Docker cp',
             self.execute_docker_cp_from_container,
         )
+
+        layout_menu = tools_menu.addMenu('Layout')
         self._add_menu_action(
-            tools_menu,
+            layout_menu,
             'Window Layout',
             self._on_window_layout_clicked,
         )
+
+        automation_menu = tools_menu.addMenu('Automation')
         self._add_menu_action(
-            tools_menu,
+            automation_menu,
             'Configure Auto Launch',
             self._open_auto_launch_wizard,
         )
