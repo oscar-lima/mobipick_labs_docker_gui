@@ -304,6 +304,7 @@ class MainWindow(QMainWindow):
         self._command_log_color = str(CONFIG['log'].get('command_log_color', '#4da3ff'))
         self._default_image_dialog_shown = False
         self._bug_report_dialog: BugReportDialog | None = None
+        self._view_actions: dict[str, QAction] = {}
         self._create_menu_bar()
 
         # sim state
@@ -405,7 +406,9 @@ class MainWindow(QMainWindow):
         workspace_row.addWidget(self.manage_workspaces_button)
         root.addLayout(workspace_row)
 
-        ros_master_row = QHBoxLayout()
+        self.ros_master_controls = QWidget()
+        ros_master_row = QHBoxLayout(self.ros_master_controls)
+        ros_master_row.setContentsMargins(0, 0, 0, 0)
         self.remote_master_checkbox = QCheckBox('Use remote ROS master')
         self.remote_master_checkbox.setChecked(
             self._remote_master_enabled_value
@@ -430,7 +433,7 @@ class MainWindow(QMainWindow):
             'commands while remote mode is enabled.'
         )
         ros_master_row.addWidget(self.remote_master_input)
-        root.addLayout(ros_master_row)
+        root.addWidget(self.ros_master_controls)
         self.remote_master_checkbox.toggled.connect(
             self._on_remote_master_toggled
         )
@@ -519,6 +522,9 @@ class MainWindow(QMainWindow):
         actions.addWidget(self.auto_launch_button)
         self._button_widgets['auto_launch'] = self.auto_launch_button
 
+        self.recording_controls = QWidget()
+        recording_row = QHBoxLayout(self.recording_controls)
+        recording_row.setContentsMargins(0, 0, 0, 0)
         self.record_checkbox = QCheckBox('Record Auto Launch')
         self.record_checkbox.setToolTip(
             'Record the Auto Launch run: screen video plus run logs. '
@@ -527,16 +533,16 @@ class MainWindow(QMainWindow):
         )
         self.record_checkbox.setChecked(self._recording_default_checked)
         self.record_checkbox.toggled.connect(self._on_record_checkbox_toggled)
-        actions.addWidget(self.record_checkbox)
+        recording_row.addWidget(self.record_checkbox)
         self.recording_indicator = QLabel('REC off')
         self.recording_indicator.setMinimumWidth(170)
         self.recording_indicator.setAlignment(Qt.AlignCenter)
-        actions.addWidget(self.recording_indicator)
+        recording_row.addWidget(self.recording_indicator)
         self.recording_options_button = QPushButton('Recording Options')
         self.recording_options_button.clicked.connect(
             self._open_recording_options
         )
-        actions.addWidget(self.recording_options_button)
+        recording_row.addWidget(self.recording_options_button)
         self.record_resolution_combo = QComboBox()
         self.record_resolution_combo.setInsertPolicy(QComboBox.NoInsert)
         self.record_resolution_combo.addItems(self._recording_resolutions)
@@ -547,6 +553,8 @@ class MainWindow(QMainWindow):
         else:
             self.record_resolution_combo.setCurrentIndex(0)
         self.record_resolution_combo.setToolTip('Select the video resolution used for Auto Launch recording.')
+        recording_row.addWidget(self.record_resolution_combo)
+        actions.addWidget(self.recording_controls)
         self._update_recording_location_tooltip()
         self._set_recording_indicator(
             'armed' if self.record_checkbox.isChecked() else 'off'
@@ -566,13 +574,11 @@ class MainWindow(QMainWindow):
         actions.addWidget(self.image_combo)
         self.image_combo.currentIndexChanged.connect(self._on_image_changed)
 
-        self.reload_images_button = QPushButton('Refresh Images')
-        self.reload_images_button.clicked.connect(self._reload_images)
-        actions.addWidget(self.reload_images_button)
-
         root.addLayout(actions)
 
-        scripts_row = QHBoxLayout()
+        self.script_controls = QWidget()
+        scripts_row = QHBoxLayout(self.script_controls)
+        scripts_row.setContentsMargins(0, 0, 0, 0)
         scripts_row.addWidget(QLabel('Scripts:'))
         self.script_combo = QComboBox()
         self.script_combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
@@ -583,7 +589,7 @@ class MainWindow(QMainWindow):
         self.run_script_button = QPushButton('Run Script')
         self.run_script_button.clicked.connect(self._on_run_script_clicked)
         scripts_row.addWidget(self.run_script_button)
-        root.addLayout(scripts_row)
+        root.addWidget(self.script_controls)
 
         self.run_script_button.setEnabled(False)
         self.script_combo.setEnabled(False)
@@ -594,7 +600,9 @@ class MainWindow(QMainWindow):
         self._load_available_images()
 
         # custom command row
-        cmdrow = QHBoxLayout()
+        self.command_controls = QWidget()
+        cmdrow = QHBoxLayout(self.command_controls)
+        cmdrow.setContentsMargins(0, 0, 0, 0)
         self.command_input = QLineEdit()
         self.command_input.setPlaceholderText('Enter custom command, press Enter to run')
         self.command_input.returnPressed.connect(self._on_command_input_return)
@@ -612,7 +620,8 @@ class MainWindow(QMainWindow):
         self.reuse_checkbox = QCheckBox('Run in current custom tab')
         self.reuse_checkbox.setChecked(True)
         cmdrow.addWidget(self.reuse_checkbox)
-        root.addLayout(cmdrow)
+        root.addWidget(self.command_controls)
+        self._apply_view_action_visibility()
 
         # tabs
         self.tabs = QTabWidget()
@@ -729,6 +738,30 @@ class MainWindow(QMainWindow):
             self._on_refresh_clicked,
         )
 
+        view_menu = menu_bar.addMenu('View')
+        self._view_actions['recording'] = self._add_checkable_menu_action(
+            view_menu,
+            'Recording Controls',
+            self._set_recording_controls_visible,
+        )
+        self._view_actions['scripts'] = self._add_checkable_menu_action(
+            view_menu,
+            'Script Controls',
+            self._set_script_controls_visible,
+        )
+        self._view_actions['commands'] = self._add_checkable_menu_action(
+            view_menu,
+            'Command Controls',
+            self._set_command_controls_visible,
+        )
+        self._view_actions['remote_master'] = self._add_checkable_menu_action(
+            view_menu,
+            'Remote ROS Master',
+            self._set_remote_master_controls_visible,
+        )
+        view_menu.addSeparator()
+        self._add_menu_action(view_menu, 'Refresh Images', self._reload_images)
+
         logs_menu = menu_bar.addMenu('Logs')
         self._add_menu_action(logs_menu, 'Save Current Log', self.save_current_log)
         self._add_menu_action(logs_menu, 'Load Log', self.load_log_file)
@@ -752,6 +785,52 @@ class MainWindow(QMainWindow):
         )
         menu.addAction(action)
         return action
+
+    def _add_checkable_menu_action(self, menu, text: str, slot) -> QAction:
+        action = QAction(text, self)
+        action.setCheckable(True)
+        action.setChecked(False)
+        action.toggled.connect(slot)
+        menu.addAction(action)
+        return action
+
+    def _apply_view_action_visibility(self) -> None:
+        recording = self._view_actions.get('recording')
+        scripts = self._view_actions.get('scripts')
+        commands = self._view_actions.get('commands')
+        remote_master = self._view_actions.get('remote_master')
+        self._set_recording_controls_visible(
+            bool(recording and recording.isChecked())
+        )
+        self._set_script_controls_visible(
+            bool(scripts and scripts.isChecked())
+        )
+        self._set_command_controls_visible(
+            bool(commands and commands.isChecked())
+        )
+        self._set_remote_master_controls_visible(
+            bool(remote_master and remote_master.isChecked())
+        )
+
+    def _set_recording_controls_visible(self, visible: bool) -> None:
+        controls = getattr(self, 'recording_controls', None)
+        if controls is not None:
+            controls.setVisible(bool(visible))
+
+    def _set_script_controls_visible(self, visible: bool) -> None:
+        controls = getattr(self, 'script_controls', None)
+        if controls is not None:
+            controls.setVisible(bool(visible))
+
+    def _set_command_controls_visible(self, visible: bool) -> None:
+        controls = getattr(self, 'command_controls', None)
+        if controls is not None:
+            controls.setVisible(bool(visible))
+
+    def _set_remote_master_controls_visible(self, visible: bool) -> None:
+        controls = getattr(self, 'ros_master_controls', None)
+        if controls is not None:
+            controls.setVisible(bool(visible))
 
     def _show_about_dialog(self) -> None:
         QMessageBox.about(
