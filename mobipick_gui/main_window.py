@@ -4362,7 +4362,7 @@ CMD ["bash"]
     def _ensure_window_layout_dialog(self) -> QDialog:
         if self._window_layout_dialog is not None:
             return self._window_layout_dialog
-        dialog = QDialog(self)
+        dialog = QDialog(None)  # top-level so minimizing the main GUI leaves it visible
         dialog.setWindowTitle('Window Layout Helper')
         dialog.setWindowFlag(Qt.WindowStaysOnTopHint, True)
         dialog.setWindowModality(Qt.NonModal)
