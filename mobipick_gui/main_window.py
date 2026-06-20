@@ -3435,6 +3435,12 @@ CMD ["bash"]
             return
         self._set_toggle_state(key, self._get_button_widget(key), state, text, enabled)
 
+    def _reset_config_button_visuals(self):
+        for key in self._config_button_order:
+            config = self._config_buttons.get(key, {})
+            label = self._config_label(config)
+            self._set_config_visual(config, 'red', f'Start {label}', True)
+
     @staticmethod
     def _neutralize_compose_ignore(cmd: str) -> str:
         cmd = cmd.strip()
@@ -6384,6 +6390,7 @@ CMD ["bash"]
                 self.set_tables_visual('red', 'Run Tables Demo', True)
                 self.set_rviz_visual('red', 'Start RViz', True)
                 self.set_rqt_visual('red', 'Start RQt Tables', True)
+                self._reset_config_button_visuals()
                 self._script_active_tab_key = None
                 self.set_script_visual('red', 'Run Script', bool(self._script_choices))
                 self._terminal_stopping = False

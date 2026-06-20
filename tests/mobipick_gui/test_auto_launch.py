@@ -2,6 +2,7 @@ from types import MethodType, SimpleNamespace
 
 from PyQt5.QtCore import QProcess
 
+import mobipick_gui.main_window as main_window_module
 from mobipick_gui.main_window import MainWindow
 
 
@@ -217,3 +218,117 @@ def test_builtin_sim_and_rviz_commands_can_be_overridden():
     assert harness._tables_demo_command() == 'rosrun custom tables.py'
     assert harness._rviz_command() == 'rviz -d /tmp/custom.rviz'
     assert harness._rqt_tables_command() == 'roslaunch custom rqt.launch'
+
+
+def test_reset_config_button_visuals_restores_idle_labels():
+    events = []
+    harness = SimpleNamespace(
+        _config_button_order=['demo', 'tools'],
+        _config_buttons={
+            'demo': {'key': 'demo', 'label': 'Demo'},
+            'tools': {'key': 'tools'},
+        },
+        _set_config_visual=lambda cfg, state, text, enabled: events.append(
+            (cfg.get('key'), state, text, enabled)
+        ),
+    )
+    harness._config_label = MethodType(MainWindow._config_label, harness)
+    harness._reset_config_button_visuals = MethodType(
+        MainWindow._reset_config_button_visuals,
+        harness,
+    )
+
+    harness._reset_config_button_visuals()
+
+    assert events == [
+        ('demo', 'red', 'Start Demo', True),
+        ('tools', 'red', 'Start tools', True),
+    ]
+
+
+def test_roscore_shutdown_finalizer_resets_config_buttons(monkeypatch):
+    events = []
+
+    def _record_visual(name):
+        def _record(state, text, enabled):
+            events.append((name, state, text, enabled))
+
+        return _record
+
+    class FakeTab:
+        key = 'roscore'
+        container_name = 'mobipick-roscore'
+        exec_id = 'exec-id'
+
+        def is_running(self):
+            return False
+
+        def pid(self):
+            return None
+
+    roscore_tab = FakeTab()
+    harness = SimpleNamespace(
+        _roscore_stopping=False,
+        _roscore_container_name='mobipick-roscore',
+        _roscore_running_cached=True,
+        _roscore_last_start_ts=1.0,
+        _sim_running_cached=False,
+        _killing=False,
+        _script_active_tab_key=None,
+        _script_choices=['script.py'],
+        _terminal_stopping=False,
+        _terminal_running_cached=False,
+        _terminal_stream_tab_key=None,
+        run_script_button='script-button',
+        terminal_button='terminal-button',
+        _cleanup_done=False,
+        _config_button_order=['demo'],
+        _config_buttons={'demo': {'key': 'demo', 'label': 'Demo'}},
+        _timers_cfg={'custom_tab_sigint_delay_ms': 0},
+        tasks={
+            'roscore': roscore_tab,
+            'sim': SimpleNamespace(is_running=lambda: False),
+            'tables': SimpleNamespace(is_running=lambda: False),
+            'rviz': SimpleNamespace(is_running=lambda: False),
+            'rqt': SimpleNamespace(is_running=lambda: False),
+        },
+        _stop_auto_launch_stack=lambda: events.append('stop_auto_launch'),
+        _log_info=lambda message: events.append(('log', message)),
+        set_roscore_visual=_record_visual('roscore'),
+        _disable_toggle_preserving_visual=lambda key, button: events.append(
+            ('disable', key, button)
+        ),
+        _get_button_widget=lambda key: f'{key}-button',
+        _terminal_is_active=lambda: False,
+        stop_terminal=lambda: events.append('stop_terminal'),
+        _ensure_tab=lambda key, label, closable=False: roscore_tab,
+        _append_gui_html=lambda *args: events.append(('html', *args)),
+        _docker_stop_if_exists=lambda *args, **kwargs: [],
+        _stop_all_related=lambda *args, **kwargs: [],
+        _cleanup_script_available=lambda: False,
+        _run_command_sequence=lambda commands, on_finished, log_key: on_finished(),
+        _revoke_x=lambda: events.append('revoke_x'),
+        set_toggle_visual=_record_visual('sim'),
+        set_tables_visual=_record_visual('tables'),
+        set_rviz_visual=_record_visual('rviz'),
+        set_rqt_visual=_record_visual('rqt'),
+        _reset_config_button_visuals=lambda: events.append('reset_config_buttons'),
+        set_script_visual=_record_visual('script'),
+        set_terminal_visual=_record_visual('terminal'),
+        _update_stop_custom_enabled=lambda: events.append('update_stop_custom'),
+        _finalize_auto_launch_stop=lambda: events.append('finalize_auto_launch'),
+    )
+    harness.shutdown_roscore = MethodType(MainWindow.shutdown_roscore, harness)
+    monkeypatch.setattr(
+        main_window_module.QTimer,
+        'singleShot',
+        lambda _delay, callback: callback(),
+    )
+
+    harness.shutdown_roscore()
+
+    assert 'reset_config_buttons' in events
+    assert events.index('reset_config_buttons') > events.index(
+        ('rqt', 'red', 'Start RQt Tables', True)
+    )
+    assert harness._roscore_stopping is False
