@@ -32,6 +32,7 @@ from PyQt5.QtWidgets import (
     QFileDialog,
     QFormLayout,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QLineEdit,
     QMainWindow,
@@ -97,6 +98,129 @@ def trigger_sigint():
     _SIGINT_TRIGGERED = True
 
 
+def _text_width(font_metrics, text: str) -> int:
+    """Return the display width for text across supported PyQt5 versions."""
+    if hasattr(font_metrics, 'horizontalAdvance'):
+        return font_metrics.horizontalAdvance(text)
+    return font_metrics.width(text)
+
+
+def _configure_expanding_toolbar_button(button: QPushButton) -> None:
+    """Let toolbar buttons grow with the window while keeping text readable."""
+    button.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+
+
+class ButtonProfileTable(QTableWidget):
+    """Toolbar button editor table with priority-based column sizing."""
+
+    FIELD_ORDER = ['key', 'label', 'command', 'tooltip']
+    MIN_WIDTHS = {
+        'key': 96,
+        'label': 132,
+        'command': 280,
+        'tooltip': 72,
+    }
+    MAX_DESIRED_WIDTHS = {
+        'key': 220,
+        'label': 280,
+        'command': 760,
+        'tooltip': 240,
+    }
+    EXPAND_WEIGHTS = {
+        'key': 1,
+        'label': 2,
+        'command': 7,
+        'tooltip': 0,
+    }
+
+    def __init__(
+        self,
+        columns: list[tuple[str, str]],
+        parent: QWidget | None = None,
+    ):
+        super().__init__(0, len(columns), parent)
+        self._column_fields = [field for field, _label in columns]
+        self.setHorizontalHeaderLabels([label for _field, label in columns])
+        self.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
+        header = self.horizontalHeader()
+        header.setStretchLastSection(False)
+        header.setSectionResizeMode(QHeaderView.Fixed)
+        header.setMinimumSectionSize(48)
+
+    def resizeEvent(self, event):  # noqa: N802 - Qt API
+        super().resizeEvent(event)
+        self.apply_column_widths()
+
+    def apply_column_widths(self) -> None:
+        if self.columnCount() <= 0:
+            return
+        widths = self._responsive_column_widths()
+        for column, width in enumerate(widths):
+            self.setColumnWidth(column, width)
+
+    def _responsive_column_widths(self) -> list[int]:
+        desired = self._desired_column_widths()
+        minimum = [
+            min(desired[index], self.MIN_WIDTHS.get(field, 90))
+            for index, field in enumerate(self._column_fields)
+        ]
+        available = max(self.viewport().width(), sum(minimum))
+        widths = list(minimum)
+        remaining = available - sum(widths)
+
+        for field in ('key', 'label', 'command', 'tooltip'):
+            if remaining <= 0:
+                break
+            index = self._column_fields.index(field)
+            growth = max(0, desired[index] - widths[index])
+            add = min(growth, remaining)
+            widths[index] += add
+            remaining -= add
+
+        if remaining > 0:
+            weighted_fields = [
+                field
+                for field in self.FIELD_ORDER
+                if field in self._column_fields
+                and self.EXPAND_WEIGHTS.get(field, 0) > 0
+            ]
+            total_weight = sum(
+                self.EXPAND_WEIGHTS[field]
+                for field in weighted_fields
+            )
+            for field in weighted_fields:
+                index = self._column_fields.index(field)
+                add = remaining * self.EXPAND_WEIGHTS[field] // total_weight
+                widths[index] += add
+            used = sum(widths)
+            if used < available:
+                widths[self._column_fields.index('command')] += available - used
+        return widths
+
+    def _desired_column_widths(self) -> list[int]:
+        metrics = self.fontMetrics()
+        widths: list[int] = []
+        for column, field in enumerate(self._column_fields):
+            header = self.horizontalHeaderItem(column)
+            header_text = header.text() if header else field
+            content_width = _text_width(metrics, header_text)
+            for row in range(self.rowCount()):
+                item = self.item(row, column)
+                if item:
+                    content_width = max(
+                        content_width,
+                        _text_width(metrics, item.text()),
+                    )
+            desired = content_width + 32
+            widths.append(
+                min(
+                    max(desired, self.MIN_WIDTHS.get(field, 90)),
+                    self.MAX_DESIRED_WIDTHS.get(field, 360),
+                )
+            )
+        return widths
+
+
 class ButtonProfileDialog(QDialog):
     """Edit the configurable top-row command buttons."""
 
@@ -141,15 +265,14 @@ class ButtonProfileDialog(QDialog):
         path_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         root.addWidget(path_label)
 
-        self.table = QTableWidget(0, len(self.COLUMNS))
-        self.table.setHorizontalHeaderLabels([label for _key, label in self.COLUMNS])
+        self.table = ButtonProfileTable(self.COLUMNS)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)
-        self.table.horizontalHeader().setStretchLastSection(True)
         root.addWidget(self.table, 1)
 
         for entry in entries:
             self._append_row(entry)
+        self.table.apply_column_widths()
 
         actions = QHBoxLayout()
         add_button = QPushButton('Add Command')
@@ -205,6 +328,7 @@ class ButtonProfileDialog(QDialog):
             if column == 0:
                 item.setData(Qt.UserRole, copy.deepcopy(entry))
             self.table.setItem(row, column, item)
+        self.table.apply_column_widths()
 
     def _selected_row(self) -> int:
         indexes = self.table.selectionModel().selectedRows()
@@ -254,6 +378,7 @@ class ButtonProfileDialog(QDialog):
         self.table.setRowCount(0)
         for entry in entries:
             self._append_row(entry)
+        self.table.apply_column_widths()
 
     def _profile_dialog_start_dir(self) -> str:
         for path in (self._save_path, self._source_path):
@@ -351,6 +476,7 @@ class ButtonProfileDialog(QDialog):
         for offset, entry in enumerate(ordered):
             self._insert_snapshot(insert_first + offset, entry)
         self.table.selectRow(target)
+        self.table.apply_column_widths()
 
     def _insert_snapshot(self, row: int, entry: dict) -> None:
         self.table.insertRow(row)
@@ -378,6 +504,7 @@ class ButtonProfileDialog(QDialog):
             if column == 0:
                 item.setData(Qt.UserRole, copy.deepcopy(entry))
             self.table.setItem(row, column, item)
+        self.table.apply_column_widths()
 
     def _row_snapshot(self, row: int) -> dict:
         base_item = self.table.item(row, 0)
@@ -1141,6 +1268,7 @@ class MainWindow(QMainWindow):
         top = QHBoxLayout()
         self._top_controls_layout = top
         self.roscore_button = QPushButton()
+        _configure_expanding_toolbar_button(self.roscore_button)
         self.roscore_button.clicked.connect(self._on_roscore_toggle_clicked)
         top.addWidget(self.roscore_button)
         self._button_widgets['roscore'] = self.roscore_button
@@ -1148,6 +1276,7 @@ class MainWindow(QMainWindow):
         self._build_configurable_buttons(top)
 
         self.terminal_button = QPushButton()
+        _configure_expanding_toolbar_button(self.terminal_button)
         self.terminal_button.clicked.connect(self._on_terminal_toggle_clicked)
         top.addWidget(self.terminal_button)
         self._button_widgets['terminal'] = self.terminal_button
@@ -3271,6 +3400,7 @@ CMD ["bash"]
             self._config_buttons[key] = normalized
             self._config_button_order.append(key)
             button = QPushButton(normalized['label'])
+            _configure_expanding_toolbar_button(button)
             tooltip = normalized.get('tooltip')
             if tooltip:
                 button.setToolTip(str(tooltip))
