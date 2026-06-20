@@ -4392,6 +4392,8 @@ CMD ["bash"]
                 'log',
                 f'<i>Window layout saved to {html.escape(str(self._window_layout_path))}</i>',
             )
+            if self._window_layout_dialog:
+                self._window_layout_dialog.close()
             return
         QMessageBox.warning(
             self,

@@ -290,7 +290,8 @@ The tab search is separate from the documentation window search.
 - **Window Layout** opens a small always-on-top helper for saving current
   simulator and tool window positions.
 - **Save Window State** records visible windows so the GUI can reapply the
-  layout during later Auto Launch runs.
+  layout during later Auto Launch runs. The helper closes automatically after
+  the layout is saved.
 
 ### Automation
 

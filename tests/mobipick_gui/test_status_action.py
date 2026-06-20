@@ -139,6 +139,41 @@ def test_window_layout_dialog_is_independent_top_level(tmp_path, monkeypatch):
     app.processEvents()
 
 
+def test_window_layout_dialog_closes_after_successful_save(tmp_path, monkeypatch):
+    monkeypatch.setenv('MOBIPICK_WORKSPACE_CONFIG', str(tmp_path / 'workspaces.yaml'))
+    monkeypatch.setattr(
+        MainWindow,
+        '_discover_filtered_image_records',
+        lambda self: ([{'ref': CONFIG['images']['default']}], None),
+    )
+    monkeypatch.setattr(
+        MainWindow,
+        'update_sim_status_from_poll',
+        lambda self, force=False: None,
+    )
+
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow(verbosity=1)
+    window.poll_timer.stop()
+    window._sigint_timer.stop()
+    dialog = window._ensure_window_layout_dialog()
+    dialog.show()
+
+    monkeypatch.setattr(
+        window._window_layout_manager,
+        'capture_and_save',
+        lambda exclude_titles=None: True,
+    )
+
+    window._on_save_window_state_clicked()
+    app.processEvents()
+
+    assert not dialog.isVisible()
+
+    window.deleteLater()
+    app.processEvents()
+
+
 def test_menu_tooltips_hide_when_pointer_leaves(tmp_path, monkeypatch):
     monkeypatch.setenv('MOBIPICK_WORKSPACE_CONFIG', str(tmp_path / 'workspaces.yaml'))
     monkeypatch.setattr(
