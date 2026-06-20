@@ -539,6 +539,7 @@ def _normalize_button_entry(item: dict) -> dict | None:
         'stop_command': item.get('stop_command'),
         'log_command': item.get('log_command'),
         'pass_ros_master_uri': item.get('pass_ros_master_uri', False),
+        'service': item.get('service') or '',
     }
 
 
@@ -649,7 +650,7 @@ def _button_entry_for_save(entry: dict) -> dict:
         world_arg = entry.get('world_arg_name')
         if world_arg and world_arg != 'world_config':
             saved['world_arg_name'] = world_arg
-    for key in ('setup', 'stop_command', 'log_command'):
+    for key in ('setup', 'stop_command', 'log_command', 'service'):
         value = entry.get(key)
         if value not in (None, ''):
             saved[key] = value

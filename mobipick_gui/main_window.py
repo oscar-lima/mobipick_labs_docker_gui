@@ -113,23 +113,26 @@ def _configure_expanding_toolbar_button(button: QPushButton) -> None:
 class ButtonProfileTable(QTableWidget):
     """Toolbar button editor table with priority-based column sizing."""
 
-    FIELD_ORDER = ['key', 'label', 'command', 'tooltip']
+    FIELD_ORDER = ['key', 'label', 'command', 'service', 'tooltip']
     MIN_WIDTHS = {
         'key': 96,
         'label': 132,
         'command': 280,
+        'service': 112,
         'tooltip': 72,
     }
     MAX_DESIRED_WIDTHS = {
         'key': 220,
         'label': 280,
         'command': 760,
+        'service': 180,
         'tooltip': 240,
     }
     EXPAND_WEIGHTS = {
         'key': 1,
         'label': 2,
         'command': 7,
+        'service': 1,
         'tooltip': 0,
     }
 
@@ -168,9 +171,11 @@ class ButtonProfileTable(QTableWidget):
         widths = list(minimum)
         remaining = available - sum(widths)
 
-        for field in ('key', 'label', 'command', 'tooltip'):
+        for field in self.FIELD_ORDER:
             if remaining <= 0:
                 break
+            if field not in self._column_fields:
+                continue
             index = self._column_fields.index(field)
             growth = max(0, desired[index] - widths[index])
             add = min(growth, remaining)
@@ -228,6 +233,7 @@ class ButtonProfileDialog(QDialog):
         ('key', 'Key'),
         ('label', 'Label'),
         ('command', 'Command'),
+        ('service', 'Service'),
         ('tooltip', 'Tooltip'),
     ]
     BOOL_FIELDS: set[str] = set()
@@ -370,6 +376,7 @@ class ButtonProfileDialog(QDialog):
                 'world_arg_name': 'world_config',
                 'host': False,
                 'pass_ros_master_uri': False,
+                'service': '',
             }
         )
         self.table.selectRow(self.table.rowCount() - 1)
@@ -3395,6 +3402,7 @@ CMD ["bash"]
                 'stop_command': entry.get('stop_command'),
                 'log_command': entry.get('log_command'),
                 'pass_ros_master_uri': entry.get('pass_ros_master_uri', False),
+                'service': entry.get('service') or '',
             }
             self._config_buttons[key] = normalized
             self._config_button_order.append(key)
@@ -3544,12 +3552,13 @@ CMD ["bash"]
                 tab.exec_id = exec_id
                 tab.container_name = f'mpcmd-{exec_id[:10]}'
                 self._claim_xhost(tab, key, log_key=tab.key)
+                service = self._configured_command_service(config)
                 wrapped = self._wrap_line_buffered(full_command)
                 args = [
                     'compose', 'run', '--rm', '--name', tab.container_name,
                     '--label', f'mobipick.exec={exec_id}', '--label', f'mobipick.tab={key}',
                     *self._compose_env_args(container_name=tab.container_name),
-                    self._ros_tool_service(), 'bash', '-lc', wrapped
+                    service, 'bash', '-lc', wrapped
                 ]
                 tab.start_program('docker', args)
                 self._schedule_host_to_container_copy(tab)
@@ -3641,6 +3650,19 @@ CMD ["bash"]
         if self._remote_master_enabled():
             return self._remote_ros_service
         return 'mobipick_cmd'
+
+    def _configured_command_service(self, config: dict) -> str:
+        service = str(config.get('service') or '').strip()
+        allowed = {'mobipick', 'mobipick_cmd', self._remote_ros_service}
+        if service in allowed:
+            return service
+        if service:
+            label = self._config_label(config)
+            self._log_info(
+                f'unknown compose service "{service}" for {label}; '
+                f'using {self._ros_tool_service()}'
+            )
+        return self._ros_tool_service()
 
     def _current_master_uri(self) -> str:
         if self._remote_master_enabled():

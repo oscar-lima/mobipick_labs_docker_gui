@@ -151,6 +151,7 @@ def test_button_layout_save_load_round_trip_single_file(tmp_path):
                 'kind': 'command',
                 'command': 'rosrun custom tool.py',
                 'tooltip': 'Run custom tool',
+                'service': 'mobipick',
             },
             {
                 'key': 'rviz',
@@ -170,6 +171,7 @@ def test_button_layout_save_load_round_trip_single_file(tmp_path):
     assert by_key['sim']['command'] == 'roslaunch custom sim.launch'
     assert by_key['custom_tool']['command'] == 'rosrun custom tool.py'
     assert by_key['custom_tool']['tooltip'] == 'Run custom tool'
+    assert by_key['custom_tool']['service'] == 'mobipick'
     assert by_key['rviz']['command'] == 'rviz -d /tmp/custom.rviz'
 
 

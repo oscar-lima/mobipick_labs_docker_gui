@@ -92,6 +92,11 @@ def test_rviz_uses_remote_service_without_starting_local_roscore(
     monkeypatch.setattr(window, '_claim_xhost', lambda *args, **kwargs: None)
     monkeypatch.setattr(
         window,
+        '_confirm_workspace_mismatch_warning',
+        lambda *args, **kwargs: True,
+    )
+    monkeypatch.setattr(
+        window,
         '_schedule_host_to_container_copy',
         lambda *args, **kwargs: None,
     )
@@ -118,6 +123,22 @@ def test_rviz_uses_remote_service_without_starting_local_roscore(
     assert (
         'ROS_MASTER_URI=http://mobipick-os-sensor:11311'
         in started['args']
+    )
+
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_configured_command_service_uses_profile_service(
+    tmp_path,
+    monkeypatch,
+):
+    app, window = _create_window(monkeypatch, tmp_path)
+
+    assert window._configured_command_service({}) == 'mobipick_cmd'
+    assert (
+        window._configured_command_service({'service': 'mobipick'})
+        == 'mobipick'
     )
 
     window.deleteLater()

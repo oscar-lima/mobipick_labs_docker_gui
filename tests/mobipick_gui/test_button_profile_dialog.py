@@ -5,6 +5,7 @@ os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
 from PyQt5.QtWidgets import QApplication
 
+from mobipick_gui.config import save_button_layout
 from mobipick_gui.main_window import ButtonProfileDialog
 
 
@@ -37,6 +38,38 @@ def test_button_profile_dialog_prioritizes_command_columns(tmp_path):
     assert widths['command'] > widths['tooltip']
     assert widths['label'] > widths['tooltip']
     assert widths['key'] >= 96
+
+    dialog.deleteLater()
+    app.processEvents()
+
+
+def test_button_profile_dialog_saves_command_service(tmp_path):
+    app = QApplication.instance() or QApplication([])
+    target = tmp_path / 'target.yaml'
+    dialog = ButtonProfileDialog(
+        [
+            {
+                'key': 'gazebo_launcher',
+                'label': 'Gazebo Launcher',
+                'kind': 'command',
+                'command': 'roslaunch demo gazebo.launch',
+                'service': 'mobipick',
+            },
+        ],
+        Path(tmp_path / 'source.yaml'),
+        target,
+    )
+
+    service_column = next(
+        index
+        for index, (field, _label) in enumerate(dialog.COLUMNS)
+        if field == 'service'
+    )
+    assert dialog.table.item(0, service_column).text() == 'mobipick'
+
+    save_button_layout(target, dialog.button_layout())
+
+    assert 'service: mobipick' in target.read_text(encoding='utf-8')
 
     dialog.deleteLater()
     app.processEvents()

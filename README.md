@@ -289,8 +289,8 @@ Use **Tools > Configure Toolbar Buttons** to edit the active profile from the
 GUI. Workspace edits are saved as writable per-user copies named for the active
 workspace, and that workspace is updated to point at its copy. Packaged global
 profiles are also copied before saving. The dialog shows the editable button
-key, label, command, and tooltip; internal execution fields are preserved but
-not shown.
+key, label, command, compose service, and tooltip; other execution fields are
+preserved when saving.
 
 Use **Load Profile** and **Export Profile** in that dialog to move complete
 button configurations as one YAML file. The automatic save location is the
@@ -320,7 +320,10 @@ Command entries can declare:
 - `host`;
 - `stop_command`;
 - `log_command`;
-- `pass_ros_master_uri`.
+- `pass_ros_master_uri`;
+- `service`, for choosing the compose service used by Docker command buttons.
+  Leave it empty for the normal tool service, or use `mobipick` for launch
+  files that start Gazebo themselves and need the simulator service identity.
 
 The GUI normalizes all entries and creates matching process tabs and
 start/stop visual state.

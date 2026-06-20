@@ -263,11 +263,11 @@ The tab search is separate from the documentation window search.
 
 - **Configure Toolbar Buttons** edits the active workspace toolbar button
   profile in a separate window. You can add, remove, reorder, and edit button
-  labels, commands, and tooltips. **Sim** and **RViz** cannot be removed, but
-  their commands can be changed. **Roscore** and **Terminal** are fixed buttons
-  and cannot be edited from this profile. Use **Load Profile** or **Export
-  Profile** in the editor to import or save a complete button configuration as
-  one YAML file.
+  labels, commands, compose services, and tooltips. **Sim** and **RViz** cannot
+  be removed, but their commands can be changed. **Roscore** and **Terminal**
+  are fixed buttons and cannot be edited from this profile. Use **Load
+  Profile** or **Export Profile** in the editor to import or save a complete
+  button configuration as one YAML file.
 
 ### Docker
 
