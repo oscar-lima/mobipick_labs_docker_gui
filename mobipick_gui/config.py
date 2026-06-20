@@ -720,22 +720,26 @@ def load_launch_sequence_plan(
 
     def _candidate_paths() -> list[Path]:
         candidates: list[Path] = []
+
+        def _add_with_user_override(raw: str | Path) -> None:
+            raw_candidate = Path(raw)
+            candidate = raw_candidate
+            if not candidate.is_absolute():
+                candidate = PROJECT_ROOT / candidate
+                candidates.append(LAUNCH_SEQUENCE_DIR / raw_candidate.name)
+            else:
+                try:
+                    candidate.relative_to(PROJECT_ROOT)
+                except ValueError:
+                    pass
+                else:
+                    candidates.append(LAUNCH_SEQUENCE_DIR / candidate.name)
+            candidates.append(candidate)
+
         if launch_config_path:
-            raw_explicit = Path(launch_config_path)
-            explicit = raw_explicit
-            if not explicit.is_absolute():
-                explicit = PROJECT_ROOT / explicit
-            if not raw_explicit.is_absolute():
-                candidates.append(LAUNCH_SEQUENCE_DIR / raw_explicit.name)
-            candidates.append(explicit)
+            _add_with_user_override(launch_config_path)
         if raw_path and raw_path.lower() not in {'auto', 'default'}:
-            raw_custom = Path(raw_path)
-            custom = raw_custom
-            if not custom.is_absolute():
-                custom = PROJECT_ROOT / custom
-            if not raw_custom.is_absolute():
-                candidates.append(LAUNCH_SEQUENCE_DIR / raw_custom.name)
-            candidates.append(custom)
+            _add_with_user_override(raw_path)
         stem_candidates: list[str] = []
         if button_path:
             stem_candidates.append(button_path.stem)

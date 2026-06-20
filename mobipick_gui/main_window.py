@@ -5398,7 +5398,7 @@ CMD ["bash"]
 
         self._launch_plan = load_launch_sequence_plan(
             self._workspace_button_config_path(),
-            self._workspace_launch_config_path(),
+            saved_path,
         )
         self._refresh_launch_plan_settings()
         self.set_auto_launch_visual('red', self._auto_launch_start_text(), True)

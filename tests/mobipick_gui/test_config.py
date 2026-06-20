@@ -259,6 +259,52 @@ timeline:
     assert plan['timeline'] == [{'button': 'custom', 'at_seconds': 2.0}]
 
 
+def test_absolute_bundled_launch_config_can_load_user_config_fallback(
+    monkeypatch,
+    tmp_path,
+):
+    launch_dir = tmp_path / 'launch_sequences'
+    bundled_root = tmp_path / 'resources'
+    monkeypatch.setattr(config_module, 'LAUNCH_SEQUENCE_DIR', launch_dir)
+    monkeypatch.setattr(config_module, 'PROJECT_ROOT', bundled_root)
+    buttons = tmp_path / 'buttons.yaml'
+    buttons.write_text(
+        '''
+buttons:
+  - key: custom
+    label: Custom
+    kind: command
+    command: echo custom
+''',
+        encoding='utf-8',
+    )
+    bundled = bundled_root / 'config' / 'custom_auto.yaml'
+    bundled.parent.mkdir(parents=True)
+    bundled.write_text(
+        '''
+timeline:
+  - at_seconds: 1
+    button: old
+''',
+        encoding='utf-8',
+    )
+    launches = launch_dir / 'custom_auto.yaml'
+    launches.parent.mkdir(parents=True)
+    launches.write_text(
+        '''
+timeline:
+  - at_seconds: 2
+    button: custom
+''',
+        encoding='utf-8',
+    )
+
+    plan = load_launch_sequence_plan(buttons, bundled)
+
+    assert plan['source'] == str(launches)
+    assert plan['timeline'] == [{'button': 'custom', 'at_seconds': 2.0}]
+
+
 def test_writable_launch_sequence_path_avoids_packaged_resources(monkeypatch, tmp_path):
     launch_dir = tmp_path / 'launch_sequences'
     monkeypatch.setattr(config_module, 'LAUNCH_SEQUENCE_DIR', launch_dir)
