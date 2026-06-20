@@ -10,6 +10,7 @@ log:
 
 window:
   geometry: [100, 100, 1100, 780]   # main window position (x, y) and size (width, height)
+  maximized: false                   # remember whether the main window was maximized
   title: "Mobipick Labs Control"    # title displayed on the window chrome
 
 ros:

@@ -341,3 +341,6 @@ against the workspace inside the image even if a host workspace is selected.
 When the GUI closes, it stops running Mobipick containers, stops recording if
 needed, revokes temporary X11 access, runs cleanup, and then exits. Wait for the
 shutdown dialog to finish before starting a new GUI session.
+
+The main window remembers its last normal size, position, and maximized state
+and restores them the next time the GUI opens.

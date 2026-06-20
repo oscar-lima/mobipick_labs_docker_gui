@@ -1014,8 +1014,7 @@ class MainWindow(QMainWindow):
 
         window_cfg = CONFIG['window']
         self.setWindowTitle(window_cfg['title'])
-        if len(window_cfg.get('geometry', [])) == 4:
-            self.setGeometry(*window_cfg['geometry'])
+        self._restore_window_state(window_cfg)
 
         self._killing = False
         self._last_search = ''
@@ -8035,6 +8034,7 @@ CMD ["bash"]
         if self._exit_in_progress:
             return
         self._exit_in_progress = True
+        self._save_window_state()
         exit_cfg = CONFIG['exit']
         self._console_log(1, exit_cfg['log_start_message'])
         self.hide()
@@ -8109,6 +8109,36 @@ CMD ["bash"]
         self._update_stop_custom_enabled()
 
     # ---------- Close ----------
+
+    def _restore_window_state(self, window_cfg: dict) -> None:
+        geometry = window_cfg.get('geometry', [])
+        if len(geometry) == 4:
+            try:
+                self.setGeometry(*[int(value) for value in geometry])
+            except (TypeError, ValueError):
+                pass
+        if window_cfg.get('maximized'):
+            self.setWindowState(self.windowState() | Qt.WindowMaximized)
+
+    def _save_window_state(self) -> None:
+        geometry = self.normalGeometry()
+        if geometry.isNull():
+            geometry = self.geometry()
+        updates = {
+            'window': {
+                'geometry': [
+                    geometry.x(),
+                    geometry.y(),
+                    geometry.width(),
+                    geometry.height(),
+                ],
+                'maximized': self.isMaximized(),
+            },
+        }
+        try:
+            save_user_config_update(updates)
+        except Exception as exc:
+            self._console_log(1, f'Warning: failed to save window state: {exc}')
 
     def closeEvent(self, event):
         if self._exit_in_progress:

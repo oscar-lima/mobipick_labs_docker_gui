@@ -181,6 +181,7 @@ CONFIG_DEFAULTS: Dict[str, Dict] = {
     },
     'window': {
         'geometry': [100, 100, 1100, 780],
+        'maximized': False,
         'title': 'Mobipick Labs Control',
     },
     'ros': {
