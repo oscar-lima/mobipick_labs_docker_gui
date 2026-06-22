@@ -1,7 +1,8 @@
 # Image and Workspace Compatibility Notes
 
-These notes preserve the local Mobipick image/workspace mapping gathered on
-OLIMA-P15U. They are private operational notes, not portable defaults.
+These notes preserve the local Mobipick image/workspace mapping used for the
+private workspace templates. They are private operational notes, not portable
+defaults.
 
 ## Public images
 
@@ -25,19 +26,25 @@ These images are not expected to be pullable from Docker Hub. They contain a
 user matching the host and are suitable for bind-mounted development
 workspaces.
 
-- `ozkrelo/x_mobipick_labs:oscar_user_from_1.2`
+Use the setup wizard's host-user image builder for these images. It derives the
+container user from the current host user (`$USER`/`SUDO_USER`) and records the
+image as `user: host`; do not hardcode a real developer username in image tags,
+paths, or compatibility profiles. Private templates expose the same value as
+`{{ host_user }}`.
+
+- `ozkrelo/x_mobipick_labs:{{ host_user }}_user_from_1.2`
   - Suitable for `clean_mobipick_labs_ws`.
   - Built from `ozkrelo/x_mobipick_labs:noetic-v1.1`.
   - Uses `/usr/local/bin/entrypoint_user.sh`.
-- `ozkrelo/x_mobipick_labs:rae_ws_from_oscar_user`
+- `ozkrelo/x_mobipick_labs:rae_ws_from_{{ host_user }}_user`
   - Intended for `rae_upom_mobipick_ws`.
-- `ozkrelo/x_mobipick_labs:gpt_ws_from_oscar_user`
+- `ozkrelo/x_mobipick_labs:gpt_ws_from_{{ host_user }}_user`
   - Intended for `gpt_ws`.
   - This is the image to highlight when `gpt_ws` is active.
 
 ## Images to keep unhighlighted for now
 
-- `10.249.104.61:5000/x_mobipick_labs:gpt_ws_from_oscar_user`
+- `10.249.104.61:5000/x_mobipick_labs:gpt_ws_from_{{ host_user }}_user`
   - Purpose is unclear and it may be a duplicate.
 - `ozkrelo/mobipick_gpt_minimal:devel`
   - Minimal real-robot/test-only environment.
@@ -52,4 +59,3 @@ workspaces.
 - `rae_upom_mobipick_ws`
 - `common_tools_ws`
 - `gpt_ws`
-

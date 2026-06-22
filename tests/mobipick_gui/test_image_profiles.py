@@ -44,19 +44,19 @@ def _install_private_image_profiles(monkeypatch):
     profiles.extend(
         [
             {
-                'ref': 'ozkrelo/x_mobipick_labs:oscar_user_from_1.2',
+                'ref': 'ozkrelo/x_mobipick_labs:host_user_from_1.2',
                 'user': 'host',
                 'supports_host_workspaces': True,
                 'compatible_workspaces': ['clean_mobipick_labs_ws'],
             },
             {
-                'ref': 'ozkrelo/x_mobipick_labs:rae_ws_from_oscar_user',
+                'ref': 'ozkrelo/x_mobipick_labs:rae_ws_from_host_user',
                 'user': 'host',
                 'supports_host_workspaces': True,
                 'compatible_workspaces': ['rae_upom_mobipick_ws'],
             },
             {
-                'ref': 'ozkrelo/x_mobipick_labs:gpt_ws_from_oscar_user',
+                'ref': 'ozkrelo/x_mobipick_labs:gpt_ws_from_host_user',
                 'user': 'host',
                 'supports_host_workspaces': True,
                 'compatible_workspaces': ['gpt_ws'],
@@ -259,7 +259,7 @@ def test_build_match_helper_marks_image_as_workspace_match(
     monkeypatch,
 ):
     _install_private_image_profiles(monkeypatch)
-    image = 'ozkrelo/x_mobipick_labs:oscar_user_from_1.2'
+    image = 'ozkrelo/x_mobipick_labs:host_user_from_1.2'
     registry_path, _ = _write_registry(
         tmp_path,
         image,
@@ -363,7 +363,7 @@ def test_workspace_match_dialog_edits_image_matches():
 
 def test_host_user_image_mounts_active_workspace(tmp_path, monkeypatch):
     _install_private_image_profiles(monkeypatch)
-    image = 'ozkrelo/x_mobipick_labs:oscar_user_from_1.2'
+    image = 'ozkrelo/x_mobipick_labs:host_user_from_1.2'
     registry_path, workspace_path = _write_registry(tmp_path, image)
 
     app, window = _create_window(
@@ -393,13 +393,13 @@ def test_workspace_match_highlight_uses_explicit_image_profile(
     _install_private_image_profiles(monkeypatch)
     images = [
         'ozkrelo/mobipick_labs:noetic',
-        'ozkrelo/x_mobipick_labs:rae_ws_from_oscar_user',
-        'ozkrelo/x_mobipick_labs:oscar_user_from_1.2',
-        'ozkrelo/x_mobipick_labs:gpt_ws_from_oscar_user',
+        'ozkrelo/x_mobipick_labs:rae_ws_from_host_user',
+        'ozkrelo/x_mobipick_labs:host_user_from_1.2',
+        'ozkrelo/x_mobipick_labs:gpt_ws_from_host_user',
     ]
     registry_path, _ = _write_registry(
         tmp_path,
-        'ozkrelo/x_mobipick_labs:gpt_ws_from_oscar_user',
+        'ozkrelo/x_mobipick_labs:gpt_ws_from_host_user',
         workspace_name='gpt_ws',
     )
 
@@ -407,13 +407,13 @@ def test_workspace_match_highlight_uses_explicit_image_profile(
 
     texts = _combo_texts(window)
     assert (
-        'ozkrelo/x_mobipick_labs:gpt_ws_from_oscar_user  [workspace match]'
+        'ozkrelo/x_mobipick_labs:gpt_ws_from_host_user  [workspace match]'
         in texts
     )
     assert all(
         'workspace match' not in text
         for text in texts
-        if 'gpt_ws_from_oscar_user' not in text
+        if 'gpt_ws_from_host_user' not in text
     )
 
     window.deleteLater()
@@ -424,13 +424,13 @@ def test_rae_workspace_only_matches_rae_image(tmp_path, monkeypatch):
     _install_private_image_profiles(monkeypatch)
     images = [
         'ozkrelo/mobipick_labs:noetic',
-        'ozkrelo/x_mobipick_labs:rae_ws_from_oscar_user',
-        'ozkrelo/x_mobipick_labs:oscar_user_from_1.2',
-        'ozkrelo/x_mobipick_labs:gpt_ws_from_oscar_user',
+        'ozkrelo/x_mobipick_labs:rae_ws_from_host_user',
+        'ozkrelo/x_mobipick_labs:host_user_from_1.2',
+        'ozkrelo/x_mobipick_labs:gpt_ws_from_host_user',
     ]
     registry_path, _ = _write_registry(
         tmp_path,
-        'ozkrelo/x_mobipick_labs:rae_ws_from_oscar_user',
+        'ozkrelo/x_mobipick_labs:rae_ws_from_host_user',
         workspace_name='rae_upom_mobipick_ws',
     )
 
@@ -438,13 +438,13 @@ def test_rae_workspace_only_matches_rae_image(tmp_path, monkeypatch):
 
     texts = _combo_texts(window)
     assert (
-        'ozkrelo/x_mobipick_labs:rae_ws_from_oscar_user  [workspace match]'
+        'ozkrelo/x_mobipick_labs:rae_ws_from_host_user  [workspace match]'
         in texts
     )
     assert all(
         'workspace match' not in text
         for text in texts
-        if 'rae_ws_from_oscar_user' not in text
+        if 'rae_ws_from_host_user' not in text
     )
 
     window.deleteLater()
@@ -458,13 +458,13 @@ def test_dependency_workspace_has_no_workspace_match_highlight(
     _install_private_image_profiles(monkeypatch)
     images = [
         'ozkrelo/mobipick_labs:noetic',
-        'ozkrelo/x_mobipick_labs:rae_ws_from_oscar_user',
-        'ozkrelo/x_mobipick_labs:oscar_user_from_1.2',
-        'ozkrelo/x_mobipick_labs:gpt_ws_from_oscar_user',
+        'ozkrelo/x_mobipick_labs:rae_ws_from_host_user',
+        'ozkrelo/x_mobipick_labs:host_user_from_1.2',
+        'ozkrelo/x_mobipick_labs:gpt_ws_from_host_user',
     ]
     registry_path, _ = _write_registry(
         tmp_path,
-        'ozkrelo/x_mobipick_labs:oscar_user_from_1.2',
+        'ozkrelo/x_mobipick_labs:host_user_from_1.2',
         workspace_name='common_tools_ws',
     )
 

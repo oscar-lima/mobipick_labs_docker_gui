@@ -140,6 +140,15 @@ def _derive_workspace_raw(workspace_segment: str) -> str:
     return normalized or workspace_segment
 
 
+def _detect_host_user() -> str:
+    """Return the real host user name used for host-user image tags."""
+    for env_name in ("SUDO_USER", "USER"):
+        value = os.environ.get(env_name, "").strip()
+        if value and value != "root":
+            return value
+    return os.environ.get("USER", "").strip() or "host"
+
+
 class TemplateRenderer:
     """Render all files under templates_dir with Jinja and write them under output_base preserving names and modes."""
     def __init__(self, templates_dir: Path, output_base: Path):
@@ -197,6 +206,7 @@ def main() -> None:
     context = {
         "ros1_workspace": workspace_segment,
         "workspace_raw": workspace_raw,
+        "host_user": _detect_host_user(),
         "command": command_list,
         "command_str": " ".join(command_list),
     }

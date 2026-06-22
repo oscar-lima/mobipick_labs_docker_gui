@@ -66,9 +66,9 @@ def test_bundled_gui_settings_exclude_private_runtime_state():
     text = CONFIG_FILE.read_text(encoding='utf-8')
 
     assert 'completed:' not in text
-    assert 'oscar_user_from_1.2' not in text
-    assert 'rae_ws_from_oscar_user' not in text
-    assert 'gpt_ws_from_oscar_user' not in text
+    assert 'host_user_from_1.2' not in text
+    assert 'rae_ws_from_host_user' not in text
+    assert 'gpt_ws_from_host_user' not in text
 
 
 def test_explicit_workspace_profiles_override_global_config(tmp_path):

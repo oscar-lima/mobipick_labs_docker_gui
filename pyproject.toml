@@ -32,8 +32,8 @@ classifiers = [
 keywords = ["mobipick", "docker", "gui", "ros", "simulation"]
 
 [project.urls]
-Homepage = "https://github.com/oscar-lima/mobipick_labs_docker_gui"
-Repository = "https://github.com/oscar-lima/mobipick_labs_docker_gui"
+Homepage = "https://github.com/DFKI-NI/mobipick_labs_docker_gui"
+Repository = "https://github.com/DFKI-NI/mobipick_labs_docker_gui"
 
 [project.scripts]
 mobipick-labs-docker-gui = "mobipick_gui.cli:main"

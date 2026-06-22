@@ -113,17 +113,17 @@ images:
       compatible_workspaces: ["Docker image default"]
       workdir: "/root/catkin_ws"
       description: "Public X11 image with a root-owned workspace baked into the image."
-    - ref: "ozkrelo/x_mobipick_labs:oscar_user_from_1.2"
+    - ref: "ozkrelo/x_mobipick_labs:{{ host_user }}_user_from_1.2"
       user: host
       supports_host_workspaces: true
       compatible_workspaces: ["clean_mobipick_labs_ws"]
       description: "Local development image for clean_mobipick_labs_ws."
-    - ref: "ozkrelo/x_mobipick_labs:rae_ws_from_oscar_user"
+    - ref: "ozkrelo/x_mobipick_labs:rae_ws_from_{{ host_user }}_user"
       user: host
       supports_host_workspaces: true
       compatible_workspaces: ["rae_upom_mobipick_ws"]
       description: "Local development image for rae_upom_mobipick_ws."
-    - ref: "ozkrelo/x_mobipick_labs:gpt_ws_from_oscar_user"
+    - ref: "ozkrelo/x_mobipick_labs:gpt_ws_from_{{ host_user }}_user"
       user: host
       supports_host_workspaces: true
       compatible_workspaces: ["gpt_ws"]

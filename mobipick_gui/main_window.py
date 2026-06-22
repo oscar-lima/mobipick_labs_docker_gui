@@ -2772,9 +2772,10 @@ class MainWindow(QMainWindow):
         details = QLabel(
             '<h2>Mobipick Labs Docker GUI</h2>'
             f'<p>Version: {html.escape(get_version())}</p>'
-            '<p>Main developer:<br>'
-            'Oscar Lima<br>'
-            '<a href="mailto:oscar.lima@dfki.de">oscar.lima@dfki.de</a></p>'
+            '<p>Maintainer:<br>'
+            'Mobipick Labs<br>'
+            '<a href="mailto:mobipick-labs@dfki.de">'
+            'mobipick-labs@dfki.de</a></p>'
             '<p>Mobipick Labs:<br>'
             '<a href="https://github.com/DFKI-NI/mobipick_labs">'
             'https://github.com/DFKI-NI/mobipick_labs</a></p>'

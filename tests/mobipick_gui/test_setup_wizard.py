@@ -31,18 +31,18 @@ def test_wizard_collects_source_workspace_selection(tmp_path):
     wizard = ImageSetupWizard(
         public_images=['ozkrelo/x_mobipick_labs:noetic-v1.2'],
         default_image='ozkrelo/x_mobipick_labs:noetic-v1.2',
-        host_user='oscar',
+        host_user='testuser',
         host_uid='1001',
         host_gid='1001',
         base_image='ozkrelo/x_mobipick_labs:noetic-v1.2',
-        target_image='ozkrelo/x_mobipick_labs:oscar_user_from_1.2',
+        target_image='ozkrelo/x_mobipick_labs:host_user_from_1.2',
         workspace_names=['gpt_ws'],
         configuration_paths=[('Workspace registry', str(tmp_path / 'workspaces.yaml'))],
         source_master_folder=str(tmp_path / 'master'),
         source_workspace_name='clean_mobipick_labs_ws',
         source_repository='https://github.com/DFKI-NI/mobipick_labs.git',
         source_branch='noetic',
-        source_image='ozkrelo/x_mobipick_labs:oscar_user_from_1.2',
+        source_image='ozkrelo/x_mobipick_labs:host_user_from_1.2',
         install_source_default=True,
         image_blacklist=['*n8n*'],
     )
@@ -54,7 +54,7 @@ def test_wizard_collects_source_workspace_selection(tmp_path):
     assert selection.source_workspace_name == 'clean_mobipick_labs_ws'
     assert selection.source_repository.endswith('mobipick_labs.git')
     assert selection.source_branch == 'noetic'
-    assert selection.source_image == 'ozkrelo/x_mobipick_labs:oscar_user_from_1.2'
+    assert selection.source_image == 'ozkrelo/x_mobipick_labs:host_user_from_1.2'
     assert selection.image_blacklist == ['*n8n*']
 
     wizard._skip_step(wizard.install_source_workspace)
@@ -89,7 +89,7 @@ def test_setup_wizard_persists_custom_image_profile(
         RosWorkspace(
             name='gpt_ws',
             path=str(workspace_path),
-            image='ozkrelo/x_mobipick_labs:gpt_ws_from_oscar_user',
+            image='ozkrelo/x_mobipick_labs:gpt_ws_from_host_user',
         )
     )
     registry.active = 'gpt_ws'
@@ -103,7 +103,7 @@ def test_setup_wizard_persists_custom_image_profile(
         lambda self: (
             [
                 {'ref': 'ozkrelo/x_mobipick_labs:noetic-v1.1'},
-                {'ref': 'ozkrelo/x_mobipick_labs:gpt_ws_from_oscar_user'},
+                {'ref': 'ozkrelo/x_mobipick_labs:gpt_ws_from_host_user'},
             ],
             None,
         ),
@@ -141,11 +141,11 @@ def test_setup_wizard_persists_custom_image_profile(
         public_images=['ozkrelo/x_mobipick_labs:noetic-v1.1'],
         default_image='ozkrelo/x_mobipick_labs:noetic-v1.1',
         build_custom_image=True,
-        host_user='oscar',
+        host_user='testuser',
         host_uid='1001',
         host_gid='1001',
         base_image='ozkrelo/x_mobipick_labs:noetic-v1.2',
-        target_image='ozkrelo/x_mobipick_labs:gpt_ws_from_oscar_user',
+        target_image='ozkrelo/x_mobipick_labs:gpt_ws_from_host_user',
         compatible_workspace='gpt_ws',
         remember_completion=True,
     )
@@ -157,7 +157,7 @@ def test_setup_wizard_persists_custom_image_profile(
     assert updates['images']['default'] == 'ozkrelo/x_mobipick_labs:noetic-v1.1'
     assert updates['images']['blacklist'] == []
     assert any(
-        profile.get('ref') == 'ozkrelo/x_mobipick_labs:gpt_ws_from_oscar_user'
+        profile.get('ref') == 'ozkrelo/x_mobipick_labs:gpt_ws_from_host_user'
         and profile.get('compatible_workspaces') == ['gpt_ws']
         for profile in updates['images']['profiles']
     )
@@ -327,11 +327,11 @@ def test_source_workspace_install_registers_workspace_and_streams_in_color(
         public_images=[],
         default_image=source_image,
         build_custom_image=False,
-        host_user='oscar',
+        host_user='testuser',
         host_uid='1001',
         host_gid='1001',
         base_image=source_image,
-        target_image='ozkrelo/x_mobipick_labs:oscar_user_from_1.2',
+        target_image='ozkrelo/x_mobipick_labs:host_user_from_1.2',
         compatible_workspace='',
         remember_completion=True,
         install_source_workspace=True,

@@ -27,7 +27,7 @@ from PyQt5.QtWidgets import (
 from .external_links import open_external_url
 from .version import get_version
 
-BUG_REPORT_EMAIL = 'oscar.lima@dfki.de'
+BUG_REPORT_EMAIL = 'mobipick-labs@dfki.de'
 
 
 @dataclass(frozen=True)
