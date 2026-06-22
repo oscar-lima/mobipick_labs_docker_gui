@@ -1577,6 +1577,13 @@ class DockerCpContainerPathDialog(QDialog):
             self._container_ref,
             self.path_edit.text().strip(),
         ):
+            error = str(entry.get('error') or '').strip()
+            if error:
+                item = QListWidgetItem(error)
+                item.setForeground(QColor('firebrick'))
+                item.setFlags(item.flags() & ~Qt.ItemIsEnabled)
+                self.entries.addItem(item)
+                continue
             path = str(entry.get('path') or '').strip()
             if not path:
                 continue
@@ -1585,6 +1592,11 @@ class DockerCpContainerPathDialog(QDialog):
             label = f'[dir] {name}' if is_dir else name
             item = QListWidgetItem(label)
             item.setData(Qt.UserRole, {'path': path, 'is_dir': is_dir})
+            self.entries.addItem(item)
+        if self.entries.count() == 0:
+            item = QListWidgetItem('No files found in this directory.')
+            item.setForeground(QColor('gray'))
+            item.setFlags(item.flags() & ~Qt.ItemIsEnabled)
             self.entries.addItem(item)
 
     def _activate_item(self, item: QListWidgetItem) -> None:
@@ -5496,7 +5508,7 @@ CMD ["bash"]
             return default_path
         dialog = DockerCpContainerPathDialog(
             container_ref=container_ref,
-            start_path='/',
+            start_path=default_path or '/',
             list_provider=self._docker_cp_list_container_paths,
         )
         if dialog.exec_() == QDialog.Accepted and dialog.selected_path():
@@ -5560,8 +5572,12 @@ CMD ["bash"]
             'else dir=$(dirname -- "$target"); fi; '
             'printf "__DIR__\\t%s\\n" "$dir"; '
             'if [ -d "$dir" ]; then '
-            'find "$dir" -mindepth 1 -maxdepth 1 '
-            "-printf '%y\\t%f\\t%p\\n' | sort; "
+            'for item in "$dir"/* "$dir"/.[!.]* "$dir"/..?*; do '
+            '[ -e "$item" ] || continue; '
+            'if [ -d "$item" ]; then kind=d; else kind=f; fi; '
+            'name=${item##*/}; '
+            'printf "%s\\t%s\\t%s\\n" "$kind" "$name" "$item"; '
+            'done | sort; '
             'fi'
         )
         entries: list[dict[str, object]] = []
@@ -5569,7 +5585,7 @@ CMD ["bash"]
             cp = subprocess.run(
                 self._docker_cp_container_command(container_ref, script),
                 stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
                 check=False,
                 text=True,
                 timeout=8,
@@ -5579,7 +5595,15 @@ CMD ["bash"]
                 1,
                 f'Failed to inspect container paths in {container_ref}: {exc}',
             )
-            return entries
+            return [{'error': f'Failed to inspect container paths: {exc}'}]
+        returncode = getattr(cp, 'returncode', 0)
+        if returncode != 0:
+            details = (cp.stderr or cp.stdout or '').strip()
+            if not details:
+                details = f'docker command exited with status {returncode}'
+            message = f'Unable to read container path {target}: {details}'
+            self._console_log(1, message)
+            return [{'error': message}]
         for line in (cp.stdout or '').splitlines():
             if not line.strip():
                 continue
