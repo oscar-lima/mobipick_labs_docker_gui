@@ -277,6 +277,11 @@ Image behavior is controlled by `images` in `gui_settings.yaml`.
 
 - `default` is the preferred Docker image.
 - `discovery_filters` controls which local images appear in the combo box.
+  The **Configure Image Filters** dialog shows these filters next to the
+  blacklist and previews which local Docker images will be used, ignored, or
+  hidden.
+- `blacklist` contains image refs or glob patterns ignored after discovery
+  filtering.
 - `profiles` maps image refs or glob patterns to container user behavior,
   workspace support, compatible workspaces, working directory, entrypoint, and
   tooltip description.
@@ -474,8 +479,9 @@ a recoverable state.
 
 ## Troubleshooting for developers
 
-- If no images appear, inspect `images.discovery_filters` and run
-  `docker images`.
+- If no images appear, open **Configure Image Filters** to inspect
+  `images.discovery_filters`, `images.blacklist`, and the preview of local
+  images from `docker images`.
 - If GUI tests create real dialogs unexpectedly, set
   `QT_QPA_PLATFORM=offscreen` and monkeypatch Docker discovery.
 - If a workspace does not mount, check the selected image profile for

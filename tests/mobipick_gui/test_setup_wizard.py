@@ -211,10 +211,11 @@ def test_image_blacklist_dialog_saves_patterns(monkeypatch):
     window._image_choices = ['ozkrelo/x_mobipick_labs:gpt']
     window._load_available_images = lambda show_feedback=False: None
     window._log_info = lambda *_args, **_kwargs: None
-    window._discover_filtered_image_records = lambda blacklist_patterns=None: (
-        [{'ref': 'ozkrelo/x_mobipick_labs:gpt'}],
-        None,
-    )
+
+    def discover_images(blacklist_patterns=None, discovery_filters=None):
+        return ([{'ref': 'ozkrelo/x_mobipick_labs:gpt'}], None)
+
+    window._discover_filtered_image_records = discover_images
     saved = {}
 
     class AcceptedDialog:
@@ -226,6 +227,9 @@ def test_image_blacklist_dialog_saves_patterns(monkeypatch):
 
         def patterns(self):
             return ['*n8n*', 'repo/ignore:tag']
+
+        def discovery_filters(self):
+            return ['mobipick']
 
     monkeypatch.setattr(
         main_window_module,
@@ -241,15 +245,20 @@ def test_image_blacklist_dialog_saves_patterns(monkeypatch):
     window._open_image_blacklist_dialog()
 
     assert saved['updates'] == {
-        'images': {'blacklist': ['*n8n*', 'repo/ignore:tag']}
+        'images': {
+            'blacklist': ['*n8n*', 'repo/ignore:tag'],
+            'discovery_filters': ['mobipick'],
+        }
     }
     assert window._images_cfg['blacklist'] == ['*n8n*', 'repo/ignore:tag']
+    assert window._images_cfg['discovery_filters'] == ['mobipick']
 
 
 def test_image_blacklist_dialog_updates_preview_from_combo():
     app = QApplication.instance() or QApplication([])
     dialog = ImageBlacklistDialog(
         [],
+        ['mobipick'],
         [
             'ozkrelo/x_mobipick_labs:noetic-v1.2',
             'docker.n8n.io/n8nio/n8n:latest',
@@ -258,18 +267,21 @@ def test_image_blacklist_dialog_updates_preview_from_combo():
     )
 
     assert dialog.summary_label.text() == (
-        '2 image(s) will be used; 0 image(s) will be ignored.'
+        '1 image(s) will be used; 0 image(s) will be ignored; '
+        '1 image(s) will be hidden by discovery filters.'
     )
+    assert dialog.preview_table.item(1, 0).text() == 'Hidden'
 
     dialog.image_combo.setCurrentIndex(1)
     dialog._add_selected_image()
 
     assert dialog.patterns() == ['docker.n8n.io/n8nio/n8n:latest']
     assert dialog.summary_label.text() == (
-        '1 image(s) will be used; 1 image(s) will be ignored.'
+        '1 image(s) will be used; 1 image(s) will be ignored; '
+        '0 image(s) will be hidden by discovery filters.'
     )
     assert dialog.preview_table.item(1, 0).text() == 'Ignored'
-    assert dialog.preview_table.item(1, 2).text() == (
+    assert dialog.preview_table.item(1, 3).text() == (
         'docker.n8n.io/n8nio/n8n:latest'
     )
 

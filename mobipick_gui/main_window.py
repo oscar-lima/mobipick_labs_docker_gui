@@ -238,6 +238,7 @@ class ImageBlacklistDialog(QDialog):
     def __init__(
         self,
         patterns: list[str],
+        discovery_filters: list[str],
         image_refs: list[str],
         matcher: Callable[[str, str], bool],
         parent: QWidget | None = None,
@@ -246,12 +247,13 @@ class ImageBlacklistDialog(QDialog):
         self._matcher = matcher
         self._image_refs = list(dict.fromkeys(ref for ref in image_refs if ref))
 
-        self.setWindowTitle('Docker Image Blacklist')
-        self.resize(880, 560)
+        self.setWindowTitle('Docker Image Filters')
+        self.resize(1040, 640)
 
         layout = QVBoxLayout(self)
         intro = QLabel(
-            'Image refs or patterns ignored during setup and image discovery.'
+            'Discovery filters choose which local images are offered by the '
+            'GUI. Ignore patterns then remove unwanted matches.'
         )
         intro.setWordWrap(True)
         layout.addWidget(intro)
@@ -262,12 +264,34 @@ class ImageBlacklistDialog(QDialog):
         editor_column = QVBoxLayout()
         body.addLayout(editor_column, 1)
 
+        editor_column.addWidget(QLabel('Discovery filters'))
+        self.discovery_filter_editor = QTextEdit()
+        self.discovery_filter_editor.setAcceptRichText(False)
+        self.discovery_filter_editor.setPlainText('\n'.join(discovery_filters))
+        self.discovery_filter_editor.setPlaceholderText(
+            'mobipick\nx_mobipick_labs'
+        )
+        self.discovery_filter_editor.setMinimumWidth(320)
+        self.discovery_filter_editor.setMaximumHeight(140)
+        self.discovery_filter_editor.setSizePolicy(
+            QSizePolicy.Expanding,
+            QSizePolicy.Fixed,
+        )
+        editor_column.addWidget(self.discovery_filter_editor)
+
+        filter_actions = QHBoxLayout()
+        add_filter = QPushButton('Add Repository Filter')
+        add_filter.clicked.connect(self._add_selected_repository_filter)
+        filter_actions.addWidget(add_filter)
+        filter_actions.addStretch(1)
+        editor_column.addLayout(filter_actions)
+
         editor_column.addWidget(QLabel('Ignored refs and patterns'))
         self.pattern_editor = QTextEdit()
         self.pattern_editor.setAcceptRichText(False)
         self.pattern_editor.setPlainText('\n'.join(patterns))
         self.pattern_editor.setPlaceholderText('*n8n*\nrepo/image:tag')
-        self.pattern_editor.setMinimumWidth(300)
+        self.pattern_editor.setMinimumWidth(320)
         self.pattern_editor.setSizePolicy(
             QSizePolicy.Expanding,
             QSizePolicy.Expanding,
@@ -304,9 +328,9 @@ class ImageBlacklistDialog(QDialog):
         self.summary_label.setWordWrap(True)
         preview_column.addWidget(self.summary_label)
 
-        self.preview_table = QTableWidget(0, 3)
+        self.preview_table = QTableWidget(0, 4)
         self.preview_table.setHorizontalHeaderLabels(
-            ['Result', 'Image', 'Matched pattern']
+            ['Result', 'Image', 'Discovery filter', 'Ignore pattern']
         )
         self.preview_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.preview_table.setSelectionBehavior(QAbstractItemView.SelectRows)
@@ -315,6 +339,7 @@ class ImageBlacklistDialog(QDialog):
         header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(1, QHeaderView.Stretch)
         header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(3, QHeaderView.ResizeToContents)
         preview_column.addWidget(self.preview_table, 1)
 
         buttons = QDialogButtonBox(
@@ -325,10 +350,16 @@ class ImageBlacklistDialog(QDialog):
         layout.addWidget(buttons)
 
         self.pattern_editor.textChanged.connect(self._refresh_preview)
+        self.discovery_filter_editor.textChanged.connect(self._refresh_preview)
         self._refresh_preview()
 
     def patterns(self) -> list[str]:
         return self._normalize_patterns(self.pattern_editor.toPlainText())
+
+    def discovery_filters(self) -> list[str]:
+        return self._normalize_patterns(
+            self.discovery_filter_editor.toPlainText()
+        )
 
     @staticmethod
     def _normalize_patterns(text: str) -> list[str]:
@@ -348,17 +379,32 @@ class ImageBlacklistDialog(QDialog):
         self._append_pattern(self._selected_image_ref())
 
     def _add_selected_repository_pattern(self) -> None:
+        self._append_pattern(self._repository_pattern_for_selected_image())
+
+    def _add_selected_repository_filter(self) -> None:
+        self._append_discovery_filter(
+            self._repository_filter_for_selected_image()
+        )
+
+    def _repository_pattern_for_selected_image(self) -> str:
         image_ref = self._selected_image_ref()
         if not image_ref:
-            return
+            return ''
+        repository = self._repository_for_image_ref(image_ref)
+        return f'{repository}:*' if repository else ''
+
+    def _repository_filter_for_selected_image(self) -> str:
+        return self._repository_for_image_ref(self._selected_image_ref())
+
+    @staticmethod
+    def _repository_for_image_ref(image_ref: str) -> str:
         last_slash = image_ref.rfind('/')
         last_colon = image_ref.rfind(':')
-        repository = (
+        return (
             image_ref[:last_colon]
             if last_colon > last_slash
             else image_ref
         )
-        self._append_pattern(f'{repository}:*' if repository else '')
 
     def _append_pattern(self, pattern: str) -> None:
         pattern = str(pattern or '').strip()
@@ -372,12 +418,34 @@ class ImageBlacklistDialog(QDialog):
         cursor.movePosition(QTextCursor.End)
         self.pattern_editor.setTextCursor(cursor)
 
+    def _append_discovery_filter(self, discovery_filter: str) -> None:
+        discovery_filter = str(discovery_filter or '').strip()
+        if not discovery_filter:
+            return
+        filters = self.discovery_filters()
+        if discovery_filter not in filters:
+            filters.append(discovery_filter)
+        self.discovery_filter_editor.setPlainText('\n'.join(filters))
+        cursor = self.discovery_filter_editor.textCursor()
+        cursor.movePosition(QTextCursor.End)
+        self.discovery_filter_editor.setTextCursor(cursor)
+
     def _refresh_preview(self) -> None:
         patterns = self.patterns()
-        rows: list[tuple[str, str, str]] = []
+        discovery_filters = self.discovery_filters()
+        rows: list[tuple[str, str, str, str]] = []
         used_count = 0
         ignored_count = 0
+        hidden_count = 0
         for image_ref in self._image_refs:
+            filter_match = next(
+                (
+                    discovery_filter
+                    for discovery_filter in discovery_filters
+                    if discovery_filter.lower() in image_ref.lower()
+                ),
+                '',
+            )
             matched_pattern = next(
                 (
                     pattern
@@ -387,26 +455,38 @@ class ImageBlacklistDialog(QDialog):
                 '',
             )
             if matched_pattern:
-                rows.append(('Ignored', image_ref, matched_pattern))
+                rows.append(('Ignored', image_ref, filter_match, matched_pattern))
                 ignored_count += 1
+            elif discovery_filters and not filter_match:
+                rows.append(('Hidden', image_ref, '', ''))
+                hidden_count += 1
             else:
-                rows.append(('Used', image_ref, ''))
+                rows.append(('Used', image_ref, filter_match, ''))
                 used_count += 1
 
         self.summary_label.setText(
             f'{used_count} image(s) will be used; '
-            f'{ignored_count} image(s) will be ignored.'
+            f'{ignored_count} image(s) will be ignored; '
+            f'{hidden_count} image(s) will be hidden by discovery filters.'
         )
         self.preview_table.setRowCount(len(rows))
-        for row, (result, image_ref, matched_pattern) in enumerate(rows):
+        for row, (
+            result,
+            image_ref,
+            filter_match,
+            matched_pattern,
+        ) in enumerate(rows):
             result_item = QTableWidgetItem(result)
             if result == 'Ignored':
                 result_item.setForeground(QColor('#9a3412'))
+            elif result == 'Hidden':
+                result_item.setForeground(QColor('#525252'))
             else:
                 result_item.setForeground(QColor('#166534'))
             self.preview_table.setItem(row, 0, result_item)
             self.preview_table.setItem(row, 1, QTableWidgetItem(image_ref))
-            self.preview_table.setItem(row, 2, QTableWidgetItem(matched_pattern))
+            self.preview_table.setItem(row, 2, QTableWidgetItem(filter_match))
+            self.preview_table.setItem(row, 3, QTableWidgetItem(matched_pattern))
 
 
 class ButtonProfileDialog(QDialog):
@@ -2174,9 +2254,9 @@ class MainWindow(QMainWindow):
         )
         self._add_menu_action(
             docker_menu,
-            'Configure Image Blacklist',
+            'Configure Image Filters',
             self._open_image_blacklist_dialog,
-            tooltip='Ignore unrelated Docker images during setup and discovery',
+            tooltip='Choose which Docker images are shown or ignored',
         )
         self._add_menu_action(
             docker_menu,
@@ -4021,6 +4101,10 @@ class MainWindow(QMainWindow):
         images_cfg = self.__dict__.get('_images_cfg', {}) or {}
         return self._normalize_image_list(images_cfg.get('blacklist'))
 
+    def _image_discovery_filters(self) -> list[str]:
+        images_cfg = self.__dict__.get('_images_cfg', {}) or {}
+        return self._normalize_image_list(images_cfg.get('discovery_filters'))
+
     @staticmethod
     def _image_ref_matches_pattern(image_ref: str, pattern: str) -> bool:
         image_text = str(image_ref or '').strip().lower()
@@ -4051,6 +4135,7 @@ class MainWindow(QMainWindow):
     def _open_image_blacklist_dialog(self) -> None:
         records, _error_message = self._discover_filtered_image_records(
             blacklist_patterns=[],
+            discovery_filters=[],
         )
         image_refs = [
             record.get('ref', '')
@@ -4061,6 +4146,7 @@ class MainWindow(QMainWindow):
             image_refs = list(getattr(self, '_image_choices', []))
         dialog = ImageBlacklistDialog(
             self._image_blacklist_patterns(),
+            self._image_discovery_filters(),
             image_refs,
             self._image_ref_matches_pattern,
             self,
@@ -4068,19 +4154,29 @@ class MainWindow(QMainWindow):
         if dialog.exec_() != QDialog.Accepted:
             return
         patterns = dialog.patterns()
+        discovery_filters = dialog.discovery_filters()
         try:
-            save_user_config_update({'images': {'blacklist': patterns}})
+            save_user_config_update(
+                {
+                    'images': {
+                        'blacklist': patterns,
+                        'discovery_filters': discovery_filters,
+                    }
+                }
+            )
         except OSError as exc:
             QMessageBox.warning(
                 self,
-                'Docker Image Blacklist',
-                f'Failed to save image blacklist:\n{exc}',
+                'Docker Image Filters',
+                f'Failed to save image filters:\n{exc}',
             )
             return
+        self._images_cfg['discovery_filters'] = discovery_filters
         self._images_cfg['blacklist'] = patterns
+        CONFIG['images']['discovery_filters'] = discovery_filters
         CONFIG['images']['blacklist'] = patterns
         self._load_available_images(show_feedback=False)
-        self._log_info('docker image blacklist updated')
+        self._log_info('docker image filters updated')
 
     def _apply_setup_wizard(self, selection: SetupWizardSelection) -> None:
         if selection.default_image:
@@ -5650,9 +5746,15 @@ CMD ["bash"]
     def _discover_filtered_image_records(
         self,
         blacklist_patterns: list[str] | None = None,
+        discovery_filters: list[str] | None = None,
     ) -> tuple[list[dict[str, str]], str | None]:
         images_cfg = self._images_cfg
-        filters = [f.lower() for f in images_cfg.get('discovery_filters', []) if f]
+        raw_filters = (
+            self._image_discovery_filters()
+            if discovery_filters is None
+            else discovery_filters
+        )
+        filters = [f.lower() for f in raw_filters if f]
         include_none = bool(images_cfg.get('include_none_tag', False))
         active_blacklist = (
             self._image_blacklist_patterns()
