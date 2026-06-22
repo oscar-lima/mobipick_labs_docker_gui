@@ -4111,9 +4111,29 @@ CMD ["bash"]
             if not commands:
                 return
             self._append_gui_html(tab.key, '<i>Copying configured host files into container...</i>')
+            self._log_host_to_container_commands(tab.key, commands)
             self._run_command_sequence(commands, log_key=tab.key)
 
         QTimer.singleShot(delay_ms, _attempt)
+
+    def _log_host_to_container_commands(
+        self,
+        tab_key: str,
+        commands: list[list[str]],
+    ) -> None:
+        for command in commands:
+            if len(command) < 4:
+                continue
+            host_path = command[2]
+            container_target = command[3]
+            self._append_gui_html(
+                tab_key,
+                (
+                    '<i>Copying configured path from host at '
+                    f'{html.escape(host_path)} -&gt; container at '
+                    f'{html.escape(container_target)}</i>'
+                ),
+            )
 
     def _build_host_to_container_commands(
         self,

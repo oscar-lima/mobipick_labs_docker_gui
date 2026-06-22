@@ -58,6 +58,47 @@ def test_remote_master_uri_normalization():
     )
 
 
+def test_host_to_container_copy_logs_each_queued_path():
+    window = MainWindow.__new__(MainWindow)
+    logs = []
+    window._append_gui_html = lambda key, message: logs.append((key, message))
+
+    window._log_host_to_container_commands(
+        'sim',
+        [
+            [
+                'docker',
+                'cp',
+                '/tmp/host file.txt',
+                'container-id:/opt/mobipick/host file.txt',
+            ],
+            [
+                'docker',
+                'cp',
+                '/tmp/needs&escape',
+                'container-id:/opt/needs&escape',
+            ],
+        ],
+    )
+
+    assert logs == [
+        (
+            'sim',
+            (
+                '<i>Copying configured path from host at /tmp/host file.txt '
+                '-&gt; container at container-id:/opt/mobipick/host file.txt</i>'
+            ),
+        ),
+        (
+            'sim',
+            (
+                '<i>Copying configured path from host at /tmp/needs&amp;escape '
+                '-&gt; container at container-id:/opt/needs&amp;escape</i>'
+            ),
+        ),
+    ]
+
+
 def test_remote_mode_injects_master_and_disables_local_stack(
     tmp_path,
     monkeypatch,
