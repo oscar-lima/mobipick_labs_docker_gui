@@ -75,6 +75,8 @@ from .config import (
     save_launch_sequence_plan,
     save_user_config_update,
     user_configuration_paths,
+    user_state_reset_command,
+    user_state_reset_paths,
     writable_button_config_path,
     writable_docker_cp_config_path,
     writable_launch_sequence_path,
@@ -2247,6 +2249,15 @@ class MainWindow(QMainWindow):
             self._show_configuration_paths,
             tooltip='Show writable config and data paths managed by the GUI',
         )
+        self._add_menu_action(
+            settings_menu,
+            'Copy Full Reset Command...',
+            self._copy_full_reset_command,
+            tooltip=(
+                'Copy a terminal command that deletes all GUI user '
+                'config and data'
+            ),
+        )
 
         tools_menu = self._add_menu(menu_bar, 'Tools')
         self._add_menu_action(
@@ -2491,6 +2502,47 @@ class MainWindow(QMainWindow):
             'Import Settings',
             'Settings imported. Restart the GUI to apply general GUI '
             'configuration overrides.',
+        )
+
+    def _copy_full_reset_command(self) -> None:
+        paths_text = '\n'.join(
+            f'  - {path.expanduser()}' for path in user_state_reset_paths()
+        )
+        message = QMessageBox(self)
+        message.setIcon(QMessageBox.Warning)
+        message.setWindowTitle('Copy Full Reset Command')
+        message.setText(
+            'Danger: this is a development-only reset for Mobipick Labs '
+            'Docker GUI.'
+        )
+        message.setInformativeText(
+            'The command will permanently delete these per-user GUI state '
+            f'roots from this PC:\n\n{paths_text}\n\n'
+            'That removes GUI settings, the workspace registry, window '
+            'layouts, Docker cp profiles, toolbar button profiles, '
+            'auto-launch profiles, imported settings profiles, screen '
+            'recordings, and custom image build contexts.\n\n'
+            'It does not delete Docker images, Docker containers, ROS '
+            'workspaces, this source checkout, or bundled package defaults.\n\n'
+            'The GUI will only copy a terminal command to the clipboard. '
+            'Nothing is deleted unless you paste it into a terminal and type '
+            'its confirmation phrase.'
+        )
+        copy_button = message.addButton(
+            'Copy Command',
+            QMessageBox.AcceptRole,
+        )
+        message.addButton(QMessageBox.Cancel)
+        command = user_state_reset_command()
+        message.setDetailedText(command)
+        message.exec_()
+        if message.clickedButton() != copy_button:
+            return
+        QApplication.clipboard().setText(command)
+        QMessageBox.information(
+            self,
+            'Copy Full Reset Command',
+            'Reset command copied to the clipboard. Review it before running.',
         )
 
     def _show_configuration_paths(self) -> None:

@@ -18,6 +18,8 @@ from mobipick_gui.config import (
     save_launch_sequence_plan,
     save_user_config_update,
     user_configuration_paths,
+    user_state_reset_command,
+    user_state_reset_paths,
     writable_button_config_path,
     writable_workspace_button_config_path,
     writable_workspace_docker_cp_config_path,
@@ -62,6 +64,36 @@ def test_user_configuration_paths_include_managed_state(tmp_path):
     assert labels['Workspace Docker cp profiles'].name == 'docker_cp_profiles'
     assert labels['Button profiles'].name == 'button_profiles'
     assert labels['Auto-launch profiles'].name == 'launch_sequences'
+
+
+def test_user_state_reset_paths_are_top_level_xdg_roots(monkeypatch, tmp_path):
+    config_home = tmp_path / 'config space'
+    data_home = tmp_path / 'data'
+    monkeypatch.setenv('XDG_CONFIG_HOME', str(config_home))
+    monkeypatch.setenv('XDG_DATA_HOME', str(data_home))
+
+    assert user_state_reset_paths() == [
+        config_home / 'mobipick-labs-docker-gui',
+        data_home / 'mobipick-labs-docker-gui',
+    ]
+
+
+def test_user_state_reset_command_names_targets_and_requires_confirmation(
+    monkeypatch,
+    tmp_path,
+):
+    config_home = tmp_path / 'config space'
+    data_home = tmp_path / 'data'
+    monkeypatch.setenv('XDG_CONFIG_HOME', str(config_home))
+    monkeypatch.setenv('XDG_DATA_HOME', str(data_home))
+
+    command = user_state_reset_command()
+
+    assert 'DELETE_MOBIPICK_GUI_CONFIG' in command
+    assert 'rm -rf --' in command
+    assert str(config_home / 'mobipick-labs-docker-gui') in command
+    assert str(data_home / 'mobipick-labs-docker-gui') in command
+    assert f"'{config_home / 'mobipick-labs-docker-gui'}'" in command
 
 
 def test_bundled_gui_settings_exclude_private_runtime_state():

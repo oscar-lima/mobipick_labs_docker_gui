@@ -281,6 +281,14 @@ The tab search is separate from the documentation window search.
   recommended. Use the row **Copy** and **Show** buttons for one path, or
   **Copy All Paths** and **Show All Contents** for the complete list. **Show**
   opens another window with readable file contents or directory listings.
+- **Copy Full Reset Command...** is a development-only nuclear option. It
+  displays a destructive warning, lists the per-user GUI config/data roots that
+  would be deleted, and copies a terminal command to the clipboard. Nothing is
+  deleted by the GUI. The command only deletes files after you paste it into a
+  terminal and type `DELETE_MOBIPICK_GUI_CONFIG`. It removes GUI settings,
+  workspace registry data, profiles, layouts, recordings, and custom image
+  build contexts, but not Docker images, containers, ROS workspaces, the source
+  checkout, or bundled defaults.
 
 ## Tools menu
 

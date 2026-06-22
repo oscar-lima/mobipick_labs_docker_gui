@@ -269,7 +269,12 @@ The top-level **Settings** menu exposes migration and troubleshooting actions:
 **Export All Settings...** writes the workspace registry, per-user GUI settings,
 and workspace profiles to one portable YAML file; **Import All Settings...**
 restores that file under a chosen workspace master folder; **Show Configuration
-Paths** displays the writable config/data paths that the GUI manages.
+Paths** displays the writable config/data paths that the GUI manages; **Copy
+Full Reset Command...** shows a destructive warning and copies an opt-in
+terminal command for deleting all per-user GUI config/data roots from the PC.
+The reset command requires typing `DELETE_MOBIPICK_GUI_CONFIG` in the terminal
+before it runs `rm -rf`; it does not remove Docker images, Docker containers,
+ROS workspaces, the source checkout, or bundled package defaults.
 
 ## Docker and ROS services
 
