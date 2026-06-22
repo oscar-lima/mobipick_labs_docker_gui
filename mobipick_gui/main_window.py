@@ -687,6 +687,15 @@ class AutoLaunchWizard(QDialog):
 class DockerCpConfigDialog(QDialog):
     """Edit persistent docker cp path mappings."""
 
+    DEFAULT_CONTAINER_PATH = (
+        '/root/catkin_ws/src/mobipick_labs/tables_demo_bringup/config/'
+        'pick_n_place.rviz'
+    )
+    PREFERRED_CONTAINER_PATH = (
+        'clean_mobipick_labs_ws/src/mobipick_labs/'
+        'tables_demo_bringup/config/pick_n_place.rviz'
+    )
+
     def __init__(
         self,
         effective_config: dict[str, dict[str, list[dict]]],
@@ -785,7 +794,9 @@ class DockerCpConfigDialog(QDialog):
         row = QHBoxLayout()
         add_button = QPushButton('Add Row')
         add_button.clicked.connect(
-            lambda _checked=False, tbl=table: self._add_row(tbl)
+            lambda _checked=False, tbl=table: (
+                self._add_row_from_dialog(tbl)
+            )
         )
         row.addWidget(add_button)
         remove_button = QPushButton('Remove Selected')
@@ -796,6 +807,29 @@ class DockerCpConfigDialog(QDialog):
         row.addStretch(1)
         layout.addLayout(row)
         return page
+
+    def _add_row_from_dialog(self, table: QTableWidget) -> None:
+        host_first = table is self.host_to_container_table
+        dialog = DockerCpPathDialog(
+            host_first=host_first,
+            container_path=self._default_container_path(),
+            parent=self,
+        )
+        if dialog.exec_() != QDialog.Accepted:
+            return
+        first, second = dialog.paths()
+        self._add_row(table, first, second)
+
+    @classmethod
+    def _default_container_path(cls) -> str:
+        preferred = Path(cls.PREFERRED_CONTAINER_PATH)
+        candidates = [
+            preferred,
+            Path.home() / 'ros_ws' / preferred,
+        ]
+        if any(candidate.exists() for candidate in candidates):
+            return cls.PREFERRED_CONTAINER_PATH
+        return cls.DEFAULT_CONTAINER_PATH
 
     def _profile_section(self, key: str) -> dict[str, list[dict]]:
         if key in self._user_config:
@@ -933,6 +967,135 @@ class DockerCpConfigDialog(QDialog):
             QMessageBox.warning(self, 'Docker cp Paths', str(exc))
             return
         self._user_config[key] = section
+        super().accept()
+
+
+class DockerCpPathDialog(QDialog):
+    """Collect one docker cp mapping with file pickers where available."""
+
+    def __init__(
+        self,
+        *,
+        host_first: bool,
+        container_path: str,
+        parent: QWidget | None = None,
+    ):
+        super().__init__(parent)
+        self._host_first = host_first
+        self.setWindowTitle(
+            'Add Host to Container Path'
+            if host_first
+            else 'Add Container to Host Path'
+        )
+
+        root = QVBoxLayout(self)
+        form = QFormLayout()
+
+        self.host_path_edit = QLineEdit()
+        self.host_path_edit.setPlaceholderText('Select an existing host file')
+        host_row = QHBoxLayout()
+        host_row.addWidget(self.host_path_edit, 1)
+        host_browse = QPushButton('Browse')
+        host_browse.clicked.connect(self._browse_host_path)
+        host_row.addWidget(host_browse)
+
+        self.container_path_edit = QLineEdit(container_path)
+        self.container_path_edit.setPlaceholderText('Container file path')
+        container_row = QHBoxLayout()
+        container_row.addWidget(self.container_path_edit, 1)
+        container_browse = QPushButton('Browse')
+        container_browse.clicked.connect(self._browse_container_path)
+        container_row.addWidget(container_browse)
+        default_button = QPushButton('Default')
+        default_button.clicked.connect(
+            lambda _checked=False: self.container_path_edit.setText(
+                container_path
+            )
+        )
+        container_row.addWidget(default_button)
+
+        if host_first:
+            form.addRow('Host source file:', host_row)
+            form.addRow('Container destination:', container_row)
+        else:
+            form.addRow('Container source:', container_row)
+            form.addRow('Host destination file:', host_row)
+
+        root.addLayout(form)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        root.addWidget(buttons)
+
+    def _browse_host_path(self) -> None:
+        current = self.host_path_edit.text().strip()
+        start = str(Path(current).expanduser().parent) if current else str(Path.home())
+        selected, _filter = QFileDialog.getOpenFileName(
+            self,
+            'Select Host File',
+            start,
+        )
+        if selected:
+            self.host_path_edit.setText(selected)
+
+    def _browse_container_path(self) -> None:
+        selected, _filter = QFileDialog.getOpenFileName(
+            self,
+            'Select Container File',
+            self._container_browse_start(),
+        )
+        if selected:
+            self.container_path_edit.setText(
+                self._container_path_from_selection(Path(selected))
+            )
+
+    @staticmethod
+    def _container_browse_start() -> str:
+        preferred = Path(DockerCpConfigDialog.PREFERRED_CONTAINER_PATH)
+        candidates = [
+            preferred,
+            Path.home() / 'ros_ws' / preferred,
+        ]
+        for candidate in candidates:
+            if candidate.is_file():
+                return str(candidate.resolve())
+            if candidate.parent.is_dir():
+                return str(candidate.parent.resolve())
+        return str(Path.home())
+
+    @staticmethod
+    def _container_path_from_selection(path: Path) -> str:
+        preferred = Path(DockerCpConfigDialog.PREFERRED_CONTAINER_PATH)
+        parts = path.parts
+        preferred_parts = preferred.parts
+        for index in range(0, len(parts) - len(preferred_parts) + 1):
+            if parts[index:index + len(preferred_parts)] == preferred_parts:
+                return DockerCpConfigDialog.PREFERRED_CONTAINER_PATH
+        return str(path)
+
+    def paths(self) -> tuple[str, str]:
+        host = self.host_path_edit.text().strip()
+        container = self.container_path_edit.text().strip()
+        return (host, container) if self._host_first else (container, host)
+
+    def accept(self) -> None:
+        host = self.host_path_edit.text().strip()
+        container = self.container_path_edit.text().strip()
+        if not host or not container:
+            QMessageBox.warning(
+                self,
+                'Docker cp Paths',
+                'Choose both the host file and container path.',
+            )
+            return
+        host_path = Path(os.path.expanduser(os.path.expandvars(host)))
+        if not host_path.is_file():
+            QMessageBox.warning(
+                self,
+                'Docker cp Paths',
+                'Choose an existing host file.',
+            )
+            return
         super().accept()
 
 

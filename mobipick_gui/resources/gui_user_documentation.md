@@ -303,7 +303,9 @@ The tab search is separate from the documentation window search.
 - **Configure Docker cp Paths** edits host-to-container and container-to-host
   copy paths for the default profile or image-specific profiles. Edits are
   saved separately for the active ROS workspace, so each workspace can copy
-  different files at runtime.
+  different files at runtime. **Add Row** opens a path dialog, checks that the
+  selected host file exists, and pre-fills the Mobipick RViz config path for
+  the container side.
 
 ### Layout
 
