@@ -489,6 +489,12 @@ image:tag:
     ]
 
 
+def test_bundled_docker_cp_config_has_no_default_copy_rows():
+    config = load_docker_cp_config(Path('/missing/docker_cp_image_tag.yaml'))
+
+    assert config == {}
+
+
 def test_docker_cp_can_load_workspace_specific_user_config(monkeypatch, tmp_path):
     bundled = tmp_path / 'bundled.yaml'
     global_user = tmp_path / 'global.yaml'

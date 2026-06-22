@@ -307,7 +307,9 @@ The tab search is separate from the documentation window search.
 - **Setup Wizard** opens the setup flow for pulling public images, selecting
   defaults, building host-user images, and optionally cloning and building
   `mobipick_labs` from source in a host-mounted workspace. Each optional wizard
-  page has **Skip This Step**.
+  page has **Skip This Step**. Docker cp paths are not configured by default;
+  add them later from **Tools > Docker > Configure Docker cp Paths** when a
+  workflow needs file copies.
 - **Configure Image Filters** edits the local-image discovery filters and image
   refs or patterns that should be ignored by setup, image discovery, and Docker
   cp path setup.

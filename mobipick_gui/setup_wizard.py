@@ -94,6 +94,13 @@ class ImageSetupWizard(QWizard):
         )
         intro_label.setWordWrap(True)
         intro_layout.addWidget(intro_label)
+        docker_cp_label = QLabel(
+            'No Docker cp paths are configured by default. If you need files '
+            'copied into or out of containers, configure them later from '
+            'Tools > Docker > Configure Docker cp Paths.'
+        )
+        docker_cp_label.setWordWrap(True)
+        intro_layout.addWidget(docker_cp_label)
         paths_label = QLabel(
             'The wizard can update image defaults and profiles, setup '
             'defaults, the workspace registry, and generated build folders.'

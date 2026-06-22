@@ -342,6 +342,8 @@ Image behavior is controlled by `images` in `gui_settings.yaml`.
 The setup wizard can pull public images, choose a default image, build a
 host-user development image, and clone/build `DFKI-NI/mobipick_labs` from
 source in a host-mounted workspace. Each optional wizard page has a skip button.
+It does not enable `docker cp` paths by default; configure any copy rules later
+from **Tools > Docker > Configure Docker cp Paths**.
 The custom image builder writes a Docker build context under the per-user data
 directory, copies `custom_entrypoint.sh`, adds a host-matching user, installs
 passwordless sudo, and tags the result according to the wizard fields.
@@ -468,6 +470,8 @@ When the Docker image default workspace is active, user edits are saved to
 `~/.config/mobipick-labs-docker-gui/docker_cp_image_tag.yaml`. When a ROS
 workspace is active, edits are saved to
 `~/.config/mobipick-labs-docker-gui/docker_cp_profiles/{workspace}_docker_cp_image_tag.yaml`.
+No copy rules are enabled in the bundled defaults, so fresh installs do not copy
+`pick_n_place.rviz` or any other host file unless the user adds rows here.
 The editor shows workspaces rather than Docker image tags. Add Row opens a
 path setup dialog; the host side uses a local file picker, and the container
 side can use a selected running setup container or manual path entry. Empty
