@@ -1136,6 +1136,7 @@ class MainWindow(QMainWindow):
         self._bug_report_dialog: BugReportDialog | None = None
         self._documentation_dialog: DocumentationDialog | None = None
         self._config_paths_dialog: QDialog | None = None
+        self._config_path_contents_dialog: QDialog | None = None
         self._view_actions: dict[str, QAction] = {}
         self._active_menu_tooltip_action: QAction | None = None
         self._create_menu_bar()
@@ -1822,6 +1823,16 @@ class MainWindow(QMainWindow):
         layout.addWidget(paths)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Close)
+        copy_button = buttons.addButton(
+            'Copy Paths',
+            QDialogButtonBox.ActionRole,
+        )
+        show_button = buttons.addButton(
+            'Show Contents',
+            QDialogButtonBox.ActionRole,
+        )
+        copy_button.clicked.connect(self._copy_configuration_paths)
+        show_button.clicked.connect(self._show_configuration_path_contents)
         buttons.rejected.connect(dialog.close)
         layout.addWidget(buttons)
 
@@ -1829,7 +1840,7 @@ class MainWindow(QMainWindow):
         self._config_paths_dialog = dialog
         dialog.show()
 
-    def _configuration_paths_text(self) -> str:
+    def _configuration_path_rows(self) -> list[tuple[str, Path]]:
         rows = user_configuration_paths(
             workspace_registry_path=self._workspace_registry.path,
             window_layout_template=self._window_layout_path_template,
@@ -1844,14 +1855,89 @@ class MainWindow(QMainWindow):
                 rows.append(
                     ('Active workspace auto launch', Path(active.launch_config))
                 )
-        width = max(len(label) for label, _path in rows)
+        return rows
+
+    def _configuration_paths_text(self) -> str:
+        rows = self._configuration_path_rows()
+        width = max(len(label) for label, _path in rows) if rows else 0
         return '\n'.join(
             f'{label:{width}}  {Path(path).expanduser()}'
             for label, path in rows
         )
 
+    def _copy_configuration_paths(self) -> None:
+        QApplication.clipboard().setText(self._configuration_paths_text())
+
+    def _show_configuration_path_contents(self) -> None:
+        if self._config_path_contents_dialog:
+            self._config_path_contents_dialog.raise_()
+            self._config_path_contents_dialog.activateWindow()
+            return
+        dialog = QDialog(self)
+        dialog.setWindowTitle('Configuration Path Contents')
+        dialog.resize(900, 620)
+        layout = QVBoxLayout(dialog)
+
+        contents = QTextEdit()
+        contents.setReadOnly(True)
+        contents.setLineWrapMode(QTextEdit.NoWrap)
+        contents.setPlainText(self._configuration_path_contents_text())
+        layout.addWidget(contents)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Close)
+        buttons.rejected.connect(dialog.close)
+        layout.addWidget(buttons)
+
+        dialog.finished.connect(self._on_configuration_path_contents_closed)
+        self._config_path_contents_dialog = dialog
+        dialog.show()
+
+    def _configuration_path_contents_text(self) -> str:
+        sections = []
+        for label, raw_path in self._configuration_path_rows():
+            path = Path(raw_path).expanduser()
+            sections.append(f'## {label}\n{path}\n')
+            sections.append(self._read_configuration_path_content(path))
+        return '\n\n'.join(sections)
+
+    def _read_configuration_path_content(self, path: Path) -> str:
+        path_text = str(path)
+        if '{workspace}' in path_text or '{workspace_slug}' in path_text:
+            template_parent = path.parent
+            if template_parent.exists():
+                return self._format_directory_listing(template_parent)
+            return '(template path; directory has not been created yet)'
+        if path.is_dir():
+            return self._format_directory_listing(path)
+        if path.is_file():
+            try:
+                text = path.read_text(encoding='utf-8')
+            except (OSError, UnicodeDecodeError) as exc:
+                return f'(cannot read file: {exc})'
+            limit = 200000
+            if len(text) > limit:
+                return text[:limit] + '\n\n(truncated)'
+            return text or '(empty file)'
+        return '(path has not been created yet)'
+
+    @staticmethod
+    def _format_directory_listing(path: Path) -> str:
+        try:
+            children = sorted(path.iterdir(), key=lambda item: item.name.lower())
+        except OSError as exc:
+            return f'(cannot list directory: {exc})'
+        if not children:
+            return '(empty directory)'
+        return '\n'.join(
+            f'{"[dir] " if child.is_dir() else "      "}{child.name}'
+            for child in children
+        )
+
     def _on_configuration_paths_closed(self, _result: int) -> None:
         self._config_paths_dialog = None
+
+    def _on_configuration_path_contents_closed(self, _result: int) -> None:
+        self._config_path_contents_dialog = None
 
     def _apply_view_action_visibility(self) -> None:
         recording = self._view_actions.get('recording')
