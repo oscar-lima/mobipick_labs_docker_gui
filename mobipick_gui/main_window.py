@@ -1816,19 +1816,50 @@ class MainWindow(QMainWindow):
         legend.setWordWrap(True)
         layout.addWidget(legend)
 
-        paths = QTextEdit()
-        paths.setReadOnly(True)
-        paths.setLineWrapMode(QTextEdit.NoWrap)
-        paths.setPlainText(self._configuration_paths_text())
+        paths = QTableWidget()
+        paths.setColumnCount(4)
+        paths.setHorizontalHeaderLabels(['Setting', 'Path', 'Copy', 'Show'])
+        paths.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        paths.setSelectionBehavior(QAbstractItemView.SelectRows)
+        paths.setSelectionMode(QAbstractItemView.SingleSelection)
+        paths.verticalHeader().setVisible(False)
+        header = paths.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.Stretch)
+        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        rows = self._configuration_path_rows()
+        paths.setRowCount(len(rows))
+        for row, (label, raw_path) in enumerate(rows):
+            path = Path(raw_path).expanduser()
+            paths.setItem(row, 0, QTableWidgetItem(label))
+            paths.setItem(row, 1, QTableWidgetItem(str(path)))
+            copy_button = QPushButton('Copy')
+            show_button = QPushButton('Show')
+            copy_button.clicked.connect(
+                lambda _checked=False, item_path=path: (
+                    self._copy_configuration_path(item_path)
+                )
+            )
+            show_button.clicked.connect(
+                lambda _checked=False, item_label=label, item_path=path: (
+                    self._show_single_configuration_path_content(
+                        item_label,
+                        item_path,
+                    )
+                )
+            )
+            paths.setCellWidget(row, 2, copy_button)
+            paths.setCellWidget(row, 3, show_button)
         layout.addWidget(paths)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Close)
         copy_button = buttons.addButton(
-            'Copy Paths',
+            'Copy All Paths',
             QDialogButtonBox.ActionRole,
         )
         show_button = buttons.addButton(
-            'Show Contents',
+            'Show All Contents',
             QDialogButtonBox.ActionRole,
         )
         copy_button.clicked.connect(self._copy_configuration_paths)
@@ -1868,20 +1899,47 @@ class MainWindow(QMainWindow):
     def _copy_configuration_paths(self) -> None:
         QApplication.clipboard().setText(self._configuration_paths_text())
 
+    @staticmethod
+    def _copy_configuration_path(path: Path) -> None:
+        QApplication.clipboard().setText(str(Path(path).expanduser()))
+
     def _show_configuration_path_contents(self) -> None:
+        self._open_configuration_path_contents_dialog(
+            'Configuration Path Contents',
+            self._configuration_path_contents_text(),
+        )
+
+    def _show_single_configuration_path_content(
+        self,
+        label: str,
+        path: Path,
+    ) -> None:
+        path = Path(path).expanduser()
+        text = (
+            f'## {label}\n{path}\n\n'
+            f'{self._read_configuration_path_content(path)}'
+        )
+        self._open_configuration_path_contents_dialog(
+            f'{label} Contents',
+            text,
+        )
+
+    def _open_configuration_path_contents_dialog(
+        self,
+        title: str,
+        text: str,
+    ) -> None:
         if self._config_path_contents_dialog:
-            self._config_path_contents_dialog.raise_()
-            self._config_path_contents_dialog.activateWindow()
-            return
+            self._config_path_contents_dialog.close()
         dialog = QDialog(self)
-        dialog.setWindowTitle('Configuration Path Contents')
+        dialog.setWindowTitle(title)
         dialog.resize(900, 620)
         layout = QVBoxLayout(dialog)
 
         contents = QTextEdit()
         contents.setReadOnly(True)
         contents.setLineWrapMode(QTextEdit.NoWrap)
-        contents.setPlainText(self._configuration_path_contents_text())
+        contents.setPlainText(text)
         layout.addWidget(contents)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Close)

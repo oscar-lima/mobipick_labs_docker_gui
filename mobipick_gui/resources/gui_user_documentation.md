@@ -273,9 +273,9 @@ The tab search is separate from the documentation window search.
   Stop running workspace processes before importing.
 - **Show Configuration Paths** opens a separate window listing config and data
   paths managed by the GUI. The window notes that manual editing is not
-  recommended. Use **Copy Paths** to copy the list to the clipboard. Use
-  **Show Contents** to open another window with readable file contents and
-  directory listings for those paths.
+  recommended. Use the row **Copy** and **Show** buttons for one path, or
+  **Copy All Paths** and **Show All Contents** for the complete list. **Show**
+  opens another window with readable file contents or directory listings.
 
 ## Tools menu
 
