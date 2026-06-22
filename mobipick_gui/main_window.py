@@ -2651,17 +2651,20 @@ class MainWindow(QMainWindow):
     def _image_runtime_env(
         self,
         workspace_env: dict[str, str] | None = None,
+        *,
+        image_ref: str | None = None,
     ) -> dict[str, str]:
         workspace_env = workspace_env or self._workspace_runtime_env()
-        workdir = self._image_workdir(self._selected_image)
+        image = image_ref or self._selected_image
+        workdir = self._image_workdir(image)
         if not workdir:
             workdir = workspace_env.get('MOBIPICK_WORKSPACE_PATH') or '/tmp'
         return {
             'MOBIPICK_CONTAINER_USER': self._image_container_user(
-                self._selected_image
+                image
             ),
             'MOBIPICK_CONTAINER_ENTRYPOINT': self._image_entrypoint(
-                self._selected_image
+                image
             ),
             'MOBIPICK_CONTAINER_WORKDIR': workdir,
         }
@@ -3479,8 +3482,17 @@ class MainWindow(QMainWindow):
             or 'ozkrelo/x_mobipick_labs:noetic-v1.2'
         ).strip()
         target_image = self._default_custom_image_ref(host_user, cfg)
+        source_image = str(
+            cfg.get('source_image')
+            or target_image
+            or base_image
+            or default_image
+        ).strip()
         active = self._workspace_registry.active
-        workspace_names = [workspace.name for workspace in self._workspace_registry.workspaces]
+        workspace_names = [
+            workspace.name
+            for workspace in self._workspace_registry.workspaces
+        ]
         wizard = ImageSetupWizard(
             public_images=public_images,
             default_image=default_image,
@@ -3492,12 +3504,46 @@ class MainWindow(QMainWindow):
             workspace_names=workspace_names,
             active_workspace=active,
             build_custom_default=build_custom_default,
+            configuration_paths=[
+                (label, str(path))
+                for label, path in user_configuration_paths(
+                    workspace_registry_path=self._workspace_registry.path,
+                    window_layout_template=self._window_layout_path_template,
+                )
+            ],
+            source_master_folder=self._default_source_master_folder(),
+            source_workspace_name=str(
+                cfg.get('source_workspace_name')
+                or 'clean_mobipick_labs_ws'
+            ).strip(),
+            source_repository=str(
+                cfg.get('source_repository')
+                or 'https://github.com/DFKI-NI/mobipick_labs.git'
+            ).strip(),
+            source_branch=str(cfg.get('source_branch') or 'noetic').strip(),
+            source_image=source_image,
+            install_source_default=self._bool_config_value(
+                cfg.get('source_install_by_default', False)
+            ),
             parent=self,
         )
         wizard.accepted.connect(lambda: self._apply_setup_wizard(wizard.selection()))
         wizard.finished.connect(self._on_setup_wizard_closed)
         self._setup_wizard_dialog = wizard
         wizard.show()
+
+    def _default_source_master_folder(self) -> str:
+        if self._workspace_registry.master_folder:
+            return self._workspace_registry.master_folder
+        host_home = str(
+            CONFIG['process']['qprocess_env'].get(
+                'MOBIPICK_HOST_HOME',
+                '',
+            )
+        ).strip()
+        if host_home:
+            return str(Path(host_home).expanduser() / 'ros_ws')
+        return str(Path.home() / 'ros_ws')
 
     def _on_setup_wizard_closed(self, _result: int) -> None:
         self._setup_wizard_dialog = None
@@ -3551,6 +3597,17 @@ class MainWindow(QMainWindow):
                 return
             profile = self._custom_image_profile(selection)
             self._upsert_runtime_image_profile(profile)
+        if selection.install_source_workspace:
+            validation_error = self._validate_source_workspace_selection(
+                selection
+            )
+            if validation_error:
+                QMessageBox.warning(
+                    self,
+                    'Install mobipick_labs Source',
+                    validation_error,
+                )
+                return
 
         updates = {
             'setup_wizard': {
@@ -3566,6 +3623,13 @@ class MainWindow(QMainWindow):
                 'development_image_tag_template': (
                     self._split_image_ref(selection.target_image)[1]
                     or '{user}_user_from_1.2'
+                ),
+                'source_repository': selection.source_repository,
+                'source_branch': selection.source_branch,
+                'source_workspace_name': selection.source_workspace_name,
+                'source_image': selection.source_image,
+                'source_install_by_default': (
+                    selection.install_source_workspace
                 ),
             },
             'images': {
@@ -3591,10 +3655,47 @@ class MainWindow(QMainWindow):
             self._images_cfg.get('profiles', [])
         )
 
+        source_started = False
+
+        def start_source_once() -> None:
+            nonlocal source_started
+            if source_started or not selection.install_source_workspace:
+                return
+            source_started = True
+            self._start_source_workspace_install(selection)
+
+        wait_for_custom_image = (
+            selection.install_source_workspace
+            and selection.build_custom_image
+            and selection.source_image == selection.target_image
+        )
+        wait_for_public_pull = (
+            selection.install_source_workspace
+            and not wait_for_custom_image
+            and selection.pull_public_images
+            and selection.source_image in selection.public_images
+        )
+
         if selection.pull_public_images and selection.public_images:
-            self._start_image_pulls(selection.public_images)
+            if wait_for_public_pull:
+                self._start_image_pulls(
+                    selection.public_images,
+                    on_success=start_source_once,
+                )
+            else:
+                self._start_image_pulls(selection.public_images)
         if selection.build_custom_image:
-            self._start_custom_image_build(selection)
+            if wait_for_custom_image:
+                self._start_custom_image_build(
+                    selection,
+                    on_success=start_source_once,
+                )
+            else:
+                self._start_custom_image_build(selection)
+        if selection.install_source_workspace and not (
+            wait_for_custom_image or wait_for_public_pull
+        ):
+            start_source_once()
 
         if self._image_choices:
             self._load_available_images(show_feedback=False)
@@ -3612,6 +3713,30 @@ class MainWindow(QMainWindow):
             return 'Base image must include a tag, for example image:tag.'
         if ':' not in selection.target_image:
             return 'Target image must include a tag, for example image:tag.'
+        return ''
+
+    def _validate_source_workspace_selection(
+        self,
+        selection: SetupWizardSelection,
+    ) -> str:
+        if not selection.source_master_folder:
+            return 'Choose a master folder for the source workspace.'
+        if not selection.source_workspace_name:
+            return 'Enter a source workspace name.'
+        try:
+            RosWorkspace(
+                name=selection.source_workspace_name,
+                path=str(
+                    Path(selection.source_master_folder).expanduser()
+                    / selection.source_workspace_name
+                ),
+            ).normalized()
+        except ValueError as exc:
+            return str(exc)
+        if not selection.source_repository:
+            return 'Enter the mobipick_labs repository URL.'
+        if not selection.source_image:
+            return 'Choose the Docker image used to build the source workspace.'
         return ''
 
     def _custom_image_profile(self, selection: SetupWizardSelection) -> dict:
@@ -3645,7 +3770,12 @@ class MainWindow(QMainWindow):
         CONFIG['images']['profiles'] = profiles
         self._image_profiles = self._normalize_image_profiles(profiles)
 
-    def _start_image_pulls(self, images: list[str]) -> None:
+    def _start_image_pulls(
+        self,
+        images: list[str],
+        *,
+        on_success: Callable[[], None] | None = None,
+    ) -> None:
         key = 'setup-pull-images'
         tab = self._ensure_tab(key, 'Pull Images', closable=True)
         if tab.is_running():
@@ -3662,13 +3792,22 @@ class MainWindow(QMainWindow):
         )
         if not command:
             return
-        tab.proc.finished.connect(
-            lambda *_: self._load_available_images(show_feedback=False)
-        )
+
+        def _after_pull(code: int, _status) -> None:
+            self._load_available_images(show_feedback=False)
+            if code == 0 and on_success:
+                on_success()
+
+        tab.proc.finished.connect(_after_pull)
         tab.start_program('bash', ['-lc', command])
         self._focus_tab(key)
 
-    def _start_custom_image_build(self, selection: SetupWizardSelection) -> None:
+    def _start_custom_image_build(
+        self,
+        selection: SetupWizardSelection,
+        *,
+        on_success: Callable[[], None] | None = None,
+    ) -> None:
         key = 'setup-build-image'
         tab = self._ensure_tab(key, 'Build Image', closable=True)
         if tab.is_running():
@@ -3700,11 +3839,210 @@ class MainWindow(QMainWindow):
             selection.target_image,
             str(context_dir),
         ]
-        tab.proc.finished.connect(
-            lambda *_: self._load_available_images(show_feedback=False)
-        )
-        tab.start_program('docker', args)
+
+        def _after_build(code: int, _status) -> None:
+            self._load_available_images(show_feedback=False)
+            if code == 0 and on_success:
+                on_success()
+
+        tab.proc.finished.connect(_after_build)
+        self._start_program_with_pseudo_terminal(tab, 'docker', args)
         self._focus_tab(key)
+
+    def _start_source_workspace_install(
+        self,
+        selection: SetupWizardSelection,
+    ) -> None:
+        key = 'setup-source-workspace'
+        tab = self._ensure_tab(key, 'Install Source', closable=True)
+        if tab.is_running():
+            self._focus_tab(key)
+            QMessageBox.information(
+                self,
+                'Install mobipick_labs Source',
+                'A source workspace install is already running.',
+            )
+            return
+        try:
+            workspace = self._prepare_source_workspace(selection)
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(
+                self,
+                'Install mobipick_labs Source',
+                f'Failed to prepare the source workspace:\n{exc}',
+            )
+            return
+        self._ensure_network(log_key='log')
+        workspace_env = self._workspace_runtime_env(
+            workspace.name,
+            force_host_workspace=True,
+        )
+        workspace_env.update(
+            self._image_runtime_env(
+                workspace_env,
+                image_ref=selection.source_image,
+            )
+        )
+        workspace_env['MOBIPICK_IMAGE'] = selection.source_image
+        tab.set_environment_overrides(workspace_env)
+        exec_id = uuid.uuid4().hex
+        tab.exec_id = exec_id
+        tab.container_name = f'mobipick-source-{exec_id[:10]}'
+        command = self._source_workspace_install_command(
+            workspace_env['MOBIPICK_WORKSPACE_PATH'],
+            repository=selection.source_repository,
+            branch=selection.source_branch,
+        )
+        args = [
+            'compose',
+            'run',
+            '--rm',
+            '--name',
+            tab.container_name,
+            '--label',
+            f'mobipick.exec={exec_id}',
+            '--label',
+            f'mobipick.tab={key}',
+            *self._compose_env_args(
+                workspace_env,
+                container_name=tab.container_name,
+            ),
+            'mobipick_cmd',
+            'bash',
+            '-lc',
+            self._wrap_line_buffered(command),
+        ]
+
+        def _after_source_install(code: int, _status) -> None:
+            self._on_source_workspace_install_finished(
+                code,
+                workspace,
+                selection,
+            )
+
+        tab.proc.finished.connect(_after_source_install)
+        self._start_program_with_pseudo_terminal(tab, 'docker', args)
+        self._focus_tab(key)
+        self._log_info(
+            f'installing mobipick_labs source workspace at '
+            f'{workspace.directory}'
+        )
+
+    def _prepare_source_workspace(
+        self,
+        selection: SetupWizardSelection,
+    ) -> RosWorkspace:
+        master = Path(selection.source_master_folder).expanduser().resolve()
+        workspace_dir = master / selection.source_workspace_name
+        (workspace_dir / 'src').mkdir(parents=True, exist_ok=True)
+        existing = self._workspace_registry.get(selection.source_workspace_name)
+        workspace = RosWorkspace(
+            name=selection.source_workspace_name,
+            path=str(workspace_dir),
+            extends=list(existing.extends) if existing else [],
+            button_config=existing.button_config if existing else '',
+            launch_config=existing.launch_config if existing else '',
+            sim_command=existing.sim_command if existing else '',
+            image=selection.source_image,
+        ).normalized()
+        self._workspace_registry.master_folder = str(master)
+        self._workspace_registry.upsert(workspace)
+        self._workspace_registry.save()
+        self._populate_workspace_combo()
+        if self._workspace_dialog:
+            self._workspace_dialog.refresh(self._workspace_registry.active)
+        return workspace
+
+    def _source_workspace_install_command(
+        self,
+        container_workspace_path: str,
+        *,
+        repository: str,
+        branch: str,
+    ) -> str:
+        workspace = Path(container_workspace_path)
+        src_dir = workspace / 'src'
+        repo_dir = src_dir / 'mobipick_labs'
+        setup_file = workspace / 'devel' / 'setup.bash'
+        quoted_repo = self._sh_quote(repository)
+        quoted_branch = self._sh_quote(branch) if branch else ''
+        quoted_origin_branch = (
+            self._sh_quote(f'origin/{branch}') if branch else ''
+        )
+        clone_branch = f' --branch {quoted_branch}' if branch else ''
+        branch_checkout = (
+            'git -C "$repo_dir" fetch --all --prune; '
+            f'git -C "$repo_dir" checkout {quoted_branch} '
+            f'|| git -C "$repo_dir" checkout -b {quoted_branch} '
+            f'{quoted_origin_branch}; '
+            f'git -C "$repo_dir" pull --ff-only origin {quoted_branch}'
+            if branch
+            else 'git -C "$repo_dir" pull --ff-only'
+        )
+        return (
+            'set -e; '
+            'export DEBIAN_FRONTEND=noninteractive; '
+            'source /opt/ros/noetic/setup.bash; '
+            f'workspace={self._sh_quote(str(workspace))}; '
+            f'src_dir={self._sh_quote(str(src_dir))}; '
+            f'repo_dir={self._sh_quote(str(repo_dir))}; '
+            f'setup_file={self._sh_quote(str(setup_file))}; '
+            'mkdir -p "$src_dir"; '
+            'if [ -d "$repo_dir/.git" ]; then '
+            'echo "Updating existing mobipick_labs checkout"; '
+            f'{branch_checkout}; '
+            'elif [ -e "$repo_dir" ]; then '
+            'echo "Path exists but is not a git checkout: $repo_dir" >&2; '
+            'exit 1; '
+            'else '
+            'echo "Cloning mobipick_labs"; '
+            f'git clone{clone_branch} {quoted_repo} "$repo_dir"; '
+            'fi; '
+            'cd "$repo_dir"; '
+            './install-deps.sh; '
+            './build.sh; '
+            'if [ -s "$setup_file" ]; then '
+            'source "$setup_file"; '
+            'echo "Built and sourced $setup_file"; '
+            'else '
+            'echo "Build did not create $setup_file" >&2; '
+            'exit 1; '
+            'fi'
+        )
+
+    def _on_source_workspace_install_finished(
+        self,
+        code: int,
+        workspace: RosWorkspace,
+        selection: SetupWizardSelection,
+    ) -> None:
+        if code == 0:
+            try:
+                self._mark_image_workspace_match(
+                    selection.source_image,
+                    workspace.name,
+                )
+            except Exception as exc:
+                self._append_gui_html(
+                    'log',
+                    '<i>Failed to save source workspace image match: '
+                    f'{html.escape(str(exc))}</i>',
+                )
+            self._populate_workspace_combo()
+            if self._workspace_dialog:
+                self._workspace_dialog.refresh(self._workspace_registry.active)
+            self._log_info(
+                f'mobipick_labs source workspace is ready: '
+                f'{workspace.directory}'
+            )
+            if selection.activate_source_workspace:
+                self._activate_workspace(workspace.name)
+        else:
+            self._append_gui_html(
+                'log',
+                '<i>mobipick_labs source workspace install failed; '
+                'see the Install Source tab for details.</i>',
+            )
 
     def _write_custom_image_build_context(
         self,
@@ -3836,7 +4174,7 @@ CMD ["bash"]
             '-lc',
             self._wrap_line_buffered(command),
         ]
-        tab.start_program('docker', args)
+        self._start_program_with_pseudo_terminal(tab, 'docker', args)
         self._focus_tab(key)
 
     def _workspace_sim_command(self) -> str:
@@ -7374,16 +7712,37 @@ CMD ["bash"]
 
     # ---------- Buffering control helper ----------
     def _wrap_line_buffered(self, inner: str) -> str:
-        # ensure unbuffered python, utf8, and force line buffered stdout and stderr when available
-        # no TTY required
+        # Keep stdout/stderr moving in GUI tabs; color is also forced for
+        # non-interactive tools, and PTY-sensitive tools get a wrapper above.
+        color_env = (
+            'export TERM="${TERM:-xterm-256color}" '
+            'FORCE_COLOR=1 CLICOLOR_FORCE=1; '
+        )
         return (
             'export PYTHONUNBUFFERED=1 PYTHONIOENCODING=UTF-8; '
+            f'{color_env}'
             'if command -v stdbuf >/dev/null 2>&1; then '
             f'stdbuf -oL -eL {inner}; '
             'else '
             f'{inner}; '
             'fi'
         )
+
+    def _start_program_with_pseudo_terminal(
+        self,
+        tab: ProcessTab,
+        program: str,
+        args: list[str],
+    ) -> None:
+        command = self._fmt_args([program] + args)
+        wrapped = (
+            'if command -v script >/dev/null 2>&1; then '
+            f'script -qefc {self._sh_quote(command)} /dev/null; '
+            'else '
+            f'{command}; '
+            'fi'
+        )
+        tab.start_shell(wrapped)
 
     # ---------- Actions ----------
 

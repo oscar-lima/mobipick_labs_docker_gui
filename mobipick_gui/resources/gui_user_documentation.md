@@ -291,8 +291,10 @@ The tab search is separate from the documentation window search.
 
 - **Manage Images** lists Docker images matching the GUI filters and lets you
   remove selected images.
-- **Setup Wizard** opens the image setup flow for pulling public images and
-  selecting defaults.
+- **Setup Wizard** opens the setup flow for pulling public images, selecting
+  defaults, building host-user images, and optionally cloning and building
+  `mobipick_labs` from source in a host-mounted workspace. Each optional wizard
+  page has **Skip This Step**.
 - **Build Custom Image** opens the setup flow with the host-user development
   image option enabled.
 - **Commit Current Tab** creates a Docker image from the running container
@@ -306,6 +308,12 @@ The tab search is separate from the documentation window search.
   different files at runtime. **Add Row** opens a path dialog, checks that the
   selected host file exists, and pre-fills the Mobipick RViz config path for
   the container side.
+
+The wizard shows the writable configuration and data paths it can affect. The
+source install step creates
+`<master folder>/clean_mobipick_labs_ws/src/mobipick_labs` by default, runs
+`install-deps.sh` and `build.sh` inside Docker, and streams the full output in
+the **Install Source** tab.
 
 ### Layout
 

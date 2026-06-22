@@ -281,11 +281,19 @@ Image behavior is controlled by `images` in `gui_settings.yaml`.
   workspace support, compatible workspaces, working directory, entrypoint, and
   tooltip description.
 
-The setup wizard can pull public images, choose a default image, and build a
-host-user development image. The custom image builder writes a Docker build
-context under the per-user data directory, copies `custom_entrypoint.sh`, adds a
-host-matching user, installs passwordless sudo, and tags the result according
-to the wizard fields.
+The setup wizard can pull public images, choose a default image, build a
+host-user development image, and clone/build `DFKI-NI/mobipick_labs` from
+source in a host-mounted workspace. Each optional wizard page has a skip button.
+The custom image builder writes a Docker build context under the per-user data
+directory, copies `custom_entrypoint.sh`, adds a host-matching user, installs
+passwordless sudo, and tags the result according to the wizard fields.
+
+The source install step creates
+`<master folder>/clean_mobipick_labs_ws/src/mobipick_labs` by default, runs the
+work inside Docker with the workspace mounted to the host, sources
+`/opt/ros/noetic/setup.bash`, then executes `./install-deps.sh` and `./build.sh`.
+Output streams into an **Install Source** tab. Existing git checkouts are
+updated; existing non-git paths stop the step with an explicit error.
 
 ## Button profiles
 

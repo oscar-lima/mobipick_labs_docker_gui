@@ -337,6 +337,11 @@ CONFIG_DEFAULTS: Dict[str, Dict] = {
         'development_base_image': 'ozkrelo/x_mobipick_labs:noetic-v1.2',
         'development_image_repository': 'ozkrelo/x_mobipick_labs',
         'development_image_tag_template': '{user}_user_from_1.2',
+        'source_repository': 'https://github.com/DFKI-NI/mobipick_labs.git',
+        'source_branch': 'noetic',
+        'source_workspace_name': 'clean_mobipick_labs_ws',
+        'source_image': '',
+        'source_install_by_default': False,
     },
     'workspace_mismatch_warning': {
         'silenced_exceptions': [],
