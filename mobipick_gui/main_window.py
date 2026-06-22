@@ -1031,9 +1031,11 @@ class DockerCpPathDialog(QDialog):
 
         root = QVBoxLayout(self)
         form = QFormLayout()
+        form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
 
         self.host_path_edit = QLineEdit()
         self.host_path_edit.setPlaceholderText('Select an existing host file')
+        self._configure_path_edit(self.host_path_edit)
         host_row = QHBoxLayout()
         host_row.addWidget(self.host_path_edit, 1)
         host_browse = QPushButton('Browse')
@@ -1042,6 +1044,7 @@ class DockerCpPathDialog(QDialog):
 
         self.container_path_edit = QLineEdit(container_path)
         self.container_path_edit.setPlaceholderText('Container file path')
+        self._configure_path_edit(self.container_path_edit)
         container_row = QHBoxLayout()
         container_row.addWidget(self.container_path_edit, 1)
         container_browse = QPushButton('Browse')
@@ -1067,6 +1070,29 @@ class DockerCpPathDialog(QDialog):
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         root.addWidget(buttons)
+        self._fit_to_path_texts()
+
+    def _configure_path_edit(self, edit: QLineEdit) -> None:
+        edit.setMinimumWidth(520)
+        edit.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        edit.textChanged.connect(lambda _text: self._fit_to_path_texts())
+
+    def _fit_to_path_texts(self) -> None:
+        metrics = self.fontMetrics()
+        longest = max(
+            (
+                self.host_path_edit.text(),
+                self.container_path_edit.text(),
+                self.host_path_edit.placeholderText(),
+                self.container_path_edit.placeholderText(),
+            ),
+            key=lambda text: _text_width(metrics, text),
+        )
+        desired = _text_width(metrics, longest) + 360
+        width = min(max(760, desired), 1400)
+        self.setMinimumWidth(width)
+        if self.width() < width:
+            self.resize(width, max(self.height(), self.sizeHint().height()))
 
     def _browse_host_path(self) -> None:
         current = self.host_path_edit.text().strip()

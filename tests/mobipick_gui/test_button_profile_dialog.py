@@ -3,7 +3,7 @@ from pathlib import Path
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
-from PyQt5.QtWidgets import QApplication, QDialog, QHeaderView
+from PyQt5.QtWidgets import QApplication, QDialog, QHeaderView, QSizePolicy
 
 from mobipick_gui.config import save_button_layout
 import mobipick_gui.main_window as main_window_module
@@ -197,6 +197,29 @@ def test_docker_cp_path_dialog_orders_paths_for_both_directions(tmp_path):
 
     host_to_container.deleteLater()
     container_to_host.deleteLater()
+    app.processEvents()
+
+
+def test_docker_cp_path_dialog_expands_long_path_fields():
+    app = QApplication.instance() or QApplication([])
+    long_container_path = (
+        '/root/catkin_ws/src/mobipick_labs/tables_demo_bringup/config/'
+        'pick_n_place.rviz'
+    )
+    dialog = DockerCpPathDialog(
+        host_first=True,
+        container_path=long_container_path,
+    )
+
+    assert dialog.host_path_edit.sizePolicy().horizontalPolicy() == (
+        QSizePolicy.Expanding
+    )
+    assert dialog.container_path_edit.sizePolicy().horizontalPolicy() == (
+        QSizePolicy.Expanding
+    )
+    assert dialog.minimumWidth() >= 760
+
+    dialog.deleteLater()
     app.processEvents()
 
 
