@@ -343,10 +343,12 @@ def test_docker_cp_list_container_paths_can_use_image(monkeypatch):
     }
 
     def fake_run(args, **kwargs):
-        assert args[:5] == [
+        assert args[:7] == [
             'docker',
             'run',
             '--rm',
+            '--user',
+            'root',
             '--entrypoint',
             'bash',
         ]

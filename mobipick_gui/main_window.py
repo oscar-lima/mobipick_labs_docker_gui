@@ -5531,6 +5531,8 @@ CMD ["bash"]
                 'docker',
                 'run',
                 '--rm',
+                '--user',
+                'root',
                 '--entrypoint',
                 'bash',
             ]

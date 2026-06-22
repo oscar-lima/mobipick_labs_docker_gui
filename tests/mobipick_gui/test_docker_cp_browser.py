@@ -111,6 +111,27 @@ def test_docker_cp_container_listing_returns_visible_error(monkeypatch):
     ]
 
 
+def test_docker_cp_image_browser_runs_as_root():
+    window = MainWindow.__new__(MainWindow)
+    window._docker_cp_workspace_browser_env = lambda: {}
+
+    command = MainWindow._docker_cp_container_command(
+        window,
+        '__image__:example:gpt',
+        'ls /',
+    )
+
+    assert command[:7] == [
+        'docker',
+        'run',
+        '--rm',
+        '--user',
+        'root',
+        '--entrypoint',
+        'bash',
+    ]
+
+
 def test_docker_cp_container_path_dialog_marks_empty_directory():
     app = QApplication.instance() or QApplication([])
     dialog = DockerCpContainerPathDialog(
