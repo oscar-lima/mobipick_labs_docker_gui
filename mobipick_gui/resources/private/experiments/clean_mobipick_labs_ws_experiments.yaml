@@ -8,7 +8,7 @@ timeline:
     button: rviz
   - at_seconds: 12
     button: rqt
-  - at_seconds: 16
+  - at_seconds: 22
     button: tables
 
 shutdown:
