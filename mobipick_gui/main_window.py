@@ -5114,7 +5114,7 @@ CMD ["bash"]
             return default_path
         dialog = DockerCpContainerPathDialog(
             container_ref=container_ref,
-            start_path=default_path,
+            start_path='/',
             list_provider=self._docker_cp_list_container_paths,
         )
         if dialog.exec_() == QDialog.Accepted and dialog.selected_path():
