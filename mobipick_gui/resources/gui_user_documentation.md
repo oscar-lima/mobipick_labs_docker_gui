@@ -301,7 +301,9 @@ The tab search is separate from the documentation window search.
 - **Execute Docker cp** copies configured paths from the selected running
   container to the host.
 - **Configure Docker cp Paths** edits host-to-container and container-to-host
-  copy paths for the default profile or image-specific profiles.
+  copy paths for the default profile or image-specific profiles. Edits are
+  saved separately for the active ROS workspace, so each workspace can copy
+  different files at runtime.
 
 ### Layout
 

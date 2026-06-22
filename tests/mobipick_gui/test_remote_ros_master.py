@@ -9,6 +9,7 @@ from PyQt5.QtWidgets import QApplication
 
 from mobipick_gui.config import CONFIG
 from mobipick_gui.main_window import MainWindow
+from mobipick_gui.workspaces import RosWorkspace
 
 
 def _create_window(monkeypatch, tmp_path):
@@ -96,6 +97,51 @@ def test_host_to_container_copy_logs_each_queued_path():
                 '-&gt; container at container-id:/opt/needs&amp;escape</i>'
             ),
         ),
+    ]
+
+
+def test_docker_cp_entries_use_active_workspace_profile(tmp_path):
+    window = MainWindow.__new__(MainWindow)
+    active = RosWorkspace(name='gpt_ws', path=str(tmp_path / 'gpt_ws'))
+    window._workspace_registry = type(
+        'Registry',
+        (),
+        {'active_workspace': lambda self: active},
+    )()
+    window._selected_image = 'repo/image:tag'
+    window._docker_cp_config = {
+        'default': {
+            'host_to_container': [
+                {
+                    'host': '~/Downloads/workspace.rviz',
+                    'container': '/container/workspace.rviz',
+                }
+            ],
+            'container_to_host': [],
+        },
+        'repo/image:tag': {
+            'host_to_container': [
+                {
+                    'host': '~/Downloads/image.rviz',
+                    'container': '/container/image.rviz',
+                }
+            ],
+            'container_to_host': [],
+        },
+    }
+
+    assert window._workspace_docker_cp_config_path().name == (
+        'gpt_ws_docker_cp_image_tag.yaml'
+    )
+    assert window._docker_cp_entries('host_to_container') == [
+        {
+            'host': '~/Downloads/workspace.rviz',
+            'container': '/container/workspace.rviz',
+        },
+        {
+            'host': '~/Downloads/image.rviz',
+            'container': '/container/image.rviz',
+        },
     ]
 
 

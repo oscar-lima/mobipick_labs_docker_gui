@@ -207,6 +207,7 @@ Default per-user state locations:
 ~/.config/mobipick-labs-docker-gui/workspaces.yaml
 ~/.config/mobipick-labs-docker-gui/window_layouts/{workspace}.yaml
 ~/.config/mobipick-labs-docker-gui/docker_cp_image_tag.yaml
+~/.config/mobipick-labs-docker-gui/docker_cp_profiles/{workspace}_docker_cp_image_tag.yaml
 ~/.config/mobipick-labs-docker-gui/launch_sequences/
 ~/.config/mobipick-labs-docker-gui/profiles/
 ~/.local/share/mobipick-labs-docker-gui/recordings/
@@ -397,9 +398,13 @@ running.
 - `container_to_host` entries run from **Tools > Docker > Execute Docker cp**
   for the current running tab.
 
-User edits are saved to
-`~/.config/mobipick-labs-docker-gui/docker_cp_image_tag.yaml` and override
-bundled entries, including with empty profiles.
+When the Docker image default workspace is active, user edits are saved to
+`~/.config/mobipick-labs-docker-gui/docker_cp_image_tag.yaml`. When a ROS
+workspace is active, edits are saved to
+`~/.config/mobipick-labs-docker-gui/docker_cp_profiles/{workspace}_docker_cp_image_tag.yaml`.
+This lets each workspace keep separate runtime copy paths while still using
+the bundled image-keyed defaults as fallback entries. Empty profiles in the
+active writable file override bundled entries.
 
 ## Logging and reports
 

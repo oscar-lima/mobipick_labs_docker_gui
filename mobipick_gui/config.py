@@ -93,6 +93,7 @@ USER_CONFIG_FILE = default_user_config_path()
 USER_DATA_DIR = default_user_data_dir()
 LAUNCH_SEQUENCE_DIR = default_user_config_dir() / 'launch_sequences'
 BUTTON_PROFILE_DIR = default_user_config_dir() / 'button_profiles'
+DOCKER_CP_PROFILE_DIR = default_user_config_dir() / 'docker_cp_profiles'
 WINDOW_LAYOUT_FILE = default_user_config_dir() / 'window_layout.yaml'
 USER_DOCKER_CP_CONFIG_FILE = default_user_config_dir() / 'docker_cp_image_tag.yaml'
 
@@ -942,12 +943,19 @@ def _load_docker_cp_config_file(
     return config
 
 
-def load_docker_cp_config() -> Dict[str, Dict[str, list[dict]]]:
+def load_docker_cp_config(
+    user_config_path: str | Path | None = None,
+) -> Dict[str, Dict[str, list[dict]]]:
     """Load bundled docker cp mappings plus per-user overrides."""
     config: Dict[str, Dict[str, list[dict]]] = {}
+    user_path = (
+        Path(user_config_path).expanduser()
+        if user_config_path
+        else USER_DOCKER_CP_CONFIG_FILE
+    )
     for path, include_empty in (
         (DOCKER_CP_CONFIG_FILE, False),
-        (USER_DOCKER_CP_CONFIG_FILE, True),
+        (user_path, True),
     ):
         try:
             config.update(
@@ -961,23 +969,29 @@ def load_docker_cp_config() -> Dict[str, Dict[str, list[dict]]]:
     return config
 
 
-def load_docker_cp_user_config() -> Dict[str, Dict[str, list[dict]]]:
+def load_docker_cp_user_config(
+    path: str | Path | None = None,
+) -> Dict[str, Dict[str, list[dict]]]:
     """Load only the persistent per-user docker cp mappings."""
+    config_path = Path(path).expanduser() if path else USER_DOCKER_CP_CONFIG_FILE
     try:
         return _load_docker_cp_config_file(
-            USER_DOCKER_CP_CONFIG_FILE,
+            config_path,
             include_empty=True,
         )
     except Exception as exc:  # pragma: no cover - defensive logging
         print(
             'Warning: failed to load docker cp configuration from '
-            f'{USER_DOCKER_CP_CONFIG_FILE}: {exc}',
+            f'{config_path}: {exc}',
             file=sys.stderr,
         )
     return {}
 
 
-def save_docker_cp_config(config: Dict[str, Dict[str, list[dict]]]) -> Path:
+def save_docker_cp_config(
+    config: Dict[str, Dict[str, list[dict]]],
+    path: str | Path | None = None,
+) -> Path:
     """Persist docker cp mappings to the per-user configuration file."""
     normalized: Dict[str, Dict[str, list[dict]]] = {}
     for key, section in (config or {}).items():
@@ -997,19 +1011,24 @@ def save_docker_cp_config(config: Dict[str, Dict[str, list[dict]]]) -> Path:
             'container_to_host': container_to_host,
         }
 
-    USER_DOCKER_CP_CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
-    temporary = USER_DOCKER_CP_CONFIG_FILE.with_suffix(
-        USER_DOCKER_CP_CONFIG_FILE.suffix + '.tmp'
-    )
+    destination = Path(path).expanduser() if path else USER_DOCKER_CP_CONFIG_FILE
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_suffix(destination.suffix + '.tmp')
     with temporary.open('w', encoding='utf-8') as handle:
         yaml.safe_dump(normalized, handle, sort_keys=False)
-    temporary.replace(USER_DOCKER_CP_CONFIG_FILE)
-    return USER_DOCKER_CP_CONFIG_FILE
+    temporary.replace(destination)
+    return destination
 
 
 def writable_docker_cp_config_path() -> Path:
     """Return the per-user docker cp configuration path."""
     return USER_DOCKER_CP_CONFIG_FILE
+
+
+def writable_workspace_docker_cp_config_path(workspace_name: str) -> Path:
+    """Return a workspace-specific writable docker cp profile path."""
+    workspace = _safe_button_profile_part(workspace_name)
+    return DOCKER_CP_PROFILE_DIR / f'{workspace}_docker_cp_image_tag.yaml'
 
 
 def user_configuration_paths(
@@ -1035,6 +1054,7 @@ def user_configuration_paths(
         ('Workspace registry', registry_path),
         ('Window layouts', window_layout_path),
         ('Docker cp paths', USER_DOCKER_CP_CONFIG_FILE),
+        ('Workspace Docker cp profiles', DOCKER_CP_PROFILE_DIR),
         ('Button profiles', BUTTON_PROFILE_DIR),
         ('Auto-launch profiles', LAUNCH_SEQUENCE_DIR),
         ('Imported settings profiles', config_dir / 'profiles'),
@@ -1048,6 +1068,7 @@ __all__ = [
     'CONFIG_FILE',
     'DEFAULT_BUTTON_COMMANDS',
     'BUTTON_PROFILE_DIR',
+    'DOCKER_CP_PROFILE_DIR',
     'USER_CONFIG_FILE',
     'USER_DOCKER_CP_CONFIG_FILE',
     'USER_DATA_DIR',
@@ -1076,6 +1097,7 @@ __all__ = [
     'WINDOW_LAYOUT_FILE',
     'load_launch_sequence_plan',
     'writable_docker_cp_config_path',
+    'writable_workspace_docker_cp_config_path',
     'writable_button_config_path',
     'writable_workspace_button_config_path',
     'writable_launch_sequence_path',

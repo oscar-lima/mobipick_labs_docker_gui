@@ -18,6 +18,7 @@ from mobipick_gui.config import (
     user_configuration_paths,
     writable_button_config_path,
     writable_workspace_button_config_path,
+    writable_workspace_docker_cp_config_path,
     writable_launch_sequence_path,
 )
 
@@ -56,6 +57,7 @@ def test_user_configuration_paths_include_managed_state(tmp_path):
     assert labels['Window layouts'] == layout
     assert labels['GUI settings'].name == 'gui_settings.yaml'
     assert labels['Docker cp paths'].name == 'docker_cp_image_tag.yaml'
+    assert labels['Workspace Docker cp profiles'].name == 'docker_cp_profiles'
     assert labels['Button profiles'].name == 'button_profiles'
     assert labels['Auto-launch profiles'].name == 'launch_sequences'
 
@@ -232,6 +234,18 @@ def test_writable_workspace_button_config_path_keeps_existing_workspace_copy(
     assert writable_workspace_button_config_path(source, 'gpt_ws') == source
 
 
+def test_writable_workspace_docker_cp_config_path_is_workspace_specific(
+    monkeypatch,
+    tmp_path,
+):
+    profile_dir = tmp_path / 'docker_cp_profiles'
+    monkeypatch.setattr(config_module, 'DOCKER_CP_PROFILE_DIR', profile_dir)
+
+    assert writable_workspace_docker_cp_config_path('gpt ws') == (
+        profile_dir / 'gpt_ws_docker_cp_image_tag.yaml'
+    )
+
+
 def test_launch_sequence_persists_recording_start_delay(tmp_path):
     launches = tmp_path / 'launches.yaml'
 
@@ -380,6 +394,50 @@ image:tag:
     ]
 
 
+def test_docker_cp_can_load_workspace_specific_user_config(monkeypatch, tmp_path):
+    bundled = tmp_path / 'bundled.yaml'
+    global_user = tmp_path / 'global.yaml'
+    workspace_user = tmp_path / 'workspace.yaml'
+    bundled.write_text(
+        '''
+default:
+  host_to_container:
+    - host: ~/Downloads/bundled.rviz
+      container: /container/bundled.rviz
+''',
+        encoding='utf-8',
+    )
+    global_user.write_text(
+        '''
+default:
+  host_to_container:
+    - host: ~/Downloads/global.rviz
+      container: /container/global.rviz
+''',
+        encoding='utf-8',
+    )
+    workspace_user.write_text(
+        '''
+default:
+  host_to_container:
+    - host: ~/Downloads/workspace.rviz
+      container: /container/workspace.rviz
+''',
+        encoding='utf-8',
+    )
+    monkeypatch.setattr(config_module, 'DOCKER_CP_CONFIG_FILE', bundled)
+    monkeypatch.setattr(config_module, 'USER_DOCKER_CP_CONFIG_FILE', global_user)
+
+    config = load_docker_cp_config(workspace_user)
+
+    assert config['default']['host_to_container'] == [
+        {
+            'container': '/container/workspace.rviz',
+            'host': '~/Downloads/workspace.rviz',
+        }
+    ]
+
+
 def test_save_docker_cp_config_writes_user_file(monkeypatch, tmp_path):
     target = tmp_path / 'config' / 'docker_cp_image_tag.yaml'
     monkeypatch.setattr(config_module, 'USER_DOCKER_CP_CONFIG_FILE', target)
@@ -412,6 +470,28 @@ def test_save_docker_cp_config_writes_user_file(monkeypatch, tmp_path):
     assert 'host: ~/Downloads/source.rviz' in text
     assert 'container: /container/source.rviz' in text
     assert 'empty:' in text
+
+
+def test_save_docker_cp_config_accepts_workspace_path(tmp_path):
+    target = tmp_path / 'docker_cp_profiles' / 'gpt_ws_docker_cp_image_tag.yaml'
+
+    saved = save_docker_cp_config(
+        {
+            'default': {
+                'host_to_container': [
+                    {
+                        'host': '~/Downloads/source.rviz',
+                        'container': '/container/source.rviz',
+                    },
+                ],
+                'container_to_host': [],
+            },
+        },
+        target,
+    )
+
+    assert saved == target
+    assert target.is_file()
 
 
 def test_empty_docker_cp_user_profile_disables_bundled_default(

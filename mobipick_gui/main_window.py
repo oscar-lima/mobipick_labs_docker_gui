@@ -77,6 +77,7 @@ from .config import (
     writable_docker_cp_config_path,
     writable_launch_sequence_path,
     writable_workspace_button_config_path,
+    writable_workspace_docker_cp_config_path,
 )
 from .documentation_dialog import DocumentationDialog
 from .external_links import open_external_url
@@ -1126,7 +1127,9 @@ class MainWindow(QMainWindow):
         self._workspace_dialog: WorkspaceManagerDialog | None = None
         self._setup_wizard_dialog: ImageSetupWizard | None = None
         self._setup_wizard_auto_scheduled = False
-        self._docker_cp_config = load_docker_cp_config()
+        self._docker_cp_config = load_docker_cp_config(
+            self._workspace_docker_cp_config_path()
+        )
         self._synced_container_refs: set[str] = set()
         self._toggle_states: dict[str, str] = {}
         self._last_log_origin: dict[str, str] = {}
@@ -2223,6 +2226,12 @@ class MainWindow(QMainWindow):
             return writable_button_config_path(source_path)
         return writable_workspace_button_config_path(source_path, workspace.name)
 
+    def _workspace_docker_cp_config_path(self) -> Path:
+        workspace = self._workspace_registry.active_workspace()
+        if workspace is None:
+            return writable_docker_cp_config_path()
+        return writable_workspace_docker_cp_config_path(workspace.name)
+
     def _open_button_profile_dialog(self) -> None:
         if self._workspace_processes_running():
             QMessageBox.warning(
@@ -3124,6 +3133,10 @@ class MainWindow(QMainWindow):
             self._workspace_button_config_path(),
             self._workspace_launch_config_path(),
         )
+        self._docker_cp_config = load_docker_cp_config(
+            self._workspace_docker_cp_config_path()
+        )
+        self._synced_container_refs.clear()
         self._refresh_launch_plan_settings()
         terminal_index = self._top_controls_layout.indexOf(
             self.terminal_button
@@ -8102,17 +8115,21 @@ CMD ["bash"]
         self._run_command_sequence(commands, log_key=key)
 
     def _open_docker_cp_config_dialog(self):
+        save_path = self._workspace_docker_cp_config_path()
         dialog = DockerCpConfigDialog(
             self._docker_cp_config,
-            load_docker_cp_user_config(),
+            load_docker_cp_user_config(save_path),
             self._selected_image,
-            writable_docker_cp_config_path(),
+            save_path,
             self,
         )
         if dialog.exec_() != QDialog.Accepted:
             return
         try:
-            saved_path = save_docker_cp_config(dialog.docker_cp_config())
+            saved_path = save_docker_cp_config(
+                dialog.docker_cp_config(),
+                save_path,
+            )
         except Exception as exc:
             QMessageBox.warning(
                 self,
@@ -8120,7 +8137,7 @@ CMD ["bash"]
                 f'Failed to save docker cp paths:\n{exc}',
             )
             return
-        self._docker_cp_config = load_docker_cp_config()
+        self._docker_cp_config = load_docker_cp_config(save_path)
         self._synced_container_refs.clear()
         self._log_info(f'docker cp paths saved to {saved_path}')
         QMessageBox.information(
