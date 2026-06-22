@@ -44,6 +44,7 @@ def test_wizard_collects_source_workspace_selection(tmp_path):
         source_branch='noetic',
         source_image='ozkrelo/x_mobipick_labs:oscar_user_from_1.2',
         install_source_default=True,
+        image_blacklist=['*n8n*'],
     )
 
     selection = wizard.selection()
@@ -54,6 +55,7 @@ def test_wizard_collects_source_workspace_selection(tmp_path):
     assert selection.source_repository.endswith('mobipick_labs.git')
     assert selection.source_branch == 'noetic'
     assert selection.source_image == 'ozkrelo/x_mobipick_labs:oscar_user_from_1.2'
+    assert selection.image_blacklist == ['*n8n*']
 
     wizard._skip_step(wizard.install_source_workspace)
 
@@ -153,6 +155,7 @@ def test_setup_wizard_persists_custom_image_profile(
     updates = saved['updates']
     assert updates['setup_wizard']['completed'] is True
     assert updates['images']['default'] == 'ozkrelo/x_mobipick_labs:noetic-v1.1'
+    assert updates['images']['blacklist'] == []
     assert any(
         profile.get('ref') == 'ozkrelo/x_mobipick_labs:gpt_ws_from_oscar_user'
         and profile.get('compatible_workspaces') == ['gpt_ws']
@@ -163,6 +166,69 @@ def test_setup_wizard_persists_custom_image_profile(
 
     window.deleteLater()
     app.processEvents()
+
+
+def test_discover_filtered_image_records_skips_blacklist(monkeypatch):
+    window = MainWindow.__new__(MainWindow)
+    window._images_cfg = {
+        'discovery_filters': [],
+        'include_none_tag': False,
+        'blacklist': ['*n8n*'],
+    }
+    window._console_log = lambda *_args, **_kwargs: None
+    window._prepare_run_env = lambda kwargs: kwargs
+
+    monkeypatch.setattr(
+        main_window_module.subprocess,
+        'run',
+        lambda *args, **kwargs: type(
+            'Result',
+            (),
+            {
+                'returncode': 0,
+                'stdout': (
+                    '{"Repository":"docker.n8n.io/n8nio/n8n","Tag":"latest"}\n'
+                    '{"Repository":"ozkrelo/x_mobipick_labs","Tag":"gpt"}\n'
+                ),
+            },
+        )(),
+    )
+
+    records, error = window._discover_filtered_image_records()
+
+    assert error is None
+    assert [record['ref'] for record in records] == [
+        'ozkrelo/x_mobipick_labs:gpt'
+    ]
+
+
+def test_image_blacklist_dialog_saves_patterns(monkeypatch):
+    window = MainWindow.__new__(MainWindow)
+    images_cfg = copy.deepcopy(CONFIG['images'])
+    images_cfg['blacklist'] = []
+    monkeypatch.setitem(CONFIG, 'images', images_cfg)
+    window._images_cfg = images_cfg
+    window._load_available_images = lambda show_feedback=False: None
+    window._log_info = lambda *_args, **_kwargs: None
+    saved = {}
+
+    monkeypatch.setattr(
+        main_window_module.QInputDialog,
+        'getMultiLineText',
+        lambda *args, **kwargs: ('*n8n*\nrepo/ignore:tag', True),
+    )
+    monkeypatch.setattr(
+        main_window_module,
+        'save_user_config_update',
+        lambda updates: saved.setdefault('updates', updates),
+    )
+
+    window._open_image_blacklist_dialog()
+
+    assert saved['updates'] == {
+        'images': {'blacklist': ['*n8n*', 'repo/ignore:tag']}
+    }
+    assert window._images_cfg['blacklist'] == ['*n8n*', 'repo/ignore:tag']
 
 
 def test_source_workspace_install_registers_workspace_and_streams_in_color(

@@ -85,6 +85,7 @@ setup_wizard:
 images:
   default: "ozkrelo/x_mobipick_labs:noetic-v1.1" # portable base image selected by default
   discovery_filters: ["mobipick"]                 # repository substrings used to filter docker images for the dropdown
+  blacklist: []                               # image refs/patterns ignored by setup and image discovery, e.g. ["*n8n*"]
   include_none_tag: false                     # include dangling (<none>) tags in the image list when true
   related_container_keywords: ["mobipick", "mobipick_cmd", "mobipick-run", "rqt", "rviz"]  # container name fragments treated as related
   related_image_keywords: ["mobipick_labs"]  # extra image substrings treated as related for cleanup

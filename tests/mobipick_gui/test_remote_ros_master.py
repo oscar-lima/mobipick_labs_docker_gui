@@ -182,7 +182,7 @@ def test_docker_cp_setup_containers_include_workspace_matched_docker_ps(
         'Workspace match container (matched-container, repo/matched:tag)',
         'abc123',
     )
-    assert ('other-container: repo/other:tag', 'def456') in options
+    assert ('other-container: repo/other:tag', 'def456') not in options
 
 
 def test_docker_cp_setup_containers_include_workspace_match_image(
@@ -215,7 +215,90 @@ def test_docker_cp_setup_containers_include_workspace_match_image(
         f'{main_window_module.DockerCpConfigDialog.IMAGE_SETUP_PREFIX}'
         'repo/gpt:tag',
     )
-    assert ('other-container: repo/other:tag', 'def456') in options
+    assert ('other-container: repo/other:tag', 'def456') not in options
+
+
+def test_docker_cp_setup_container_options_use_requested_workspace(
+    monkeypatch,
+):
+    window = MainWindow.__new__(MainWindow)
+    window._workspace_registry = SimpleNamespace(
+        active='clean_mobipick_labs_ws',
+        image_for=lambda name, default='': '',
+    )
+    window._selected_image = ''
+    window._image_choices = ['repo/gpt:tag']
+    window.tasks = {}
+    window._console_log = lambda *_args, **_kwargs: None
+    window._current_tab_key = lambda: ''
+    window._image_profiles = [
+        {
+            'ref': 'repo/gpt:tag',
+            'compatible_workspaces': ['gpt_ws'],
+        }
+    ]
+
+    monkeypatch.setattr(
+        main_window_module.subprocess,
+        'run',
+        lambda *args, **kwargs: SimpleNamespace(stdout=''),
+    )
+
+    options = window._docker_cp_setup_container_options('gpt_ws')
+
+    assert options == [
+        (
+            'Workspace match image (repo/gpt:tag)',
+            f'{main_window_module.DockerCpConfigDialog.IMAGE_SETUP_PREFIX}'
+            'repo/gpt:tag',
+        )
+    ]
+
+
+def test_docker_cp_setup_container_options_skip_blacklisted_images(
+    monkeypatch,
+):
+    window = MainWindow.__new__(MainWindow)
+    window._workspace_registry = SimpleNamespace(
+        active='gpt_ws',
+        image_for=lambda name, default='': '',
+    )
+    window._selected_image = ''
+    window._image_choices = ['repo/gpt:tag', 'docker.n8n.io/n8nio/n8n:latest']
+    window._images_cfg = {'blacklist': ['*n8n*']}
+    window.tasks = {}
+    window._console_log = lambda *_args, **_kwargs: None
+    window._current_tab_key = lambda: ''
+    window._image_profiles = [
+        {
+            'ref': 'repo/gpt:tag',
+            'compatible_workspaces': ['gpt_ws'],
+        },
+        {
+            'ref': 'docker.n8n.io/n8nio/n8n:latest',
+            'compatible_workspaces': ['gpt_ws'],
+        },
+    ]
+
+    monkeypatch.setattr(
+        main_window_module.subprocess,
+        'run',
+        lambda *args, **kwargs: SimpleNamespace(
+            stdout=(
+                'abc123\trepo/gpt:tag\tmatched-container\n'
+                'def456\tdocker.n8n.io/n8nio/n8n:latest\tn8n\n'
+            )
+        ),
+    )
+
+    options = window._docker_cp_setup_container_options('gpt_ws')
+
+    assert (
+        'Workspace match image (repo/gpt:tag)',
+        f'{main_window_module.DockerCpConfigDialog.IMAGE_SETUP_PREFIX}'
+        'repo/gpt:tag',
+    ) in options
+    assert all('n8n' not in label and ref != 'def456' for label, ref in options)
 
 
 def test_docker_cp_container_path_from_setup_can_use_image(monkeypatch):

@@ -199,6 +199,9 @@ may include:
 The image tooltip shows the container user and whether host workspace mounting
 is enabled.
 
+Image refs matching `images.blacklist` patterns are ignored by image discovery
+and setup helpers.
+
 When switching ROS 1 workspaces, the GUI selects the first available Docker
 image marked as a **workspace match** for that workspace. If no match is
 available, it falls back to the workspace's saved image or the GUI default.
@@ -295,6 +298,8 @@ The tab search is separate from the documentation window search.
   defaults, building host-user images, and optionally cloning and building
   `mobipick_labs` from source in a host-mounted workspace. Each optional wizard
   page has **Skip This Step**.
+- **Configure Image Blacklist** edits image refs or patterns that should be
+  ignored by setup, image discovery, and Docker cp path setup.
 - **Build Custom Image** opens the setup flow with the host-user development
   image option enabled.
 - **Commit Current Tab** creates a Docker image from the running container

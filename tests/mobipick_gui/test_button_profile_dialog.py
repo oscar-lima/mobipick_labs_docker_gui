@@ -5,7 +5,11 @@ os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
 from PyQt5.QtWidgets import QApplication, QDialog, QHeaderView, QSizePolicy
 
-from mobipick_gui.config import save_button_layout
+from mobipick_gui.config import (
+    load_docker_cp_config,
+    save_button_layout,
+    save_docker_cp_config,
+)
 import mobipick_gui.main_window as main_window_module
 from mobipick_gui.main_window import (
     ButtonProfileDialog,
@@ -135,12 +139,16 @@ def test_docker_cp_add_row_opens_path_dialog(monkeypatch, tmp_path):
     start_path = tmp_path / 'master' / 'demo_ws'
     start_path.mkdir(parents=True)
     captured = {}
+    provider_calls = []
     dialog = DockerCpConfigDialog(
         {},
         {},
         'demo_ws',
         ['demo_ws'],
         tmp_path / 'docker_cp.yaml',
+        container_options_provider=lambda workspace: (
+            provider_calls.append(workspace) or [('match', 'container-id')]
+        ),
         host_start_provider=lambda workspace: start_path,
     )
 
@@ -166,6 +174,69 @@ def test_docker_cp_add_row_opens_path_dialog(monkeypatch, tmp_path):
         '/container/source.rviz'
     )
     assert captured['host_start_path'] == start_path
+    assert captured['container_options_provider']() == [
+        ('match', 'container-id')
+    ]
+    assert provider_calls == ['demo_ws']
+
+    dialog.deleteLater()
+    app.processEvents()
+
+
+def test_docker_cp_dialog_updates_workspace_config_as_rows_change(tmp_path):
+    app = QApplication.instance() or QApplication([])
+    dialog = DockerCpConfigDialog(
+        {},
+        {},
+        'clean_mobipick_labs_ws',
+        ['clean_mobipick_labs_ws'],
+        tmp_path / 'docker_cp.yaml',
+    )
+
+    dialog._add_row(
+        dialog.host_to_container_table,
+        '/host/pick_n_place.rviz',
+        '/container/pick_n_place.rviz',
+    )
+
+    config = dialog.docker_cp_config()
+
+    assert config['clean_mobipick_labs_ws']['host_to_container'] == [
+        {
+            'host': '/host/pick_n_place.rviz',
+            'container': '/container/pick_n_place.rviz',
+        }
+    ]
+
+    dialog.deleteLater()
+    app.processEvents()
+
+
+def test_docker_cp_dialog_workspace_config_round_trips_to_yaml(tmp_path):
+    app = QApplication.instance() or QApplication([])
+    target = tmp_path / 'clean_mobipick_labs_ws_docker_cp_image_tag.yaml'
+    dialog = DockerCpConfigDialog(
+        {},
+        {},
+        'clean_mobipick_labs_ws',
+        ['clean_mobipick_labs_ws'],
+        target,
+    )
+    dialog._add_row(
+        dialog.host_to_container_table,
+        '/host/pick_n_place.rviz',
+        '/container/pick_n_place.rviz',
+    )
+
+    save_docker_cp_config(dialog.docker_cp_config(), target)
+    loaded = load_docker_cp_config(target)
+
+    assert loaded['clean_mobipick_labs_ws']['host_to_container'] == [
+        {
+            'host': '/host/pick_n_place.rviz',
+            'container': '/container/pick_n_place.rviz',
+        }
+    ]
 
     dialog.deleteLater()
     app.processEvents()

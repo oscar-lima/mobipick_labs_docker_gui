@@ -706,7 +706,7 @@ class DockerCpConfigDialog(QDialog):
         selected_workspace: str,
         workspace_names: list[str],
         save_path: Path,
-        container_options_provider: Callable[[], list[tuple[str, str]]] | None = None,
+        container_options_provider: Callable[..., list[tuple[str, str]]] | None = None,
         container_path_provider: Callable[[str, str], str] | None = None,
         host_start_provider: Callable[[str], Path] | None = None,
         parent: QWidget | None = None,
@@ -725,6 +725,7 @@ class DockerCpConfigDialog(QDialog):
         self._container_options_provider = container_options_provider
         self._container_path_provider = container_path_provider
         self._host_start_provider = host_start_provider
+        self._loading_profile = False
 
         root = QVBoxLayout(self)
 
@@ -836,7 +837,7 @@ class DockerCpConfigDialog(QDialog):
             container_path=self._default_container_path(
                 self._selected_workspace_key()
             ),
-            container_options_provider=self._container_options_provider,
+            container_options_provider=self._container_options_for_selected_workspace,
             container_path_provider=self._container_path_provider,
             parent=self,
         )
@@ -844,6 +845,15 @@ class DockerCpConfigDialog(QDialog):
             return
         first, second = dialog.paths()
         self._add_row(table, first, second)
+
+    def _container_options_for_selected_workspace(self) -> list[tuple[str, str]]:
+        if not self._container_options_provider:
+            return []
+        workspace_key = self._selected_workspace_key()
+        try:
+            return self._container_options_provider(workspace_key)
+        except TypeError:
+            return self._container_options_provider()
 
     @classmethod
     def _default_container_path(cls, workspace_name: str = '') -> str:
@@ -873,6 +883,7 @@ class DockerCpConfigDialog(QDialog):
         return copy.deepcopy(self._effective_config.get(key) or {})
 
     def _load_selected_profile(self) -> None:
+        self._loading_profile = True
         key = self._selected_workspace_key()
         section = self._profile_section(key)
         if not section and key != 'default':
@@ -887,7 +898,21 @@ class DockerCpConfigDialog(QDialog):
             section.get('container_to_host', []),
             host_first=False,
         )
+        self._loading_profile = False
         self._update_preview()
+
+    def _store_current_profile(self) -> bool:
+        if getattr(self, '_loading_profile', False):
+            return False
+        key = self._selected_workspace_key()
+        if not key:
+            return False
+        try:
+            section = self._current_section()
+        except ValueError:
+            return False
+        self._user_config[key] = section
+        return True
 
     def _set_table_entries(
         self,
@@ -982,8 +1007,10 @@ class DockerCpConfigDialog(QDialog):
         if len(lines) == 1:
             lines.append('No docker cp commands configured for this profile.')
         self.preview.setPlainText('\n'.join(lines))
+        self._store_current_profile()
 
     def docker_cp_config(self) -> dict[str, dict[str, list[dict]]]:
+        self._store_current_profile()
         return copy.deepcopy(self._user_config)
 
     def accept(self):
@@ -1001,6 +1028,7 @@ class DockerCpConfigDialog(QDialog):
             QMessageBox.warning(self, 'Docker cp Paths', str(exc))
             return
         self._user_config[key] = section
+        self._store_current_profile()
         super().accept()
 
 
@@ -1967,6 +1995,12 @@ class MainWindow(QMainWindow):
             docker_menu,
             'Setup Wizard',
             lambda _checked=False: self._open_setup_wizard(),
+        )
+        self._add_menu_action(
+            docker_menu,
+            'Configure Image Blacklist',
+            self._open_image_blacklist_dialog,
+            tooltip='Ignore unrelated Docker images during setup and discovery',
         )
         self._add_menu_action(
             docker_menu,
@@ -3745,6 +3779,7 @@ class MainWindow(QMainWindow):
             install_source_default=self._bool_config_value(
                 cfg.get('source_install_by_default', False)
             ),
+            image_blacklist=self._image_blacklist_patterns(),
             parent=self,
         )
         wizard.accepted.connect(lambda: self._apply_setup_wizard(wizard.selection()))
@@ -3806,6 +3841,64 @@ class MainWindow(QMainWindow):
                 images.append(image)
         return images
 
+    def _image_blacklist_patterns(self) -> list[str]:
+        images_cfg = self.__dict__.get('_images_cfg', {}) or {}
+        return self._normalize_image_list(images_cfg.get('blacklist'))
+
+    @staticmethod
+    def _image_ref_matches_pattern(image_ref: str, pattern: str) -> bool:
+        image_text = str(image_ref or '').strip().lower()
+        pattern_text = str(pattern or '').strip().lower()
+        if not image_text or not pattern_text:
+            return False
+        if fnmatchcase(image_text, pattern_text):
+            return True
+        if not any(char in pattern_text for char in '*?['):
+            return pattern_text in image_text
+        return False
+
+    def _image_ref_blacklisted(
+        self,
+        image_ref: str,
+        patterns: list[str] | None = None,
+    ) -> bool:
+        active_patterns = (
+            patterns
+            if patterns is not None
+            else self._image_blacklist_patterns()
+        )
+        return any(
+            self._image_ref_matches_pattern(image_ref, pattern)
+            for pattern in active_patterns
+        )
+
+    def _open_image_blacklist_dialog(self) -> None:
+        text, accepted = QInputDialog.getMultiLineText(
+            self,
+            'Docker Image Blacklist',
+            (
+                'Image refs or patterns to ignore during setup and image '
+                'discovery. Use one entry per line, for example *n8n*.'
+            ),
+            '\n'.join(self._image_blacklist_patterns()),
+        )
+        if not accepted:
+            return
+        patterns = self._normalize_image_list(text)
+        try:
+            save_user_config_update({'images': {'blacklist': patterns}})
+        except OSError as exc:
+            QMessageBox.warning(
+                self,
+                'Docker Image Blacklist',
+                f'Failed to save image blacklist:\n{exc}',
+            )
+            return
+        self._images_cfg['blacklist'] = patterns
+        CONFIG['images']['blacklist'] = patterns
+        self._load_available_images(show_feedback=False)
+        self._log_info('docker image blacklist updated')
+
     def _apply_setup_wizard(self, selection: SetupWizardSelection) -> None:
         if selection.default_image:
             self._images_cfg['default'] = selection.default_image
@@ -3854,6 +3947,7 @@ class MainWindow(QMainWindow):
             },
             'images': {
                 'default': selection.default_image,
+                'blacklist': list(selection.image_blacklist),
             },
         }
         if profile:
@@ -5009,6 +5103,8 @@ CMD ["bash"]
             if len(parts) != 3:
                 continue
             container_id, image, name = (part.strip() for part in parts)
+            if self._image_ref_blacklisted(image):
+                continue
             if container_id:
                 records.append(
                     {
@@ -5048,11 +5144,18 @@ CMD ["bash"]
             dict.fromkeys(
                 image.strip()
                 for image in candidates
-                if isinstance(image, str) and image.strip()
+                if (
+                    isinstance(image, str)
+                    and image.strip()
+                    and not self._image_ref_blacklisted(image)
+                )
             )
         )
 
-    def _docker_cp_setup_container_options(self) -> list[tuple[str, str]]:
+    def _docker_cp_setup_container_options(
+        self,
+        workspace_name: str | None = None,
+    ) -> list[tuple[str, str]]:
         options: list[tuple[str, str]] = []
         seen: set[str] = set()
 
@@ -5072,8 +5175,14 @@ CMD ["bash"]
                 return
             add_record(label, container_ref)
 
-        workspace_name = self._workspace_registry.active or ''
-        for image_ref in self._docker_cp_workspace_match_images(workspace_name):
+        workspace_key = (
+            self._workspace_registry.active
+            if workspace_name is None
+            else str(workspace_name or '').strip()
+        )
+        if workspace_key == 'default':
+            workspace_key = ''
+        for image_ref in self._docker_cp_workspace_match_images(workspace_key):
             add_record(
                 f'Workspace match image ({image_ref})',
                 f'{DockerCpConfigDialog.IMAGE_SETUP_PREFIX}{image_ref}',
@@ -5082,7 +5191,7 @@ CMD ["bash"]
         records = self._docker_ps_container_records()
         for record in records:
             image = record.get('image', '')
-            if self._image_compatible_with_workspace(image, workspace_name) is True:
+            if self._image_compatible_with_workspace(image, workspace_key) is True:
                 label = (
                     'Workspace match container '
                     f'({record.get("name") or record["id"]}, {image})'
@@ -5096,12 +5205,6 @@ CMD ["bash"]
             add_tab(f'Workspace match container ({key})', self.tasks.get(key))
         for key, tab in self.tasks.items():
             add_tab(f'{key}: {getattr(tab, "container_name", "")}', tab)
-        for record in records:
-            label = (
-                f'{record.get("name") or record["id"]}: '
-                f'{record.get("image") or "unknown image"}'
-            )
-            add_record(label, record['id'])
         return options
 
     def _docker_cp_container_path_from_setup(
@@ -5398,6 +5501,8 @@ CMD ["bash"]
                 continue
             ref = f'{repo}:{tag}' if tag else repo
             if not ref:
+                continue
+            if self._image_ref_blacklisted(ref):
                 continue
             if filters and not any(f in ref.lower() for f in filters):
                 continue

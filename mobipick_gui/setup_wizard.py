@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Iterable
 
 from PyQt5.QtWidgets import (
@@ -34,6 +34,7 @@ class SetupWizardSelection:
     target_image: str
     compatible_workspace: str
     remember_completion: bool
+    image_blacklist: list[str] = field(default_factory=list)
     install_source_workspace: bool = False
     source_master_folder: str = ''
     source_workspace_name: str = ''
@@ -66,6 +67,7 @@ class ImageSetupWizard(QWizard):
         source_branch: str = '',
         source_image: str = '',
         install_source_default: bool = False,
+        image_blacklist: Iterable[str] = (),
         parent=None,
     ):
         super().__init__(parent)
@@ -131,6 +133,11 @@ class ImageSetupWizard(QWizard):
         image_layout.addRow('Images to pull:', self.public_images_edit)
         self.default_image_edit = QLineEdit(default_image)
         image_layout.addRow('Default image:', self.default_image_edit)
+        self.image_blacklist_edit = QTextEdit()
+        self.image_blacklist_edit.setAcceptRichText(False)
+        self.image_blacklist_edit.setPlainText('\n'.join(image_blacklist))
+        self.image_blacklist_edit.setMinimumHeight(80)
+        image_layout.addRow('Image blacklist:', self.image_blacklist_edit)
         self._add_skip_button(image_layout, self.pull_public_images)
         self.addPage(image_page)
 
@@ -211,6 +218,9 @@ class ImageSetupWizard(QWizard):
             target_image=self.target_image_edit.text().strip(),
             compatible_workspace=str(self.workspace_combo.currentData() or ''),
             remember_completion=self.remember_completion.isChecked(),
+            image_blacklist=self._parse_image_list(
+                self.image_blacklist_edit.toPlainText()
+            ),
             install_source_workspace=self.install_source_workspace.isChecked(),
             source_master_folder=self.source_master_folder_edit.text().strip(),
             source_workspace_name=self.source_workspace_name_edit.text().strip(),

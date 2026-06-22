@@ -267,6 +267,7 @@ CONFIG_DEFAULTS: Dict[str, Dict] = {
     'images': {
         'default': 'ozkrelo/x_mobipick_labs:noetic-v1.1',
         'discovery_filters': ['mobipick'],
+        'blacklist': [],
         'include_none_tag': False,
         'related_container_keywords': ['mobipick', 'mobipick_cmd', 'mobipick-run', 'rqt', 'rviz'],
         'related_image_keywords': ['mobipick_labs'],
