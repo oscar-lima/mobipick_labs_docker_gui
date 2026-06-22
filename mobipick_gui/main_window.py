@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Callable, Match, Optional
 from urllib.parse import urlsplit
 
+import yaml
 from PyQt5.QtCore import QEvent, QIODevice, QPoint, QProcess, QProcessEnvironment, QTimer, Qt
 from PyQt5.QtGui import QColor, QGuiApplication, QPixmap, QTextCursor, QTextDocument
 from PyQt5.QtWidgets import (
@@ -71,6 +72,7 @@ from .config import (
     save_docker_cp_config,
     save_launch_sequence_plan,
     save_user_config_update,
+    user_configuration_paths,
     writable_button_config_path,
     writable_docker_cp_config_path,
     writable_launch_sequence_path,
@@ -78,6 +80,7 @@ from .config import (
 )
 from .documentation_dialog import DocumentationDialog
 from .external_links import open_external_url
+from .settings_transfer import export_settings, import_settings
 
 CONTAINER_SCRIPTS_DIR = str(
     CONFIG.get('process', {}).get('container_scripts_dir', '/scripts_430ofkjl04fsw')
@@ -1132,6 +1135,7 @@ class MainWindow(QMainWindow):
         self._default_image_dialog_shown = False
         self._bug_report_dialog: BugReportDialog | None = None
         self._documentation_dialog: DocumentationDialog | None = None
+        self._config_paths_dialog: QDialog | None = None
         self._view_actions: dict[str, QAction] = {}
         self._active_menu_tooltip_action: QAction | None = None
         self._create_menu_bar()
@@ -1535,6 +1539,27 @@ class MainWindow(QMainWindow):
             self._build_active_workspace,
         )
 
+        settings_menu = self._add_menu(menu_bar, 'Settings')
+        self._add_menu_action(
+            settings_menu,
+            'Export All Settings...',
+            self._export_all_settings,
+            tooltip='Save portable GUI settings to one YAML file',
+        )
+        self._add_menu_action(
+            settings_menu,
+            'Import All Settings...',
+            self._import_all_settings,
+            tooltip='Load portable GUI settings from one YAML file',
+        )
+        settings_menu.addSeparator()
+        self._add_menu_action(
+            settings_menu,
+            'Show Configuration Paths',
+            self._show_configuration_paths,
+            tooltip='Show writable config and data paths managed by the GUI',
+        )
+
         tools_menu = self._add_menu(menu_bar, 'Tools')
         self._add_menu_action(
             tools_menu,
@@ -1702,6 +1727,131 @@ class MainWindow(QMainWindow):
         action.toggled.connect(slot)
         menu.addAction(action)
         return action
+
+    def _export_all_settings(self) -> None:
+        selected, _ = QFileDialog.getSaveFileName(
+            self,
+            'Export Mobipick GUI settings',
+            str(Path.home() / 'mobipick-gui-settings.yaml'),
+            'YAML files (*.yaml *.yml)',
+        )
+        if not selected:
+            return
+        try:
+            export_settings(Path(selected), self._workspace_registry)
+        except (OSError, ValueError) as exc:
+            QMessageBox.critical(self, 'Export Settings', str(exc))
+            return
+        QMessageBox.information(
+            self,
+            'Export Settings',
+            f'Settings exported to:\n{selected}',
+        )
+
+    def _import_all_settings(self) -> None:
+        if self._workspace_processes_running():
+            QMessageBox.warning(
+                self,
+                'Import Settings',
+                'Stop running workspace processes before importing settings.',
+            )
+            return
+        selected, _ = QFileDialog.getOpenFileName(
+            self,
+            'Import Mobipick GUI settings',
+            str(Path.home()),
+            'YAML files (*.yaml *.yml);;All files (*)',
+        )
+        if not selected:
+            return
+        start = self._workspace_registry.master_folder or str(Path.home())
+        master = QFileDialog.getExistingDirectory(
+            self,
+            'Choose the workspace master folder for imported settings',
+            start,
+        )
+        if not master:
+            return
+        answer = QMessageBox.question(
+            self,
+            'Import Settings',
+            'Importing will replace the configured workspace list and active '
+            'workspace. All current tabs and log output will be discarded. '
+            'Workspace files on disk will not be changed.\n\n'
+            'Continue?',
+        )
+        if answer != QMessageBox.Yes:
+            return
+        try:
+            import_settings(
+                Path(selected),
+                self._workspace_registry,
+                master_folder=Path(master),
+            )
+        except (OSError, ValueError, yaml.YAMLError) as exc:
+            QMessageBox.critical(self, 'Import Settings', str(exc))
+            return
+        self._apply_imported_workspace_settings()
+        QMessageBox.information(
+            self,
+            'Import Settings',
+            'Settings imported. Restart the GUI to apply general GUI '
+            'configuration overrides.',
+        )
+
+    def _show_configuration_paths(self) -> None:
+        if self._config_paths_dialog:
+            self._config_paths_dialog.raise_()
+            self._config_paths_dialog.activateWindow()
+            return
+        dialog = QDialog(self)
+        dialog.setWindowTitle('Configuration Paths')
+        dialog.resize(760, 420)
+        layout = QVBoxLayout(dialog)
+        legend = QLabel(
+            'These paths are affected by the GUI. Manual editing is not '
+            'recommended.'
+        )
+        legend.setWordWrap(True)
+        layout.addWidget(legend)
+
+        paths = QTextEdit()
+        paths.setReadOnly(True)
+        paths.setLineWrapMode(QTextEdit.NoWrap)
+        paths.setPlainText(self._configuration_paths_text())
+        layout.addWidget(paths)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Close)
+        buttons.rejected.connect(dialog.close)
+        layout.addWidget(buttons)
+
+        dialog.finished.connect(self._on_configuration_paths_closed)
+        self._config_paths_dialog = dialog
+        dialog.show()
+
+    def _configuration_paths_text(self) -> str:
+        rows = user_configuration_paths(
+            workspace_registry_path=self._workspace_registry.path,
+            window_layout_template=self._window_layout_path_template,
+        )
+        active = self._workspace_registry.active_workspace()
+        if active:
+            if active.button_config:
+                rows.append(
+                    ('Active workspace button profile', Path(active.button_config))
+                )
+            if active.launch_config:
+                rows.append(
+                    ('Active workspace auto launch', Path(active.launch_config))
+                )
+        width = max(len(label) for label, _path in rows)
+        return '\n'.join(
+            f'{label:{width}}  {Path(path).expanduser()}'
+            for label, path in rows
+        )
+
+    def _on_configuration_paths_closed(self, _result: int) -> None:
+        self._config_paths_dialog = None
 
     def _apply_view_action_visibility(self) -> None:
         recording = self._view_actions.get('recording')

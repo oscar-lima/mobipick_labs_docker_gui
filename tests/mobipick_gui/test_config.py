@@ -15,6 +15,7 @@ from mobipick_gui.config import (
     save_button_layout,
     save_docker_cp_config,
     save_launch_sequence_plan,
+    user_configuration_paths,
     writable_button_config_path,
     writable_workspace_button_config_path,
     writable_launch_sequence_path,
@@ -37,6 +38,26 @@ def test_user_state_uses_xdg_directories(monkeypatch, tmp_path):
     assert default_user_data_dir() == (
         data_home / 'mobipick-labs-docker-gui'
     )
+
+
+def test_user_configuration_paths_include_managed_state(tmp_path):
+    registry = tmp_path / 'workspaces.yaml'
+    layout = tmp_path / 'layouts' / '{workspace}.yaml'
+
+    labels = {
+        label: path
+        for label, path in user_configuration_paths(
+            workspace_registry_path=registry,
+            window_layout_template=layout,
+        )
+    }
+
+    assert labels['Workspace registry'] == registry
+    assert labels['Window layouts'] == layout
+    assert labels['GUI settings'].name == 'gui_settings.yaml'
+    assert labels['Docker cp paths'].name == 'docker_cp_image_tag.yaml'
+    assert labels['Button profiles'].name == 'button_profiles'
+    assert labels['Auto-launch profiles'].name == 'launch_sequences'
 
 
 def test_bundled_gui_settings_exclude_private_runtime_state():

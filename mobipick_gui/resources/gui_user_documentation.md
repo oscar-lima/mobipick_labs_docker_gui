@@ -263,6 +263,18 @@ The tab search is separate from the documentation window search.
 - **Build Active Workspace** builds the currently selected workspace, if one is
   active and the selected image supports host workspaces.
 
+## Settings menu
+
+- **Export All Settings...** saves a portable YAML file containing GUI settings,
+  the workspace registry, and embedded workspace button and auto-launch
+  profiles. Use this before moving to a new PC.
+- **Import All Settings...** loads a portable settings file, asks for the new
+  workspace master folder, and remaps imported workspaces under that folder.
+  Stop running workspace processes before importing.
+- **Show Configuration Paths** opens a separate window listing config and data
+  paths managed by the GUI. The window notes that manual editing is not
+  recommended.
+
 ## Tools menu
 
 - **Configure Toolbar Buttons** edits the active workspace toolbar button

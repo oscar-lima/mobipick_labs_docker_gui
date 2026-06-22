@@ -216,6 +216,12 @@ Default per-user state locations:
 Keep bundled resource files immutable at runtime. User edits should be written
 to per-user config/data paths.
 
+The top-level **Settings** menu exposes migration and troubleshooting actions:
+**Export All Settings...** writes the workspace registry, per-user GUI settings,
+and workspace profiles to one portable YAML file; **Import All Settings...**
+restores that file under a chosen workspace master folder; **Show Configuration
+Paths** displays the writable config/data paths that the GUI manages.
+
 ## Docker and ROS services
 
 The bundled compose file defines three services:

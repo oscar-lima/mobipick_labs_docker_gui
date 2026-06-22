@@ -1011,6 +1011,37 @@ def writable_docker_cp_config_path() -> Path:
     """Return the per-user docker cp configuration path."""
     return USER_DOCKER_CP_CONFIG_FILE
 
+
+def user_configuration_paths(
+    *,
+    workspace_registry_path: Path | None = None,
+    window_layout_template: str | Path | None = None,
+) -> list[tuple[str, Path]]:
+    """Return writable config/data paths managed by the GUI."""
+    config_dir = default_user_config_dir()
+    data_dir = default_user_data_dir()
+    window_layout_path = (
+        Path(window_layout_template).expanduser()
+        if window_layout_template
+        else config_dir / 'window_layouts' / '{workspace}.yaml'
+    )
+    registry_path = (
+        Path(workspace_registry_path).expanduser()
+        if workspace_registry_path
+        else config_dir / 'workspaces.yaml'
+    )
+    return [
+        ('GUI settings', USER_CONFIG_FILE),
+        ('Workspace registry', registry_path),
+        ('Window layouts', window_layout_path),
+        ('Docker cp paths', USER_DOCKER_CP_CONFIG_FILE),
+        ('Button profiles', BUTTON_PROFILE_DIR),
+        ('Auto-launch profiles', LAUNCH_SEQUENCE_DIR),
+        ('Imported settings profiles', config_dir / 'profiles'),
+        ('Recordings', data_dir / 'recordings'),
+        ('Custom image build contexts', data_dir / 'image_builds'),
+    ]
+
 __all__ = [
     'CONFIG',
     'CONFIG_DEFAULTS',
@@ -1023,6 +1054,7 @@ __all__ = [
     'default_user_config_dir',
     'default_user_config_path',
     'default_user_data_dir',
+    'user_configuration_paths',
     'DOCKER_CP_CONFIG_FILE',
     'DEFAULT_YAML_PATH',
     'load_docker_cp_config',
