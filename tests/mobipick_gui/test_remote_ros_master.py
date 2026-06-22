@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import yaml
 
@@ -8,6 +9,7 @@ os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 from PyQt5.QtWidgets import QApplication
 
 from mobipick_gui.config import CONFIG
+import mobipick_gui.main_window as main_window_module
 from mobipick_gui.main_window import MainWindow
 from mobipick_gui.workspaces import RosWorkspace
 
@@ -148,6 +150,55 @@ def test_docker_cp_entries_use_active_workspace_profile(tmp_path):
             'container': '/container/workspace.rviz',
         },
     ]
+
+
+def test_docker_cp_setup_containers_include_workspace_matched_docker_ps(
+    monkeypatch,
+):
+    window = MainWindow.__new__(MainWindow)
+    window._workspace_registry = SimpleNamespace(active='gpt_ws')
+    window.tasks = {}
+    window._console_log = lambda *_args, **_kwargs: None
+    window._current_tab_key = lambda: ''
+    window._image_compatible_with_workspace = (
+        lambda image, workspace: image == 'repo/matched:tag'
+        and workspace == 'gpt_ws'
+    )
+
+    monkeypatch.setattr(
+        main_window_module.subprocess,
+        'run',
+        lambda *args, **kwargs: SimpleNamespace(
+            stdout=(
+                'abc123\trepo/matched:tag\tmatched-container\n'
+                'def456\trepo/other:tag\tother-container\n'
+            )
+        ),
+    )
+
+    options = window._docker_cp_setup_container_options()
+
+    assert options[0] == (
+        'Workspace match container (matched-container, repo/matched:tag)',
+        'abc123',
+    )
+    assert ('other-container: repo/other:tag', 'def456') in options
+
+
+def test_docker_cp_host_start_prefers_master_workspace(tmp_path):
+    window = MainWindow.__new__(MainWindow)
+    master = tmp_path / 'master'
+    workspace_path = master / 'demo_ws'
+    workspace_path.mkdir(parents=True)
+    fallback_path = tmp_path / 'elsewhere' / 'demo_ws'
+    fallback_path.mkdir(parents=True)
+    workspace = RosWorkspace(name='demo_ws', path=str(fallback_path))
+    window._workspace_registry = SimpleNamespace(
+        master_folder=str(master),
+        get=lambda name: workspace if name == 'demo_ws' else None,
+    )
+
+    assert window._docker_cp_host_start_path('demo_ws') == workspace_path
 
 
 def test_remote_mode_injects_master_and_disables_local_stack(

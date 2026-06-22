@@ -131,12 +131,16 @@ def test_docker_cp_dialog_prefers_clean_workspace_default_if_present(
 
 def test_docker_cp_add_row_opens_path_dialog(monkeypatch, tmp_path):
     app = QApplication.instance() or QApplication([])
+    start_path = tmp_path / 'master' / 'demo_ws'
+    start_path.mkdir(parents=True)
+    captured = {}
     dialog = DockerCpConfigDialog(
         {},
         {},
         'demo_ws',
         ['demo_ws'],
         tmp_path / 'docker_cp.yaml',
+        host_start_provider=lambda workspace: start_path,
     )
 
     class FakePathDialog:
@@ -144,6 +148,7 @@ def test_docker_cp_add_row_opens_path_dialog(monkeypatch, tmp_path):
             self.host_first = host_first
             self.container_path = container_path
             self.parent = parent
+            captured.update(kwargs)
 
         def exec_(self):
             return QDialog.Accepted
@@ -159,6 +164,7 @@ def test_docker_cp_add_row_opens_path_dialog(monkeypatch, tmp_path):
     assert dialog.host_to_container_table.item(0, 1).text() == (
         '/container/source.rviz'
     )
+    assert captured['host_start_path'] == start_path
 
     dialog.deleteLater()
     app.processEvents()
@@ -192,6 +198,20 @@ def test_docker_cp_path_dialog_orders_paths_for_both_directions(tmp_path):
     host_to_container.deleteLater()
     container_to_host.deleteLater()
     app.processEvents()
+
+
+def test_docker_cp_host_browse_prefers_current_then_workspace(tmp_path):
+    workspace = tmp_path / 'master' / 'demo_ws'
+    workspace.mkdir(parents=True)
+    selected_parent = tmp_path / 'selected'
+    selected_parent.mkdir()
+    selected_file = selected_parent / 'config.rviz'
+
+    assert DockerCpPathDialog._host_browse_start('', workspace) == workspace
+    assert DockerCpPathDialog._host_browse_start(
+        str(selected_file),
+        workspace,
+    ) == selected_parent
 
 
 def test_docker_cp_container_browse_uses_clean_workspace_file(

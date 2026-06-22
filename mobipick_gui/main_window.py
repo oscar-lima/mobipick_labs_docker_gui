@@ -705,6 +705,7 @@ class DockerCpConfigDialog(QDialog):
         save_path: Path,
         container_options_provider: Callable[[], list[tuple[str, str]]] | None = None,
         container_path_provider: Callable[[str, str], str] | None = None,
+        host_start_provider: Callable[[str], Path] | None = None,
         parent: QWidget | None = None,
     ):
         super().__init__(parent)
@@ -720,6 +721,7 @@ class DockerCpConfigDialog(QDialog):
         ]
         self._container_options_provider = container_options_provider
         self._container_path_provider = container_path_provider
+        self._host_start_provider = host_start_provider
 
         root = QVBoxLayout(self)
 
@@ -825,6 +827,9 @@ class DockerCpConfigDialog(QDialog):
         host_first = table is self.host_to_container_table
         dialog = DockerCpPathDialog(
             host_first=host_first,
+            host_start_path=self._host_start_path(
+                self._selected_workspace_key()
+            ),
             container_path=self._default_container_path(
                 self._selected_workspace_key()
             ),
@@ -849,6 +854,11 @@ class DockerCpConfigDialog(QDialog):
         if any(candidate.exists() for candidate in candidates):
             return preferred_text
         return cls.DEFAULT_CONTAINER_PATH
+
+    def _host_start_path(self, workspace_name: str) -> Path:
+        if self._host_start_provider:
+            return self._host_start_provider(workspace_name)
+        return Path.home()
 
     def _selected_workspace_key(self) -> str:
         data = self.profile_combo.currentData()
@@ -998,6 +1008,7 @@ class DockerCpPathDialog(QDialog):
         self,
         *,
         host_first: bool,
+        host_start_path: str | Path | None = None,
         container_path: str,
         container_options_provider: Callable[[], list[tuple[str, str]]] | None = None,
         container_path_provider: Callable[[str, str], str] | None = None,
@@ -1005,6 +1016,11 @@ class DockerCpPathDialog(QDialog):
     ):
         super().__init__(parent)
         self._host_first = host_first
+        self._host_start_path = (
+            Path(host_start_path).expanduser()
+            if host_start_path
+            else Path.home()
+        )
         self._container_options_provider = container_options_provider
         self._container_path_provider = container_path_provider
         self.setWindowTitle(
@@ -1054,7 +1070,7 @@ class DockerCpPathDialog(QDialog):
 
     def _browse_host_path(self) -> None:
         current = self.host_path_edit.text().strip()
-        start = str(Path(current).expanduser().parent) if current else str(Path.home())
+        start = str(self._host_browse_start(current, self._host_start_path))
         selected, _filter = QFileDialog.getOpenFileName(
             self,
             'Select Host File',
@@ -1062,6 +1078,19 @@ class DockerCpPathDialog(QDialog):
         )
         if selected:
             self.host_path_edit.setText(selected)
+
+    @staticmethod
+    def _host_browse_start(current: str, default_start: Path) -> Path:
+        if current:
+            parent = Path(current).expanduser().parent
+            if parent.is_dir():
+                return parent.resolve()
+        start = Path(default_start).expanduser()
+        if start.is_file():
+            start = start.parent
+        if start.is_dir():
+            return start.resolve()
+        return Path.home()
 
     def _browse_container_path(self) -> None:
         if self._container_options_provider and self._container_path_provider:
@@ -4833,28 +4862,99 @@ CMD ["bash"]
     def _docker_cp_workspace_names(self) -> list[str]:
         return [workspace.name for workspace in self._workspace_registry.workspaces]
 
+    def _docker_cp_host_start_path(self, workspace_name: str) -> Path:
+        workspace_key = str(workspace_name or '').strip()
+        raw_master = str(self._workspace_registry.master_folder or '').strip()
+        master = Path(raw_master).expanduser() if raw_master else None
+        if workspace_key and master is not None:
+            candidate = master / workspace_key
+            if candidate.is_dir():
+                return candidate
+        workspace = self._workspace_registry.get(workspace_key)
+        if workspace and workspace.directory.is_dir():
+            return workspace.directory
+        if master is not None and master.is_dir():
+            return master
+        return Path.home()
+
+    def _docker_ps_container_records(self) -> list[dict[str, str]]:
+        try:
+            cp = subprocess.run(
+                [
+                    'docker',
+                    'ps',
+                    '--format',
+                    '{{.ID}}\t{{.Image}}\t{{.Names}}',
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                check=False,
+                text=True,
+                timeout=8,
+            )
+        except Exception as exc:
+            self._console_log(1, f'Failed to query running containers: {exc}')
+            return []
+        records: list[dict[str, str]] = []
+        for line in (cp.stdout or '').splitlines():
+            parts = line.split('\t', 2)
+            if len(parts) != 3:
+                continue
+            container_id, image, name = (part.strip() for part in parts)
+            if container_id:
+                records.append(
+                    {
+                        'id': container_id,
+                        'image': image,
+                        'name': name,
+                    }
+                )
+        return records
+
     def _docker_cp_setup_container_options(self) -> list[tuple[str, str]]:
         options: list[tuple[str, str]] = []
         seen: set[str] = set()
 
-        def add(label: str, tab: ProcessTab | None) -> None:
-            if not isinstance(tab, ProcessTab):
-                return
-            if not getattr(tab, 'container_name', None):
-                return
-            container_ref = self._container_reference_for_tab(tab)
+        def add_record(label: str, container_ref: str) -> None:
             if not container_ref or container_ref in seen:
                 return
             options.append((label, container_ref))
             seen.add(container_ref)
 
+        def add_tab(label: str, tab: ProcessTab | None) -> None:
+            if not isinstance(tab, ProcessTab):
+                return
+            if not getattr(tab, 'container_name', None):
+                return
+            container_ref = self._container_reference_for_tab(tab)
+            if not container_ref:
+                return
+            add_record(label, container_ref)
+
+        workspace_name = self._workspace_registry.active or ''
+        records = self._docker_ps_container_records()
+        for record in records:
+            image = record.get('image', '')
+            if self._image_compatible_with_workspace(image, workspace_name) is True:
+                label = (
+                    'Workspace match container '
+                    f'({record.get("name") or record["id"]}, {image})'
+                )
+                add_record(label, record['id'])
+
         current = self.tasks.get(self._current_tab_key() or '')
         if current:
-            add('Workspace match container (current tab)', current)
+            add_tab('Workspace match container (current tab)', current)
         for key in ('sim', 'roscore', 'rviz', 'tables', 'rqt'):
-            add(f'Workspace match container ({key})', self.tasks.get(key))
+            add_tab(f'Workspace match container ({key})', self.tasks.get(key))
         for key, tab in self.tasks.items():
-            add(f'{key}: {getattr(tab, "container_name", "")}', tab)
+            add_tab(f'{key}: {getattr(tab, "container_name", "")}', tab)
+        for record in records:
+            label = (
+                f'{record.get("name") or record["id"]}: '
+                f'{record.get("image") or "unknown image"}'
+            )
+            add_record(label, record['id'])
         return options
 
     def _docker_cp_container_path_from_setup(
@@ -8824,6 +8924,7 @@ CMD ["bash"]
             save_path,
             self._docker_cp_setup_container_options,
             self._docker_cp_container_path_from_setup,
+            self._docker_cp_host_start_path,
             self,
         )
         if dialog.exec_() != QDialog.Accepted:
