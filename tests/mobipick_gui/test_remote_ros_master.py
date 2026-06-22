@@ -250,6 +250,13 @@ def test_docker_cp_container_path_from_setup_can_use_image(monkeypatch):
 def test_docker_cp_list_container_paths_can_use_image(monkeypatch):
     window = MainWindow.__new__(MainWindow)
     window._console_log = lambda *_args, **_kwargs: None
+    window._docker_cp_workspace_browser_env = lambda: {
+        'MOBIPICK_WORKSPACE_NAME': 'clean_mobipick_labs_ws',
+        'MOBIPICK_WORKSPACE_MOUNT_SOURCE': (
+            '/host/ros_ws'
+        ),
+        'MOBIPICK_WORKSPACE_MOUNT_TARGET': '/home/ubuntu/ros_ws',
+    }
 
     def fake_run(args, **kwargs):
         assert args[:5] == [
@@ -259,7 +266,11 @@ def test_docker_cp_list_container_paths_can_use_image(monkeypatch):
             '--entrypoint',
             'bash',
         ]
-        assert args[5] == 'repo/gpt:tag'
+        assert '--volume' in args
+        assert '/host/ros_ws:/home/ubuntu/ros_ws:rw' in args
+        assert '--env' in args
+        assert 'MOBIPICK_WORKSPACE_NAME=clean_mobipick_labs_ws' in args
+        assert args[args.index('repo/gpt:tag')] == 'repo/gpt:tag'
         return SimpleNamespace(
             stdout=(
                 '__DIR__\t/workspace\n'

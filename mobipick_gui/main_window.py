@@ -5132,17 +5132,38 @@ CMD ["bash"]
                 len(DockerCpConfigDialog.IMAGE_SETUP_PREFIX):
             ]
         if image_ref:
-            return [
+            command = [
                 'docker',
                 'run',
                 '--rm',
                 '--entrypoint',
                 'bash',
-                image_ref,
-                '-lc',
-                script,
             ]
+            workspace_env = self._docker_cp_workspace_browser_env()
+            source = workspace_env.get('MOBIPICK_WORKSPACE_MOUNT_SOURCE', '')
+            target = workspace_env.get('MOBIPICK_WORKSPACE_MOUNT_TARGET', '')
+            if source and target:
+                command.extend(['--volume', f'{source}:{target}:rw'])
+            for key, value in workspace_env.items():
+                if key in {
+                    'MOBIPICK_WORKSPACE_COMPAT_ROOTS',
+                    'MOBIPICK_WORKSPACE_MOUNT_SOURCE',
+                }:
+                    continue
+                command.extend(['--env', f'{key}={value}'])
+            command.extend([image_ref, '-lc', script])
+            return command
         return ['docker', 'exec', container_ref, 'bash', '-lc', script]
+
+    def _docker_cp_workspace_browser_env(self) -> dict[str, str]:
+        try:
+            return self._workspace_runtime_env(force_host_workspace=True)
+        except Exception as exc:
+            self._console_log(
+                1,
+                f'Failed to prepare workspace mount for docker cp browser: {exc}',
+            )
+            return {}
 
     def _docker_cp_list_container_paths(
         self,
