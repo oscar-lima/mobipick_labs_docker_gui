@@ -12,9 +12,11 @@ from mobipick_gui.config import (
     load_button_layout,
     load_docker_cp_config,
     load_launch_sequence_plan,
+    load_user_config_overrides,
     save_button_layout,
     save_docker_cp_config,
     save_launch_sequence_plan,
+    save_user_config_update,
     user_configuration_paths,
     writable_button_config_path,
     writable_workspace_button_config_path,
@@ -69,6 +71,67 @@ def test_bundled_gui_settings_exclude_private_runtime_state():
     assert 'host_user_from_1.2' not in text
     assert 'rae_ws_from_host_user' not in text
     assert 'gpt_ws_from_host_user' not in text
+
+
+def test_legacy_host_user_values_are_migrated_from_user_config(
+    monkeypatch,
+    tmp_path,
+):
+    legacy_user = 'osc' + 'ar'
+    user_config = tmp_path / 'gui_settings.yaml'
+    user_config.write_text(
+        f'''
+images:
+  default: ozkrelo/x_mobipick_labs:gpt_ws_from_{legacy_user}_user
+  profiles:
+    - ref: ozkrelo/x_mobipick_labs:{legacy_user}_user_from_1.2
+      user: host
+      compatible_workspaces: [clean_mobipick_labs_ws]
+setup_wizard:
+  host_user: {legacy_user}
+custom:
+  path: /home/{legacy_user}/ros_ws/gpt_ws
+''',
+        encoding='utf-8',
+    )
+    monkeypatch.setattr(config_module, 'USER_CONFIG_FILE', user_config)
+    monkeypatch.setattr(config_module, 'HOST_USER', 'tester')
+
+    config = load_user_config_overrides()
+
+    assert config['images']['default'] == (
+        'ozkrelo/x_mobipick_labs:gpt_ws_from_tester_user'
+    )
+    assert config['images']['profiles'][0]['ref'] == (
+        'ozkrelo/x_mobipick_labs:tester_user_from_1.2'
+    )
+    assert config['setup_wizard']['host_user'] == 'tester'
+    assert config['custom']['path'] == '/home/tester/ros_ws/gpt_ws'
+
+
+def test_saved_user_config_update_does_not_persist_legacy_host_user(
+    monkeypatch,
+    tmp_path,
+):
+    legacy_user = 'osc' + 'ar'
+    user_config = tmp_path / 'gui_settings.yaml'
+    monkeypatch.setattr(config_module, 'USER_CONFIG_FILE', user_config)
+    monkeypatch.setattr(config_module, 'HOST_USER', 'tester')
+    monkeypatch.setattr(config_module, 'CONFIG', {})
+
+    save_user_config_update(
+        {
+            'images': {
+                'default': (
+                    f'ozkrelo/x_mobipick_labs:gpt_ws_from_{legacy_user}_user'
+                ),
+            }
+        }
+    )
+
+    text = user_config.read_text(encoding='utf-8')
+    assert legacy_user not in text
+    assert 'gpt_ws_from_tester_user' in text
 
 
 def test_explicit_workspace_profiles_override_global_config(tmp_path):

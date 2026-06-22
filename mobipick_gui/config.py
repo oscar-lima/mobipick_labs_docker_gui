@@ -429,6 +429,36 @@ def _deep_update(base: Dict, updates: Dict) -> Dict:
     return base
 
 
+def _legacy_host_user_replacements() -> dict[str, str]:
+    """Return old private host-user image strings mapped to this host user."""
+    legacy_user = 'osc' + 'ar'
+    return {
+        legacy_user: HOST_USER,
+        f'{legacy_user}_user_from_1.2': f'{HOST_USER}_user_from_1.2',
+        f'rae_ws_from_{legacy_user}_user': f'rae_ws_from_{HOST_USER}_user',
+        f'gpt_ws_from_{legacy_user}_user': f'gpt_ws_from_{HOST_USER}_user',
+    }
+
+
+def _migrate_legacy_host_user_values(value):
+    """Replace legacy hardcoded host-user strings in config-like data."""
+    if isinstance(value, dict):
+        return {
+            _migrate_legacy_host_user_values(key): (
+                _migrate_legacy_host_user_values(item)
+            )
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_migrate_legacy_host_user_values(item) for item in value]
+    if isinstance(value, str):
+        migrated = value
+        for old, new in _legacy_host_user_replacements().items():
+            migrated = migrated.replace(old, new)
+        return migrated
+    return value
+
+
 def _load_config() -> Dict:
     config = copy.deepcopy(CONFIG_DEFAULTS)
     for path in (CONFIG_FILE, USER_CONFIG_FILE):
@@ -437,6 +467,7 @@ def _load_config() -> Dict:
                 with open(path, 'r', encoding='utf-8') as handle:
                     data = yaml.safe_load(handle) or {}
                 if isinstance(data, dict):
+                    data = _migrate_legacy_host_user_values(data)
                     _deep_update(config, data)
         except Exception as exc:
             print(
@@ -473,7 +504,8 @@ def load_user_config_overrides() -> Dict:
         if USER_CONFIG_FILE.is_file():
             with open(USER_CONFIG_FILE, 'r', encoding='utf-8') as handle:
                 data = yaml.safe_load(handle) or {}
-            return data if isinstance(data, dict) else {}
+            if isinstance(data, dict):
+                return _migrate_legacy_host_user_values(data)
     except Exception as exc:
         print(
             f'Warning: failed to load configuration from {USER_CONFIG_FILE}: {exc}',
@@ -485,7 +517,8 @@ def load_user_config_overrides() -> Dict:
 def save_user_config_update(updates: Dict) -> Dict:
     """Merge updates into the per-user config and live CONFIG object."""
     user_config = load_user_config_overrides()
-    _deep_update(user_config, copy.deepcopy(updates))
+    updates = _migrate_legacy_host_user_values(copy.deepcopy(updates))
+    _deep_update(user_config, updates)
     USER_CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
     temporary = USER_CONFIG_FILE.with_suffix(USER_CONFIG_FILE.suffix + '.tmp')
     with temporary.open('w', encoding='utf-8') as handle:
