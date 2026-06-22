@@ -37,6 +37,8 @@ from PyQt5.QtWidgets import (
     QInputDialog,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QMainWindow,
     QMenu,
     QMessageBox,
@@ -1236,6 +1238,85 @@ class DockerCpContainerSelectDialog(QDialog):
             )
             return
         super().accept()
+
+
+class DockerCpContainerPathDialog(QDialog):
+    """Browse existing container paths while allowing arbitrary destinations."""
+
+    def __init__(
+        self,
+        *,
+        container_ref: str,
+        start_path: str,
+        list_provider: Callable[[str, str], list[dict[str, object]]],
+        parent: QWidget | None = None,
+    ):
+        super().__init__(parent)
+        self._container_ref = container_ref
+        self._list_provider = list_provider
+        self.setWindowTitle('Select Container File')
+        self.resize(900, 560)
+
+        root = QVBoxLayout(self)
+        root.addWidget(QLabel(f'Container: {container_ref}'))
+
+        path_row = QHBoxLayout()
+        self.path_edit = QLineEdit(start_path)
+        self.path_edit.setMinimumWidth(620)
+        self.path_edit.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        path_row.addWidget(self.path_edit, 1)
+        up_button = QPushButton('Up')
+        up_button.clicked.connect(self._go_up)
+        path_row.addWidget(up_button)
+        refresh_button = QPushButton('Refresh')
+        refresh_button.clicked.connect(self._refresh)
+        path_row.addWidget(refresh_button)
+        root.addLayout(path_row)
+
+        self.entries = QListWidget()
+        self.entries.itemDoubleClicked.connect(self._activate_item)
+        root.addWidget(self.entries, 1)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        root.addWidget(buttons)
+
+        self._refresh()
+
+    def selected_path(self) -> str:
+        return self.path_edit.text().strip()
+
+    def _refresh(self) -> None:
+        self.entries.clear()
+        for entry in self._list_provider(
+            self._container_ref,
+            self.path_edit.text().strip(),
+        ):
+            path = str(entry.get('path') or '').strip()
+            if not path:
+                continue
+            is_dir = bool(entry.get('is_dir'))
+            name = str(entry.get('name') or Path(path).name or path)
+            label = f'[dir] {name}' if is_dir else name
+            item = QListWidgetItem(label)
+            item.setData(Qt.UserRole, {'path': path, 'is_dir': is_dir})
+            self.entries.addItem(item)
+
+    def _activate_item(self, item: QListWidgetItem) -> None:
+        data = item.data(Qt.UserRole) or {}
+        path = str(data.get('path') or '').strip()
+        if not path:
+            return
+        self.path_edit.setText(path)
+        if bool(data.get('is_dir')):
+            self._refresh()
+
+    def _go_up(self) -> None:
+        current = self.path_edit.text().strip() or '/'
+        parent = str(Path(current).parent)
+        self.path_edit.setText(parent if parent else '/')
+        self._refresh()
 
 
 class WorkspaceMatchDialog(QDialog):
@@ -5031,65 +5112,97 @@ CMD ["bash"]
         default_path = str(default_path or '').strip()
         if not container_ref:
             return default_path
+        dialog = DockerCpContainerPathDialog(
+            container_ref=container_ref,
+            start_path=default_path,
+            list_provider=self._docker_cp_list_container_paths,
+        )
+        if dialog.exec_() == QDialog.Accepted and dialog.selected_path():
+            return dialog.selected_path()
+        return default_path
+
+    def _docker_cp_container_command(
+        self,
+        container_ref: str,
+        script: str,
+    ) -> list[str]:
         image_ref = ''
         if container_ref.startswith(DockerCpConfigDialog.IMAGE_SETUP_PREFIX):
             image_ref = container_ref[
                 len(DockerCpConfigDialog.IMAGE_SETUP_PREFIX):
             ]
+        if image_ref:
+            return [
+                'docker',
+                'run',
+                '--rm',
+                '--entrypoint',
+                'bash',
+                image_ref,
+                '-lc',
+                script,
+            ]
+        return ['docker', 'exec', container_ref, 'bash', '-lc', script]
+
+    def _docker_cp_list_container_paths(
+        self,
+        container_ref: str,
+        path: str,
+    ) -> list[dict[str, object]]:
+        target = str(path or '/').strip() or '/'
         script = (
             'set -e; '
-            f'default={shlex.quote(default_path)}; '
-            'dir=$(dirname -- "$default"); '
-            'if [ -e "$default" ]; then printf "%s\\n" "$default"; fi; '
-            'if [ -d "$dir" ]; then find "$dir" -maxdepth 1 -type f | sort; fi'
+            f'target={shlex.quote(target)}; '
+            'if [ -d "$target" ]; then dir="$target"; '
+            'else dir=$(dirname -- "$target"); fi; '
+            'printf "__DIR__\\t%s\\n" "$dir"; '
+            'if [ -d "$dir" ]; then '
+            'find "$dir" -mindepth 1 -maxdepth 1 '
+            "-printf '%y\\t%f\\t%p\\n' | sort; "
+            'fi'
         )
-        choices: list[str] = []
+        entries: list[dict[str, object]] = []
         try:
-            if image_ref:
-                command = [
-                    'docker',
-                    'run',
-                    '--rm',
-                    '--entrypoint',
-                    'bash',
-                    image_ref,
-                    '-lc',
-                    script,
-                ]
-            else:
-                command = ['docker', 'exec', container_ref, 'bash', '-lc', script]
             cp = subprocess.run(
-                command,
+                self._docker_cp_container_command(container_ref, script),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
                 check=False,
                 text=True,
                 timeout=8,
             )
-            choices = [
-                line.strip()
-                for line in (cp.stdout or '').splitlines()
-                if line.strip()
-            ]
         except Exception as exc:
             self._console_log(
                 1,
                 f'Failed to inspect container paths in {container_ref}: {exc}',
             )
-        choices = list(dict.fromkeys(choices))
-        if not choices and default_path:
-            choices = [default_path]
-        if not choices:
-            return default_path
-        selected, accepted = QInputDialog.getItem(
-            self,
-            'Select Container File',
-            f'Container: {container_ref}',
-            choices,
-            0,
-            True,
-        )
-        return selected.strip() if accepted and selected.strip() else default_path
+            return entries
+        for line in (cp.stdout or '').splitlines():
+            if not line.strip():
+                continue
+            if line.startswith('__DIR__\t'):
+                directory = line.split('\t', 1)[1].strip()
+                if directory and directory != '/':
+                    entries.append(
+                        {
+                            'name': '..',
+                            'path': str(Path(directory).parent),
+                            'is_dir': True,
+                        }
+                    )
+                continue
+            parts = line.split('\t', 2)
+            if len(parts) != 3:
+                continue
+            kind, name, item_path = parts
+            entries.append(
+                {
+                    'name': name,
+                    'path': item_path,
+                    'is_dir': kind == 'd',
+                }
+            )
+        return entries
 
     @staticmethod
     def _expand_host_path(path: str) -> str:

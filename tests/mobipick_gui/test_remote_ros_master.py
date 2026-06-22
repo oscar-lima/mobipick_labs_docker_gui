@@ -222,22 +222,20 @@ def test_docker_cp_container_path_from_setup_can_use_image(monkeypatch):
     window = MainWindow.__new__(MainWindow)
     window._console_log = lambda *_args, **_kwargs: None
 
-    def fake_run(args, **kwargs):
-        assert args[:5] == [
-            'docker',
-            'run',
-            '--rm',
-            '--entrypoint',
-            'bash',
-        ]
-        assert args[5] == 'repo/gpt:tag'
-        return SimpleNamespace(stdout='/workspace/config.rviz\n')
+    class FakeContainerPathDialog:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
 
-    monkeypatch.setattr(main_window_module.subprocess, 'run', fake_run)
+        def exec_(self):
+            return main_window_module.QDialog.Accepted
+
+        def selected_path(self):
+            return '/workspace/config.rviz'
+
     monkeypatch.setattr(
-        main_window_module.QInputDialog,
-        'getItem',
-        lambda *args, **kwargs: ('/workspace/config.rviz', True),
+        main_window_module,
+        'DockerCpContainerPathDialog',
+        FakeContainerPathDialog,
     )
 
     selected = window._docker_cp_container_path_from_setup(
@@ -247,6 +245,46 @@ def test_docker_cp_container_path_from_setup_can_use_image(monkeypatch):
     )
 
     assert selected == '/workspace/config.rviz'
+
+
+def test_docker_cp_list_container_paths_can_use_image(monkeypatch):
+    window = MainWindow.__new__(MainWindow)
+    window._console_log = lambda *_args, **_kwargs: None
+
+    def fake_run(args, **kwargs):
+        assert args[:5] == [
+            'docker',
+            'run',
+            '--rm',
+            '--entrypoint',
+            'bash',
+        ]
+        assert args[5] == 'repo/gpt:tag'
+        return SimpleNamespace(
+            stdout=(
+                '__DIR__\t/workspace\n'
+                'd\tsrc\t/workspace/src\n'
+                'f\tconfig.rviz\t/workspace/config.rviz\n'
+            )
+        )
+
+    monkeypatch.setattr(main_window_module.subprocess, 'run', fake_run)
+
+    entries = window._docker_cp_list_container_paths(
+        f'{main_window_module.DockerCpConfigDialog.IMAGE_SETUP_PREFIX}'
+        'repo/gpt:tag',
+        '/workspace/config.rviz',
+    )
+
+    assert entries == [
+        {'name': '..', 'path': '/', 'is_dir': True},
+        {'name': 'src', 'path': '/workspace/src', 'is_dir': True},
+        {
+            'name': 'config.rviz',
+            'path': '/workspace/config.rviz',
+            'is_dir': False,
+        },
+    ]
 
 
 def test_docker_cp_host_start_prefers_master_workspace(tmp_path):

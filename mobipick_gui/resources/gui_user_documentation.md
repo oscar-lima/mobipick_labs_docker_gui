@@ -305,8 +305,9 @@ The tab search is separate from the documentation window search.
 - **Configure Docker cp Paths** edits host-to-container and container-to-host
   copy paths for the Docker image default workspace or a configured ROS
   workspace. **Add Row** opens a path dialog, checks that the selected host
-  file exists, and lets you choose a running setup container for container-side
-  path selection or type the container path manually.
+  file exists, and lets you choose a setup container or workspace-match image
+  for container-side path browsing. The container path field remains editable,
+  so destinations that do not exist yet can still be entered manually.
 
 The wizard shows the writable configuration and data paths it can affect. The
 source install step creates

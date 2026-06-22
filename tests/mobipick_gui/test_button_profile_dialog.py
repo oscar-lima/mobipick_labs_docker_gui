@@ -9,6 +9,7 @@ from mobipick_gui.config import save_button_layout
 import mobipick_gui.main_window as main_window_module
 from mobipick_gui.main_window import (
     ButtonProfileDialog,
+    DockerCpContainerPathDialog,
     DockerCpContainerSelectDialog,
     DockerCpConfigDialog,
     DockerCpPathDialog,
@@ -283,16 +284,13 @@ def test_docker_cp_dialog_lists_workspaces_not_images(tmp_path):
 
 def test_docker_cp_path_dialog_can_use_container_provider(monkeypatch):
     app = QApplication.instance() or QApplication([])
-    calls = []
     dialog = DockerCpPathDialog(
         host_first=True,
         container_path='demo_ws/src/mobipick_labs/config.rviz',
         container_options_provider=lambda: [
             ('Workspace match container', 'container-id'),
         ],
-        container_path_provider=lambda container, default: calls.append(
-            (container, default)
-        ) or '/container/selected.rviz',
+        container_path_provider=lambda container, default: '/unused',
     )
     monkeypatch.setattr(
         DockerCpContainerSelectDialog,
@@ -307,10 +305,24 @@ def test_docker_cp_path_dialog_can_use_container_provider(monkeypatch):
 
     dialog._browse_container_path()
 
-    assert calls == [
-        ('container-id', 'demo_ws/src/mobipick_labs/config.rviz')
-    ]
-    assert dialog.container_path_edit.text() == '/container/selected.rviz'
+    assert dialog.container_path_edit.text() == '/unused'
 
     dialog.deleteLater()
+    app.processEvents()
+
+
+def test_container_path_browser_accepts_nonexistent_manual_path():
+    app = QApplication.instance() or QApplication([])
+    browser = DockerCpContainerPathDialog(
+        container_ref='container-id',
+        start_path='/root/catkin_ws/new_file.rviz',
+        list_provider=lambda _container, _path: [],
+    )
+    browser.path_edit.setText('/root/catkin_ws/does_not_exist_yet.rviz')
+
+    assert browser.selected_path() == (
+        '/root/catkin_ws/does_not_exist_yet.rviz'
+    )
+
+    browser.deleteLater()
     app.processEvents()
