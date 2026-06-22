@@ -34,7 +34,6 @@ from PyQt5.QtWidgets import (
     QFormLayout,
     QHBoxLayout,
     QHeaderView,
-    QInputDialog,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -231,6 +230,183 @@ class ButtonProfileTable(QTableWidget):
                 )
             )
         return widths
+
+
+class ImageBlacklistDialog(QDialog):
+    """Edit Docker image ignore patterns with a live result preview."""
+
+    def __init__(
+        self,
+        patterns: list[str],
+        image_refs: list[str],
+        matcher: Callable[[str, str], bool],
+        parent: QWidget | None = None,
+    ):
+        super().__init__(parent)
+        self._matcher = matcher
+        self._image_refs = list(dict.fromkeys(ref for ref in image_refs if ref))
+
+        self.setWindowTitle('Docker Image Blacklist')
+        self.resize(880, 560)
+
+        layout = QVBoxLayout(self)
+        intro = QLabel(
+            'Image refs or patterns ignored during setup and image discovery.'
+        )
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+
+        body = QHBoxLayout()
+        layout.addLayout(body, 1)
+
+        editor_column = QVBoxLayout()
+        body.addLayout(editor_column, 1)
+
+        editor_column.addWidget(QLabel('Ignored refs and patterns'))
+        self.pattern_editor = QTextEdit()
+        self.pattern_editor.setAcceptRichText(False)
+        self.pattern_editor.setPlainText('\n'.join(patterns))
+        self.pattern_editor.setPlaceholderText('*n8n*\nrepo/image:tag')
+        self.pattern_editor.setMinimumWidth(300)
+        self.pattern_editor.setSizePolicy(
+            QSizePolicy.Expanding,
+            QSizePolicy.Expanding,
+        )
+        editor_column.addWidget(self.pattern_editor, 1)
+
+        image_row = QHBoxLayout()
+        self.image_combo = QComboBox()
+        self.image_combo.setMinimumWidth(280)
+        self.image_combo.setSizePolicy(
+            QSizePolicy.Expanding,
+            QSizePolicy.Fixed,
+        )
+        if self._image_refs:
+            self.image_combo.addItems(self._image_refs)
+        else:
+            self.image_combo.addItem('No matching local Docker images found')
+            self.image_combo.setEnabled(False)
+        image_row.addWidget(self.image_combo, 1)
+
+        add_exact = QPushButton('Add Image')
+        add_exact.clicked.connect(self._add_selected_image)
+        image_row.addWidget(add_exact)
+        editor_column.addLayout(image_row)
+
+        add_repo = QPushButton('Add Repository Pattern')
+        add_repo.clicked.connect(self._add_selected_repository_pattern)
+        editor_column.addWidget(add_repo)
+
+        preview_column = QVBoxLayout()
+        body.addLayout(preview_column, 2)
+
+        self.summary_label = QLabel()
+        self.summary_label.setWordWrap(True)
+        preview_column.addWidget(self.summary_label)
+
+        self.preview_table = QTableWidget(0, 3)
+        self.preview_table.setHorizontalHeaderLabels(
+            ['Result', 'Image', 'Matched pattern']
+        )
+        self.preview_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.preview_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.preview_table.verticalHeader().setVisible(False)
+        header = self.preview_table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.Stretch)
+        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        preview_column.addWidget(self.preview_table, 1)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.Ok | QDialogButtonBox.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+        self.pattern_editor.textChanged.connect(self._refresh_preview)
+        self._refresh_preview()
+
+    def patterns(self) -> list[str]:
+        return self._normalize_patterns(self.pattern_editor.toPlainText())
+
+    @staticmethod
+    def _normalize_patterns(text: str) -> list[str]:
+        patterns: list[str] = []
+        for item in re.split(r'[\n,]+', text or ''):
+            pattern = item.strip()
+            if pattern and pattern not in patterns:
+                patterns.append(pattern)
+        return patterns
+
+    def _selected_image_ref(self) -> str:
+        if not self.image_combo.isEnabled():
+            return ''
+        return str(self.image_combo.currentText() or '').strip()
+
+    def _add_selected_image(self) -> None:
+        self._append_pattern(self._selected_image_ref())
+
+    def _add_selected_repository_pattern(self) -> None:
+        image_ref = self._selected_image_ref()
+        if not image_ref:
+            return
+        last_slash = image_ref.rfind('/')
+        last_colon = image_ref.rfind(':')
+        repository = (
+            image_ref[:last_colon]
+            if last_colon > last_slash
+            else image_ref
+        )
+        self._append_pattern(f'{repository}:*' if repository else '')
+
+    def _append_pattern(self, pattern: str) -> None:
+        pattern = str(pattern or '').strip()
+        if not pattern:
+            return
+        patterns = self.patterns()
+        if pattern not in patterns:
+            patterns.append(pattern)
+        self.pattern_editor.setPlainText('\n'.join(patterns))
+        cursor = self.pattern_editor.textCursor()
+        cursor.movePosition(QTextCursor.End)
+        self.pattern_editor.setTextCursor(cursor)
+
+    def _refresh_preview(self) -> None:
+        patterns = self.patterns()
+        rows: list[tuple[str, str, str]] = []
+        used_count = 0
+        ignored_count = 0
+        for image_ref in self._image_refs:
+            matched_pattern = next(
+                (
+                    pattern
+                    for pattern in patterns
+                    if self._matcher(image_ref, pattern)
+                ),
+                '',
+            )
+            if matched_pattern:
+                rows.append(('Ignored', image_ref, matched_pattern))
+                ignored_count += 1
+            else:
+                rows.append(('Used', image_ref, ''))
+                used_count += 1
+
+        self.summary_label.setText(
+            f'{used_count} image(s) will be used; '
+            f'{ignored_count} image(s) will be ignored.'
+        )
+        self.preview_table.setRowCount(len(rows))
+        for row, (result, image_ref, matched_pattern) in enumerate(rows):
+            result_item = QTableWidgetItem(result)
+            if result == 'Ignored':
+                result_item.setForeground(QColor('#9a3412'))
+            else:
+                result_item.setForeground(QColor('#166534'))
+            self.preview_table.setItem(row, 0, result_item)
+            self.preview_table.setItem(row, 1, QTableWidgetItem(image_ref))
+            self.preview_table.setItem(row, 2, QTableWidgetItem(matched_pattern))
 
 
 class ButtonProfileDialog(QDialog):
@@ -3873,18 +4049,25 @@ class MainWindow(QMainWindow):
         )
 
     def _open_image_blacklist_dialog(self) -> None:
-        text, accepted = QInputDialog.getMultiLineText(
-            self,
-            'Docker Image Blacklist',
-            (
-                'Image refs or patterns to ignore during setup and image '
-                'discovery. Use one entry per line, for example *n8n*.'
-            ),
-            '\n'.join(self._image_blacklist_patterns()),
+        records, _error_message = self._discover_filtered_image_records(
+            blacklist_patterns=[],
         )
-        if not accepted:
+        image_refs = [
+            record.get('ref', '')
+            for record in records
+            if record.get('ref')
+        ]
+        if not image_refs:
+            image_refs = list(getattr(self, '_image_choices', []))
+        dialog = ImageBlacklistDialog(
+            self._image_blacklist_patterns(),
+            image_refs,
+            self._image_ref_matches_pattern,
+            self,
+        )
+        if dialog.exec_() != QDialog.Accepted:
             return
-        patterns = self._normalize_image_list(text)
+        patterns = dialog.patterns()
         try:
             save_user_config_update({'images': {'blacklist': patterns}})
         except OSError as exc:
@@ -5464,10 +5647,18 @@ CMD ["bash"]
     def _reload_images(self):
         self._load_available_images(show_feedback=True)
 
-    def _discover_filtered_image_records(self) -> tuple[list[dict[str, str]], str | None]:
+    def _discover_filtered_image_records(
+        self,
+        blacklist_patterns: list[str] | None = None,
+    ) -> tuple[list[dict[str, str]], str | None]:
         images_cfg = self._images_cfg
         filters = [f.lower() for f in images_cfg.get('discovery_filters', []) if f]
         include_none = bool(images_cfg.get('include_none_tag', False))
+        active_blacklist = (
+            self._image_blacklist_patterns()
+            if blacklist_patterns is None
+            else blacklist_patterns
+        )
         records: list[dict[str, str]] = []
         error_message: str | None = None
 
@@ -5502,7 +5693,7 @@ CMD ["bash"]
             ref = f'{repo}:{tag}' if tag else repo
             if not ref:
                 continue
-            if self._image_ref_blacklisted(ref):
+            if self._image_ref_blacklisted(ref, active_blacklist):
                 continue
             if filters and not any(f in ref.lower() for f in filters):
                 continue
