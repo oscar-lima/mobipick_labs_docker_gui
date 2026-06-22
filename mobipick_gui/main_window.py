@@ -5507,9 +5507,14 @@ CMD ["bash"]
         default_path = str(default_path or '').strip()
         if not container_ref:
             return default_path
+        start_path = (
+            '/'
+            if container_ref.startswith(DockerCpConfigDialog.IMAGE_SETUP_PREFIX)
+            else default_path or '/'
+        )
         dialog = DockerCpContainerPathDialog(
             container_ref=container_ref,
-            start_path=default_path or '/',
+            start_path=start_path,
             list_provider=self._docker_cp_list_container_paths,
         )
         if dialog.exec_() == QDialog.Accepted and dialog.selected_path():

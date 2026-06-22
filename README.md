@@ -115,6 +115,26 @@ docker pull ozkrelo/x_mobipick_labs:noetic-v1.1
 docker pull ozkrelo/x_mobipick_labs:noetic-v1.2
 ```
 
+## Installation
+
+Install the released package from PyPI:
+
+```bash
+python -m pip install mobipick-labs-docker-gui
+```
+
+If you installed an older released version, upgrade it in the same Python
+environment:
+
+```bash
+python -m pip install --upgrade mobipick-labs-docker-gui
+python -m pip show mobipick-labs-docker-gui
+```
+
+If the command was installed with `--user` and your shell cannot find
+`mobipick-labs-docker-gui`, make sure Python's user script directory is on
+`PATH`, for example `~/.local/bin` on many Linux systems.
+
 ## Development setup
 
 Create an editable install from the checkout:
@@ -170,10 +190,22 @@ Current coverage includes:
 
 ## Packaging
 
+The package version is declared in `pyproject.toml`. The fallback version used
+when running directly from an unpackaged source tree lives in
+`mobipick_gui/version.py`; keep both values in sync for releases.
+
 Build source and wheel artifacts with:
 
 ```bash
+python -m pip install --upgrade build
 python -m build
+```
+
+Optionally validate the artifacts before uploading:
+
+```bash
+python -m pip install --upgrade twine
+python -m twine check dist/*
 ```
 
 Package data is declared in both `pyproject.toml` and `MANIFEST.in`. When adding
@@ -185,6 +217,22 @@ The console script installed by the package is:
 ```text
 mobipick-labs-docker-gui = mobipick_gui.cli:main
 ```
+
+### PyPI release flow
+
+Publishing is handled by `.github/workflows/python-publish.yml`. The workflow
+builds the distributions and uploads them to PyPI when a GitHub Release is
+published. Merging to `main` alone does not publish a new PyPI version.
+
+Recommended release steps:
+
+1. Update the version in `pyproject.toml` and `mobipick_gui/version.py`.
+2. Run the tests and build locally.
+3. Merge the release branch to `main`.
+4. Create and publish a GitHub Release from `main`, using a tag such as
+   `v0.1.1`.
+5. Confirm the workflow succeeds, then verify the new release on
+   <https://pypi.org/project/mobipick-labs-docker-gui/>.
 
 ## Configuration model
 

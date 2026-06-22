@@ -19,7 +19,9 @@ def _window_for_browser_tests():
     return window
 
 
-def test_docker_cp_container_path_browser_starts_at_default_path(monkeypatch):
+def test_docker_cp_running_container_path_browser_starts_at_default_path(
+    monkeypatch,
+):
     window = _window_for_browser_tests()
     seen = {}
 
@@ -47,6 +49,37 @@ def test_docker_cp_container_path_browser_starts_at_default_path(monkeypatch):
     assert result == '/root/catkin_ws/src/demo/config/file.rviz'
     assert seen['container_ref'] == 'container-id'
     assert seen['start_path'] == '/root/catkin_ws/src/demo/config/file.rviz'
+    assert seen['list_provider'] == window._docker_cp_list_container_paths
+
+
+def test_docker_cp_image_path_browser_starts_at_root(monkeypatch):
+    window = _window_for_browser_tests()
+    seen = {}
+
+    class FakePathDialog:
+        def __init__(self, *, container_ref, start_path, list_provider):
+            seen['container_ref'] = container_ref
+            seen['start_path'] = start_path
+            seen['list_provider'] = list_provider
+
+        def exec_(self):
+            return QDialog.Rejected
+
+    monkeypatch.setattr(
+        main_window_module,
+        'DockerCpContainerPathDialog',
+        FakePathDialog,
+    )
+
+    result = MainWindow._docker_cp_container_path_from_setup(
+        window,
+        '__image__:example:gpt',
+        '/root/catkin_ws/src/demo/config/file.rviz',
+    )
+
+    assert result == '/root/catkin_ws/src/demo/config/file.rviz'
+    assert seen['container_ref'] == '__image__:example:gpt'
+    assert seen['start_path'] == '/'
     assert seen['list_provider'] == window._docker_cp_list_container_paths
 
 

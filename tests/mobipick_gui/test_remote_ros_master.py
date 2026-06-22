@@ -308,7 +308,7 @@ def test_docker_cp_container_path_from_setup_can_use_image(monkeypatch):
     class FakeContainerPathDialog:
         def __init__(self, **kwargs):
             self.kwargs = kwargs
-            assert kwargs['start_path'] == '/workspace/config.rviz'
+            assert kwargs['start_path'] == '/'
 
         def exec_(self):
             return main_window_module.QDialog.Accepted
