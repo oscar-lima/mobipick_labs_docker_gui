@@ -688,6 +688,7 @@ class AutoLaunchWizard(QDialog):
 class DockerCpConfigDialog(QDialog):
     """Edit persistent docker cp path mappings."""
 
+    IMAGE_SETUP_PREFIX = '__image__:'
     DEFAULT_CONTAINER_PATH = (
         '/root/catkin_ws/src/mobipick_labs/tables_demo_bringup/config/'
         'pick_n_place.rviz'
@@ -4937,6 +4938,39 @@ CMD ["bash"]
                 )
         return records
 
+    def _docker_cp_workspace_match_images(self, workspace_name: str) -> list[str]:
+        match_image = ''
+        try:
+            match_image = self._workspace_match_image(workspace_name)
+        except Exception:
+            match_image = ''
+        registry_image = ''
+        image_for = getattr(self._workspace_registry, 'image_for', None)
+        if callable(image_for):
+            registry_image = image_for(workspace_name, '')
+        selected_image = ''
+        try:
+            selected_image = getattr(self, '_selected_image', '')
+        except Exception:
+            selected_image = ''
+        candidates = [
+            match_image,
+            registry_image,
+            selected_image
+            if self._image_compatible_with_workspace(
+                selected_image,
+                workspace_name,
+            ) is True
+            else '',
+        ]
+        return list(
+            dict.fromkeys(
+                image.strip()
+                for image in candidates
+                if isinstance(image, str) and image.strip()
+            )
+        )
+
     def _docker_cp_setup_container_options(self) -> list[tuple[str, str]]:
         options: list[tuple[str, str]] = []
         seen: set[str] = set()
@@ -4958,6 +4992,12 @@ CMD ["bash"]
             add_record(label, container_ref)
 
         workspace_name = self._workspace_registry.active or ''
+        for image_ref in self._docker_cp_workspace_match_images(workspace_name):
+            add_record(
+                f'Workspace match image ({image_ref})',
+                f'{DockerCpConfigDialog.IMAGE_SETUP_PREFIX}{image_ref}',
+            )
+
         records = self._docker_ps_container_records()
         for record in records:
             image = record.get('image', '')
@@ -4991,6 +5031,11 @@ CMD ["bash"]
         default_path = str(default_path or '').strip()
         if not container_ref:
             return default_path
+        image_ref = ''
+        if container_ref.startswith(DockerCpConfigDialog.IMAGE_SETUP_PREFIX):
+            image_ref = container_ref[
+                len(DockerCpConfigDialog.IMAGE_SETUP_PREFIX):
+            ]
         script = (
             'set -e; '
             f'default={shlex.quote(default_path)}; '
@@ -5000,8 +5045,21 @@ CMD ["bash"]
         )
         choices: list[str] = []
         try:
+            if image_ref:
+                command = [
+                    'docker',
+                    'run',
+                    '--rm',
+                    '--entrypoint',
+                    'bash',
+                    image_ref,
+                    '-lc',
+                    script,
+                ]
+            else:
+                command = ['docker', 'exec', container_ref, 'bash', '-lc', script]
             cp = subprocess.run(
-                ['docker', 'exec', container_ref, 'bash', '-lc', script],
+                command,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
                 check=False,

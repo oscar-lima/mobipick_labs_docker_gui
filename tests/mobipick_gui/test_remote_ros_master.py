@@ -185,6 +185,70 @@ def test_docker_cp_setup_containers_include_workspace_matched_docker_ps(
     assert ('other-container: repo/other:tag', 'def456') in options
 
 
+def test_docker_cp_setup_containers_include_workspace_match_image(
+    monkeypatch,
+):
+    window = MainWindow.__new__(MainWindow)
+    window._workspace_registry = SimpleNamespace(
+        active='gpt_ws',
+        image_for=lambda name, default='': '',
+    )
+    window._selected_image = ''
+    window.tasks = {}
+    window._console_log = lambda *_args, **_kwargs: None
+    window._current_tab_key = lambda: ''
+    window._workspace_match_image = lambda workspace: 'repo/gpt:tag'
+    window._image_compatible_with_workspace = lambda image, workspace: False
+
+    monkeypatch.setattr(
+        main_window_module.subprocess,
+        'run',
+        lambda *args, **kwargs: SimpleNamespace(
+            stdout='def456\trepo/other:tag\tother-container\n'
+        ),
+    )
+
+    options = window._docker_cp_setup_container_options()
+
+    assert options[0] == (
+        'Workspace match image (repo/gpt:tag)',
+        f'{main_window_module.DockerCpConfigDialog.IMAGE_SETUP_PREFIX}'
+        'repo/gpt:tag',
+    )
+    assert ('other-container: repo/other:tag', 'def456') in options
+
+
+def test_docker_cp_container_path_from_setup_can_use_image(monkeypatch):
+    window = MainWindow.__new__(MainWindow)
+    window._console_log = lambda *_args, **_kwargs: None
+
+    def fake_run(args, **kwargs):
+        assert args[:5] == [
+            'docker',
+            'run',
+            '--rm',
+            '--entrypoint',
+            'bash',
+        ]
+        assert args[5] == 'repo/gpt:tag'
+        return SimpleNamespace(stdout='/workspace/config.rviz\n')
+
+    monkeypatch.setattr(main_window_module.subprocess, 'run', fake_run)
+    monkeypatch.setattr(
+        main_window_module.QInputDialog,
+        'getItem',
+        lambda *args, **kwargs: ('/workspace/config.rviz', True),
+    )
+
+    selected = window._docker_cp_container_path_from_setup(
+        f'{main_window_module.DockerCpConfigDialog.IMAGE_SETUP_PREFIX}'
+        'repo/gpt:tag',
+        '/workspace/config.rviz',
+    )
+
+    assert selected == '/workspace/config.rviz'
+
+
 def test_docker_cp_host_start_prefers_master_workspace(tmp_path):
     window = MainWindow.__new__(MainWindow)
     master = tmp_path / 'master'
