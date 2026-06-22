@@ -24,6 +24,7 @@ class ProcessTab:
 
         self.output = LogTextEdit()
 
+        self.environment_overrides: dict[str, str] = {}
         self.proc = QProcess(parent)
         self.proc.setProcessChannelMode(QProcess.MergedChannels)
         self._apply_env()
@@ -108,10 +109,16 @@ class ProcessTab:
             self.output.enqueue(False, data)
 
     def _apply_env(self):
-        env = self.parent._build_process_environment()
+        env = self.parent._build_process_environment(self.environment_overrides)
         self.proc.setProcessEnvironment(env)
 
     def refresh_environment(self):
+        if not self.is_running():
+            self._apply_env()
+
+    def set_environment_overrides(self, values: dict[str, str] | None):
+        """Set environment values applied the next time this tab starts."""
+        self.environment_overrides = dict(values or {})
         if not self.is_running():
             self._apply_env()
 

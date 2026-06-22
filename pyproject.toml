@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mobipick-labs-docker-gui"
-version = "0.1.0"
+version = "0.1.1"
 description = "PyQt5 desktop controller for the Mobipick Labs Docker simulation"
 readme = "README.md"
 requires-python = ">=3.8"
@@ -32,7 +32,8 @@ classifiers = [
 keywords = ["mobipick", "docker", "gui", "ros", "simulation"]
 
 [project.urls]
-Homepage = "https://github.com/openai/mobipick_labs_docker_gui"
+Homepage = "https://github.com/DFKI-NI/mobipick_labs_docker_gui"
+Repository = "https://github.com/DFKI-NI/mobipick_labs_docker_gui"
 
 [project.scripts]
 mobipick-labs-docker-gui = "mobipick_gui.cli:main"
@@ -41,5 +42,30 @@ mobipick-labs-docker-gui = "mobipick_gui.cli:main"
 include-package-data = true
 zip-safe = false
 
+[tool.setuptools.package-data]
+mobipick_gui = [
+    "resources/clean.bash",
+    "resources/custom_entrypoint.sh",
+    "resources/docker-compose.yml",
+    "resources/enter_container_manually_test.sh",
+    "resources/gui_user_documentation.md",
+    "resources/config/*.yaml",
+    "resources/empty_workspace/.gitkeep",
+    "resources/images/*.svg",
+    "resources/scripts/enter_host_shell.py",
+    "resources/scripts/ros_workspace_setup.bash",
+    "resources/scripts/terminal.bashrc",
+]
+
+[tool.setuptools.exclude-package-data]
+mobipick_gui = [
+    "resources/private/**",
+    "resources/log/**",
+    "**/__pycache__/**",
+    "**/*.pyc",
+]
+
 [tool.setuptools.packages.find]
 include = ["mobipick_gui", "mobipick_gui.*"]
+exclude = ["mobipick_gui.resources.private*"]
+namespaces = false

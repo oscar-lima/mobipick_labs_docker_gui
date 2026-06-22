@@ -1,2 +1,11 @@
 include README.md
-recursive-include mobipick_gui/resources *
+include mobipick_gui/resources/clean.bash
+include mobipick_gui/resources/custom_entrypoint.sh
+include mobipick_gui/resources/docker-compose.yml
+include mobipick_gui/resources/enter_container_manually_test.sh
+include mobipick_gui/resources/gui_user_documentation.md
+recursive-include mobipick_gui/resources/config *.yaml
+include mobipick_gui/resources/empty_workspace/.gitkeep
+include mobipick_gui/resources/scripts/enter_host_shell.py
+include mobipick_gui/resources/scripts/ros_workspace_setup.bash
+include mobipick_gui/resources/scripts/terminal.bashrc

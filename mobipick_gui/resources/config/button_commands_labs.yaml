@@ -1,0 +1,25 @@
+buttons:
+  - key: sim
+    label: "Sim"
+    kind: builtin
+    action: sim
+    command: "roslaunch tables_demo_bringup demo_sim.launch world_config:=${MOBIPICK_WORLD:-moelk_tables}"
+    tooltip: "Start or stop the simulator container"
+  - key: tables
+    label: "Tables Demo"
+    kind: builtin
+    action: tables_demo
+    command: "rosrun tables_demo_planning tables_demo_node.py"
+    tooltip: "Launch the tables demo planning node"
+  - key: rviz
+    label: "RViz"
+    kind: builtin
+    action: rviz
+    command: "rosrun rviz rviz -d $(rospack find tables_demo_bringup)/config/pick_n_place.rviz __ns:=mobipick"
+    tooltip: "Open RViz with the pick and place configuration"
+  - key: rqt
+    label: "RQt Tables"
+    kind: builtin
+    action: rqt_tables
+    command: "roslaunch rqt_tables_demo rqt_tables_demo.launch namespace:=mobipick world_config:=${MOBIPICK_WORLD:-moelk_tables}"
+    tooltip: "Open the RQt tables demo UI"

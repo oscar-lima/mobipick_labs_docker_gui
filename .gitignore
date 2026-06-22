@@ -1,2 +1,10 @@
-logs/*
-__pycache__
+logs/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+build/
+dist/
+*.egg-info/
+mobipick_gui/resources/log/
+mobipick_gui/resources/private/button_configs/
+mobipick_gui/resources/private/recordings/

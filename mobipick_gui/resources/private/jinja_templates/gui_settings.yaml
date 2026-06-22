@@ -19,17 +19,14 @@ ros:
   remote_enabled_by_default: false                      # keep local roscore/simulation mode selected on startup
 
 window_layout:
-  state_file: "~/.config/mobipick-labs-docker-gui/window_layouts/{workspace}.yaml"  # writable per-workspace window positions
+  state_file: "~/.config/mobipick-labs-docker-gui/window_layout.yaml"
   auto_apply: true                                      # when true, apply saved sizes/positions to matching windows after they appear
   apply_delay_ms: "auto"                                # wait this long before applying layout; "auto" waits until the last auto-launch timeline entry finishes
 
 recording:
-  enabled_by_default: false             # leave "Record Auto Launch" unchecked on startup
-  workspace_name: "workspace"           # replaced by the active workspace name when one is selected
+  enabled_by_default: false             # leave "Record screen" unchecked on startup
+  workspace_name: "{{workspace_raw}}"   # used when building recording filenames (e.g., 1_{{workspace_raw}}_30_09_142500.mp4)
   output_dir: "~/.local/share/mobipick-labs-docker-gui/recordings"
-  remember_output_dir: false            # when false, checking "Record Auto Launch" asks where to save recordings
-  display: ""                           # X11 display for ffmpeg x11grab; empty uses the GUI process DISPLAY
-  show_control_window: true             # pop up an always-on-top Stop Recording window while recording
   resolution: "3440x1440"               # default ffmpeg capture resolution (-s)
   presets: ["1920x1080", "2560x1440", "3440x1440"]  # options shown in the resolution dropdown
   include_detected_resolution: true     # when true, add the detected primary monitor resolution as a selectable option
@@ -54,7 +51,8 @@ buttons:
     tooltip: "Close tab"                       # hover text for close buttons
     size: 18                                   # close button width/height in pixels
     stylesheet: "QPushButton { border: none; padding: 0px; }"  # Qt stylesheet for close buttons
-  config_file: "config/button_commands_labs.yaml"  # workspace-specific profiles are configured in the workspace manager
+  # config_file: "config/button_commands_labs.yaml"  # switch button profiles (e.g., private/button_configs/button_commands_gpt.yaml)
+  config_file: "private/button_configs/button_commands_{{workspace_raw}}.yaml"
 
 process:
   qprocess_env:
@@ -85,7 +83,7 @@ setup_wizard:
   source_install_by_default: false           # preselect the source clone/build step when true
 
 images:
-  default: "ozkrelo/x_mobipick_labs:noetic-v1.1" # portable base image selected on first launch
+  default: "ozkrelo/x_mobipick_labs:noetic-v1.1" # portable base image selected by default
   discovery_filters: ["mobipick"]                 # repository substrings used to filter docker images for the dropdown
   blacklist: []                               # image refs/patterns ignored by setup and image discovery, e.g. ["*n8n*"]
   include_none_tag: false                     # include dangling (<none>) tags in the image list when true
@@ -115,6 +113,21 @@ images:
       compatible_workspaces: ["Docker image default"]
       workdir: "/root/catkin_ws"
       description: "Public X11 image with a root-owned workspace baked into the image."
+    - ref: "ozkrelo/x_mobipick_labs:{{ host_user }}_user_from_1.2"
+      user: host
+      supports_host_workspaces: true
+      compatible_workspaces: ["clean_mobipick_labs_ws"]
+      description: "Local development image for clean_mobipick_labs_ws."
+    - ref: "ozkrelo/x_mobipick_labs:rae_ws_from_{{ host_user }}_user"
+      user: host
+      supports_host_workspaces: true
+      compatible_workspaces: ["rae_upom_mobipick_ws"]
+      description: "Local development image for rae_upom_mobipick_ws."
+    - ref: "ozkrelo/x_mobipick_labs:gpt_ws_from_{{ host_user }}_user"
+      user: host
+      supports_host_workspaces: true
+      compatible_workspaces: ["gpt_ws"]
+      description: "Local development image for gpt_ws."
     - match: "*_user*"
       user: host
       supports_host_workspaces: true

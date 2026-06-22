@@ -1,231 +1,542 @@
 # Mobipick Labs Docker GUI
 
-The Mobipick Labs Docker GUI is a PyQt5 desktop application that orchestrates the
-Docker-based Mobipick Labs robotics simulation. Instead of manually invoking
-`docker compose` yourself, you launch the `mobipick-labs-docker-gui` command (or
-`python -m mobipick_gui`) and drive the bring-up,
-monitoring, and shutdown of the simulation through an interactive interface.
-The GUI reads the bundled configuration files, runs Docker commands on your
-behalf, and streams live logs so you can follow what is happening in each
-container.
+The Mobipick Labs Docker GUI is a PyQt5 desktop application that controls the
+Docker-based Mobipick Labs ROS 1 simulation. It wraps Docker Compose commands,
+sets the environment required by the selected Docker image and ROS workspace,
+streams process output into GUI tabs, and performs cleanup when the application
+closes.
+
+Related project and distribution links:
+
+- Mobipick Labs repository: <https://github.com/DFKI-NI/mobipick_labs>
+- PyPI package: <https://pypi.org/project/mobipick-labs-docker-gui/>
+
+This README is developer documentation for maintaining and extending the
+application. User-facing button and menu documentation lives in the
+[`gui_user_documentation.md`](mobipick_gui/resources/gui_user_documentation.md)
+resource and is rendered in the application from **Help > Documentation**.
 
 <img src="doc/mobipick_labs_docker_gui.png" alt="mobipick tables sim and real" width="420">
 
 ## Repository layout
 
-```
-├── gui.py                  # Legacy CLI shim that forwards to the packaged entry point
-├── mobipick_gui/
-│   ├── resources/          # Bundled compose file, default configs, helper scripts
-│   └── …                   # PyQt5 widgets, process orchestration, and helpers
-├── MANIFEST.in             # Source distribution manifest
-└── pyproject.toml          # Packaging metadata for PyPI distribution
+```text
+.
+|-- gui.py                         # Legacy shim that forwards to mobipick_gui.cli
+|-- mobipick_gui/
+|   |-- cli.py                     # QApplication setup and CLI parsing
+|   |-- main_window.py             # Main PyQt window and Docker/ROS orchestration
+|   |-- process_tab.py             # QProcess plus log widget wrapper
+|   |-- log_widget.py              # Buffered QTextEdit for high-volume logs
+|   |-- documentation_dialog.py    # Rendered user documentation and search
+|   |-- bug_report.py              # Diagnostic report builder
+|   |-- setup_wizard.py            # Image setup and custom image choices
+|   |-- workspace_dialog.py        # Workspace manager dialog
+|   |-- workspaces.py              # Workspace registry and runtime env model
+|   |-- settings_transfer.py       # Portable import/export of GUI settings
+|   |-- window_layout.py           # wmctrl/xprop capture and replay helper
+|   |-- config.py                  # Bundled/user config loading and defaults
+|   `-- resources/
+|       |-- docker-compose.yml
+|       |-- custom_entrypoint.sh
+|       |-- clean.bash
+|       |-- gui_user_documentation.md
+|       |-- config/
+|       |   |-- gui_settings.yaml
+|       |   |-- button_commands_labs.yaml
+|       |   |-- worlds.yaml
+|       |   `-- docker_cp_image_tag.yaml
+|       `-- scripts/
+|           |-- enter_host_shell.py
+|           |-- terminal.bashrc
+|           `-- ros_workspace_setup.bash
+|-- tests/mobipick_gui/            # pytest regression tests
+|-- pyproject.toml                 # Packaging metadata and package data
+|-- MANIFEST.in                    # Source distribution manifest
+`-- doc/                           # Project imagery
 ```
 
-The compose file is **not** intended to be executed directly. The GUI manages it
-for you by spawning `docker compose` subprocesses, supervising their lifecycle,
-and performing cleanup logic when you close the application.
+Private experiments and templates under `mobipick_gui/resources/private/` are
+excluded from package data and source distribution output.
+
+## Runtime architecture
+
+`mobipick_gui.cli.main()` creates a `QApplication`, instantiates
+`MainWindow`, and forwards unknown arguments to Qt. `MainWindow` owns the GUI
+state, menu actions, process tabs, workspace/image selection, recording state,
+and shutdown sequence.
+
+Runtime commands are executed in two ways:
+
+- Long-running tasks use `QProcess` through `ProcessTab`. Output is merged,
+  sanitized for terminal escape sequences, converted from ANSI color to HTML
+  when needed, and flushed into `LogTextEdit`.
+- Short helper commands use `subprocess.run()` through `MainWindow._sp_run()`,
+  which injects the same runtime environment and logs the command to the GUI.
+
+Docker Compose is always invoked by the GUI with the bundled compose file and a
+fixed project name. The compose file is not intended to be run directly during
+normal GUI use, because the GUI also tracks process state, xhost access, tabs,
+recording, and cleanup.
 
 ## Prerequisites
 
-* Ubuntu Linux (tested on versions 20.04, 22.04, and 24.04)
-* Python 3.8+ with PyQt5 available (e.g. `pip install PyQt5`).
-* Docker Engine and the Docker Compose plugin accessible to your user.
-* Access to the Mobipick Labs image repository (for example
-  `ozkrelo/mobipick_labs:noetic`).
-* An X11 server that allows the containers to create GUI windows. The GUI
-  issues the required `xhost` commands automatically when needed.
+The application targets Linux desktops with X11.
+
+- Python 3.8 or newer.
+- PyQt5 5.15 or newer.
+- Docker Engine and the Docker Compose plugin available to the current user.
+- An X11 desktop session for Gazebo, RViz, RQt, and recording.
+- Optional but recommended: NVIDIA Container Toolkit for GPU-accelerated
+  simulation.
+- Optional tools for specific features:
+  - `wmctrl` and `xprop` for window layout capture/replay.
+  - `graphviz` for workspace graph rendering.
+  - `ffmpeg` for Auto Launch screen recording.
+
+Common Ubuntu setup:
+
+```bash
+sudo apt update
+sudo apt install docker.io docker-compose-plugin wmctrl x11-utils graphviz ffmpeg
+sudo systemctl enable docker
+sudo systemctl start docker
+sudo usermod -aG docker "$USER"
+```
+
+Log out and back in after changing Docker group membership, or start a shell
+with `newgrp docker`.
+
+Pull at least one Mobipick image before launching the GUI, or use the setup
+wizard on first launch:
+
+```bash
+docker pull ozkrelo/x_mobipick_labs:noetic-v1.1
+docker pull ozkrelo/x_mobipick_labs:noetic-v1.2
+```
 
 ## Installation
 
-- Install Docker Engine (`docker.io`) and ensure it is running.
-```bash
-sudo apt update && sudo apt install docker.io
-sudo systemctl enable docker
-sudo systemctl start docker
-```
-
-- Configure Docker to run without sudo:
+Install the released package from PyPI:
 
 ```bash
-sudo usermod -aG docker $USER
+python -m pip install mobipick-labs-docker-gui
 ```
 
-Then log out and back in, or do:
+If you installed an older released version, upgrade it in the same Python
+environment:
 
 ```bash
-newgrp docker
+python -m pip install --upgrade mobipick-labs-docker-gui
+python -m pip show mobipick-labs-docker-gui
 ```
 
-- Install the Mobipick Labs GUI from PyPI (this also installs the package dependencies):
+If the command was installed with `--user` and your shell cannot find
+`mobipick-labs-docker-gui`, make sure Python's user script directory is on
+`PATH`, for example `~/.local/bin` on many Linux systems.
+
+## Development setup
+
+Create an editable install from the checkout:
 
 ```bash
-pip install mobipick-labs-docker-gui
+python -m pip install -e .
 ```
 
-- Install the Docker Compose plugin and pull the Mobipick Labs image.
+Install test-only tools when working on regression tests:
 
 ```bash
-sudo apt install docker-compose-plugin
-# Verify that the Compose plugin is available
-docker compose version
-# pull mobipick labs docker image from docker hub
-docker pull ozkrelo/mobipick_labs:noetic
+python -m pip install pytest pytest-qt
 ```
 
-- Optional but strongly recommended if you have an NVIDIA graphics card: install [nvidia-docker2](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/nvidia-docker.html). After installation, restart Docker and test with:
+Launch the GUI from the checkout:
 
 ```bash
-sudo docker run --rm --runtime=nvidia --gpus all ubuntu nvidia-smi
+mobipick-labs-docker-gui --verbose 2
 ```
 
-Note: If you run Mobipick Labs on the CPU, the simulation can be slow.
-
-## Launching the GUI
-
-1. Clone the repository *or* install the package from PyPI.
-1. Start the application:
-   ```bash
-   mobipick-labs-docker-gui
-   ```
-1. When the window opens, use the top row of buttons to bring up ROS core,
-   start or stop the simulator, toggle RViz/RQt, or open a Docker-backed
-   terminal. The GUI ensures the correct container sequence is followed.
-
-You can interrupt the GUI with <kbd>Ctrl</kbd>+<kbd>C</kbd> in the launch
-terminal; the application traps the signal, stops the running containers, and
-then exits gracefully.
-
-### Command-line options
-
-The CLI accepts a single verbosity switch that controls how much diagnostic
-information the GUI prints to its log tabs and the launch terminal:
+Equivalent debug entry points:
 
 ```bash
-mobipick-labs-docker-gui --verbose        # Same as -v or --v
-mobipick-labs-docker-gui -v 3             # Maximum verbosity
-mobipick-labs-docker-gui -v 1             # Quietest mode (default)
+python -m mobipick_gui --verbose 2
+python gui.py --verbose 2
 ```
 
-You can also pass through any Qt-specific arguments (for example `-platform`)
-after the GUI options; they are forwarded automatically to `QApplication`.
+The verbosity option accepts levels 1 through 3. Unknown CLI arguments are
+passed to Qt, for example `-platform offscreen` in headless checks.
 
-## Understanding the GUI workflow
+## Tests
 
-* **Process supervision:** Each button spawns a `QProcess` that executes a
-  Docker command (`docker compose up`, `docker compose exec`, `docker cp`, etc.).
-  Environment variables from `mobipick_gui/resources/config/gui_settings.yaml` ensure the commands run
-  with consistent settings (for example `COMPOSE_IGNORE_ORPHANS=1`).
-* **State polling:** Timers defined in `config/gui_settings.yaml` periodically
-  inspect Docker to reflect whether the ROS core, simulator, RViz, or RQt
-  containers are alive before updating the button states.
-* **Log streaming:** Every subprocess pipes its stdout/stderr into a dedicated
-  tab, colourised via `mobipick_gui/ansi.py` so you can tail the container logs
-  without leaving the GUI.
-* **Graceful shutdown:** When you exit, the GUI stops active containers in a
-  safe order, runs `clean.bash` (bundled in `mobipick_gui/resources/`) to remove
-  temporary resources, and only then closes the window.
-
-## Configuring the GUI
-
-All customisation lives in the `mobipick_gui/resources/config/` directory. You
-can copy these files and adapt them to your workflow. When running from an
-installed package the directory is read-only; export the environment variable
-`MOBIPICK_GUI_DATA_ROOT` and point it at a writable copy of the resources if you
-need to override the defaults.
-
-* **`config/gui_settings.yaml`** – Controls UI behaviour such as window geometry
-  and log styling, defines timer intervals, button colours, terminal launcher
-  settings, and Docker environment variables. Most keys mirror the defaults
-  declared in `mobipick_gui/config.py` so you can override just the values you
-  need.
-* **`config/worlds.yaml`** – Lists the world configurations that populate the
-  drop-down selector when launching the simulator. Edit or append entries to
-  expose additional Gazebo worlds shipped in your Mobipick Labs Docker image.
-* **`config/docker_cp_image_tag.yaml`** – Declares optional `docker cp`
-  synchronisation rules keyed by image name. Host-to-container copies run
-  automatically after the container starts, while container-to-host copies are
-  triggered by the "Execute Docker cp" button inside the GUI.
-
-## Working with the compose file
-
-Although `docker-compose.yml` lives in the repository, the GUI is responsible for
-translating user actions into compose commands. Typical sequences are:
-
-1. **ROS core toggle:** `docker compose up roscore` starts the lightweight
-   orchestration container. The GUI remembers the container name and watches for
-   it to become healthy before enabling the simulator button.
-2. **Simulator toggle:** `docker compose up mobipick-run` launches the main
-   Gazebo environment. When you stop it, the GUI optionally synchronises files
-   defined in `docker_cp_image_tag.yaml` and then calls `docker compose stop`
-   with a configurable timeout.
-3. **Visualization tools:** RViz and RQt are launched with `docker compose run`
-   so each tool receives its own tabbed log stream.
-
-Because the GUI tracks container state, you should avoid running the compose
-file manually in parallel—it can confuse the state machine and lead to orphaned
-containers. If you need a manual clean slate, run `mobipick_gui/resources/clean.bash`
-with the GUI closed to remove stopped containers and networks.
-
-### Avoiding Git "dubious ownership" warnings in bind mounts
-
-When Docker bind-mounts a host workspace into a container, Git 2.35+ refuses to
-run if the repository is owned by a different UID/GID than the process inside
-the container. The GUI now auto-detects your numeric UID/GID and user metadata
-(with sudo-aware fallbacks) and exports them to every `docker compose` command
-it spawns. Containers are still allowed to start as root—this keeps the original
-entrypoint behaviour intact—but the GUI-provided terminal session immediately
-drops privileges inside the container via
-`/root/scripts_430ofkjl04fsw/enter_host_shell.py`. As a result, interactive
-shells run with the same UID/GID as the bind-mounted repository, preventing Git
-from flagging the workspace as "dubious". When you genuinely need a privileged
-shell, tick the **Run as root** checkbox next to the **Open Terminal** button
-before launching it. The GUI will export root credentials to Docker Compose and
-skip the user drop so the terminal starts as the container's root user. You can
-also make this behaviour the default by setting `terminal.drop_to_host_user` to
-`false` in `config/gui_settings.yaml`. When you keep the checkbox cleared the
-helper enables passwordless `sudo` for the synthesized host user, so you can run
-administrative commands without re-owning files created later by non-privileged
-processes.
-
-If you invoke the compose file manually (outside the GUI), pass the same
-variables explicitly so Docker uses your login credentials:
+Run the full test suite:
 
 ```bash
-MOBIPICK_UID="$(id -u)" MOBIPICK_GID="$(id -g)" docker compose up
+pytest
 ```
 
-For ad-hoc `docker run` commands, either specify `--user "$(id -u):$(id -g)"` or
-replicate the GUI behaviour with the `MOBIPICK_UID`/`MOBIPICK_GID` environment
-pair. To obtain an interactive shell that mirrors the GUI behaviour, invoke the
-helper directly:
+Most GUI tests set `QT_QPA_PLATFORM=offscreen` and stub Docker discovery or
+process methods. Keep new tests Docker-independent unless the test explicitly
+targets Docker command construction.
 
+Current coverage includes:
+
+- configuration loading and writable user config paths;
+- workspace registry, switching, import/export, and image/workspace matching;
+- setup wizard and custom image profile persistence;
+- remote ROS master behavior;
+- Auto Launch and recording state transitions;
+- menu-only status/image controls and menu tooltips;
+- bug report formatting;
+- documentation dialog rendering and keyword search.
+
+## Packaging
+
+The package version is declared in `pyproject.toml`. The fallback version used
+when running directly from an unpackaged source tree lives in
+`mobipick_gui/version.py`; keep both values in sync for releases.
+
+Build source and wheel artifacts with:
+
+```bash
+python -m pip install --upgrade build
+python -m build
 ```
-docker compose run --rm \
-  --env MOBIPICK_UID="$(id -u)" \
-  --env MOBIPICK_GID="$(id -g)" \
-  --env MOBIPICK_HOST_USER="$USER" \
-  --env MOBIPICK_HOST_GROUP="$(id -gn)" \
-  --env MOBIPICK_HOST_HOME="$HOME" \
-  mobipick_cmd python3 /root/scripts_430ofkjl04fsw/enter_host_shell.py bash
+
+Optionally validate the artifacts before uploading:
+
+```bash
+python -m pip install --upgrade twine
+python -m twine check dist/*
 ```
 
-The helper keeps the hinted `MOBIPICK_HOST_HOME` when possible, creating the
-directory (and a matching passwd/group entry) if it does not already exist. When
-the hinted home lacks a `.bashrc` but `/root/.bashrc` is available, the helper
-creates a lightweight wrapper `~/.bashrc` that sources the container's default
-profile. This preserves your user-specific writable home—editors such as `nano`
-can persist history under `~/.local`—while still executing the image-provided
-initialisation scripts automatically.
+Package data is declared in both `pyproject.toml` and `MANIFEST.in`. When adding
+new runtime assets under `mobipick_gui/resources/`, update both files so editable
+installs, wheels, and source distributions all behave the same.
 
-## Tips and troubleshooting
+The console script installed by the package is:
 
-* Verify that Docker commands succeed from your shell before launching the GUI;
-  it executes the same binaries with your current user.
-* If the GUI cannot discover your Mobipick Labs image, adjust the
-  `images.discovery_filters` list in `mobipick_gui/resources/config/gui_settings.yaml`.
-* When experimenting with new Gazebo worlds or launch files, consider adding a
-  custom button tab via `mobipick_gui/process_tab.py` so you can track logs in
-  the same window.
-* Logs are retained up to `log.max_block_count` lines per tab. Lower the value
-  if you experience sluggishness on resource-constrained machines.
+```text
+mobipick-labs-docker-gui = mobipick_gui.cli:main
+```
+
+### PyPI release flow
+
+Publishing is handled by `.github/workflows/python-publish.yml`. The workflow
+builds the distributions and uploads them to PyPI when a GitHub Release is
+published. Merging to `main` alone does not publish a new PyPI version.
+
+Recommended release steps:
+
+1. Update the version in `pyproject.toml` and `mobipick_gui/version.py`.
+2. Run the tests and build locally.
+3. Merge the release branch to `main`.
+4. Create and publish a GitHub Release from `main`, using a tag such as
+   `v0.1.1`.
+5. Confirm the workflow succeeds, then verify the new release on
+   <https://pypi.org/project/mobipick-labs-docker-gui/>.
+
+## Configuration model
+
+Bundled defaults live under `mobipick_gui/resources/config/`.
+`mobipick_gui.config.CONFIG_DEFAULTS` supplies hard defaults, then
+`config/gui_settings.yaml` is merged over them, then the per-user
+`gui_settings.yaml` is merged last.
+
+Important environment overrides:
+
+- `MOBIPICK_GUI_DATA_ROOT` points the package at an alternate resources root.
+- `MOBIPICK_GUI_CONFIG` points to an alternate per-user GUI settings file.
+- `MOBIPICK_WORKSPACE_CONFIG` points to an alternate workspace registry.
+- `XDG_CONFIG_HOME` and `XDG_DATA_HOME` control the default per-user roots.
+
+Default per-user state locations:
+
+```text
+~/.config/mobipick-labs-docker-gui/gui_settings.yaml
+~/.config/mobipick-labs-docker-gui/workspaces.yaml
+~/.config/mobipick-labs-docker-gui/window_layouts/{workspace}.yaml
+~/.config/mobipick-labs-docker-gui/docker_cp_image_tag.yaml
+~/.config/mobipick-labs-docker-gui/docker_cp_profiles/{workspace}_docker_cp_image_tag.yaml
+~/.config/mobipick-labs-docker-gui/launch_sequences/
+~/.config/mobipick-labs-docker-gui/profiles/
+~/.local/share/mobipick-labs-docker-gui/recordings/
+~/.local/share/mobipick-labs-docker-gui/image_builds/
+```
+
+Keep bundled resource files immutable at runtime. User edits should be written
+to per-user config/data paths.
+
+The top-level **Settings** menu exposes migration and troubleshooting actions:
+**Export All Settings...** writes the workspace registry, per-user GUI settings,
+and workspace profiles to one portable YAML file; **Import All Settings...**
+restores that file under a chosen workspace master folder; **Show Configuration
+Paths** displays the writable config/data paths that the GUI manages.
+
+## Docker and ROS services
+
+The bundled compose file defines three services:
+
+- `mobipick` runs the simulator.
+- `mobipick_cmd` runs local ROS tools, scripts, terminals, and custom commands.
+- `mobipick_remote_cmd` runs tools with host networking for external ROS
+  master mode.
+
+The GUI injects these important values into Docker commands:
+
+- `MOBIPICK_IMAGE` selected from the image combo box.
+- `MOBIPICK_WORLD` selected from `worlds.yaml`.
+- `MOBIPICK_CONTAINER_USER`, `MOBIPICK_CONTAINER_ENTRYPOINT`, and
+  `MOBIPICK_CONTAINER_WORKDIR` derived from image profiles.
+- `MOBIPICK_UID`, `MOBIPICK_GID`, `MOBIPICK_HOST_USER`,
+  `MOBIPICK_HOST_GROUP`, and `MOBIPICK_HOST_HOME` derived from the host user.
+- Workspace mount and ROS environment values from `WorkspaceRegistry`.
+- `ROS_MASTER_URI` from local Roscore or remote ROS master mode.
+
+The GUI creates or reuses the external Docker network named `mobipick` and
+labels one-off containers with `mobipick.exec` and `mobipick.tab` so they can be
+found and stopped reliably.
+
+## Workspace model
+
+`WorkspaceRegistry` stores host catkin workspaces, their inheritance, optional
+workspace-specific Docker images, button profiles, auto-launch profiles, and
+simulator command overrides.
+
+For host workspace mode, the registry mounts the common workspace root once
+inside Docker at the canonical container root `~/ros_ws`. It maps selected
+workspaces and underlays into that root, exports `MOBIPICK_WORKSPACE_*`
+variables, and provides fallback source paths when a workspace is not built.
+
+`WorkspaceManagerDialog` is the UI for:
+
+- choosing or creating a master folder;
+- discovering child workspaces with `src/`;
+- adding or creating standalone workspaces;
+- editing inheritance and image/button/launch profiles;
+- building the active workspace inside Docker;
+- exporting/importing portable GUI settings;
+- rendering the workspace graph.
+
+Builds use `catkin build` inside the selected development image. Public root
+images are configured as image-default only and do not mount host workspaces.
+
+## Image profiles and setup wizard
+
+Image behavior is controlled by `images` in `gui_settings.yaml`.
+
+- `default` is the preferred Docker image.
+- `discovery_filters` controls which local images appear in the combo box.
+  The **Configure Image Filters** dialog shows these filters next to the
+  blacklist and previews which local Docker images will be used, ignored, or
+  hidden.
+- `blacklist` contains image refs or glob patterns ignored after discovery
+  filtering.
+- `profiles` maps image refs or glob patterns to container user behavior,
+  workspace support, compatible workspaces, working directory, entrypoint, and
+  tooltip description.
+
+The setup wizard can pull public images, choose a default image, build a
+host-user development image, and clone/build `DFKI-NI/mobipick_labs` from
+source in a host-mounted workspace. Each optional wizard page has a skip button.
+The custom image builder writes a Docker build context under the per-user data
+directory, copies `custom_entrypoint.sh`, adds a host-matching user, installs
+passwordless sudo, and tags the result according to the wizard fields.
+
+The source install step creates
+`<master folder>/clean_mobipick_labs_ws/src/mobipick_labs` by default, runs the
+work inside Docker with the workspace mounted to the host, sources
+`/opt/ros/noetic/setup.bash`, then executes `./install-deps.sh` and `./build.sh`.
+Output streams into an **Install Source** tab. Existing git checkouts are
+updated; existing non-git paths stop the step with an explicit error.
+
+## Button profiles
+
+Default toolbar buttons are loaded from
+`resources/config/button_commands_labs.yaml`. `load_button_layout()` supports
+workspace-specific replacements through the workspace registry.
+Use **Tools > Configure Toolbar Buttons** to edit the active profile from the
+GUI. Workspace edits are saved as writable per-user copies named for the active
+workspace, and that workspace is updated to point at its copy. Packaged global
+profiles are also copied before saving. The dialog shows the editable button
+key, label, command, compose service, and tooltip; other execution fields are
+preserved when saving.
+
+Use **Load Profile** and **Export Profile** in that dialog to move complete
+button configurations as one YAML file. The automatic save location is the
+per-user XDG config directory so an installed package is never modified at
+runtime; exporting is the way to place a profile in a private repository or
+share it with another setup.
+
+Button entries can be:
+
+- `kind: builtin` with actions such as `sim`, `tables_demo`, `rviz`, and
+  `rqt_tables`;
+- `kind: command` with an arbitrary command executed either in Docker or on the
+  host.
+
+Every editable top-row button has a `command`. Default commands for the bundled
+`sim`, `tables`, `rviz`, and `rqt` buttons live in the button profile and are
+used by their builtin start/stop wrappers. Legacy workspace `sim_command`
+values remain supported and are written into the button profile when saved from
+the GUI editor.
+
+Command entries can declare:
+
+- `requires_roscore`;
+- `reuse_tab`;
+- `world_config_required` and `world_arg_name`;
+- `setup` or `pre_command`;
+- `host`;
+- `stop_command`;
+- `log_command`;
+- `pass_ros_master_uri`;
+- `service`, for choosing the compose service used by Docker command buttons.
+  Leave it empty for the normal tool service, or use `mobipick` for launch
+  files that start Gazebo themselves and need the simulator service identity.
+
+The GUI normalizes all entries and creates matching process tabs and
+start/stop visual state.
+
+`roscore` and `terminal` are fixed top-row buttons and are not stored in button
+profiles. `sim` and `rviz` are required profile buttons: they cannot be
+removed, but their `command` fields can override the default simulation and
+RViz launch commands. Other profile buttons can be added, removed, reordered,
+or changed.
+
+## Auto Launch
+
+`load_launch_sequence_plan()` resolves Auto Launch YAML from a workspace
+profile, per-user launch sequence directory, or fallback filenames derived from
+the active button profile.
+
+The saved format stores:
+
+- `timeline`: button key plus `at_seconds`;
+- `shutdown.order`: reverse or custom stop order;
+- optional `shutdown.skip`;
+- optional button text/tooltip metadata;
+- `recording.start_delay_seconds`.
+
+`AutoLaunchWizard` edits the timeline and saves it to a writable per-user path
+when the source is a packaged resource. Auto Launch can also coordinate window
+layout replay and delayed recording startup.
+
+## Recording and window layout
+
+Recording captures X11 screen video with `ffmpeg -f x11grab`. It is armed by the
+GUI checkbox and starts only after Auto Launch begins and the timeline/layout
+delay has elapsed. Recording sessions create timestamped folders containing the
+MP4, `ffmpeg.log`, and saved HTML logs when requested.
+
+Window layout capture uses `WindowLayoutManager` plus `wmctrl` and `xprop`.
+The manager records the baseline windows present when the GUI starts, excludes
+the GUI/helper windows during capture, stores a separate layout for each active
+workspace, and applies saved positions to matching new windows after the
+configured delay. The `window_layout.state_file` setting may include
+`{workspace}` or `{workspace_slug}`; paths without a placeholder are treated as
+a base location and expanded into one YAML file per workspace.
+
+## Remote ROS master mode
+
+Remote mode is controlled by the hidden Remote ROS Master view controls. When
+enabled:
+
+- local Roscore and simulation actions are disabled;
+- tools, scripts, terminals, configured commands, and custom commands use
+  `mobipick_remote_cmd`;
+- `ROS_MASTER_URI` is normalized and passed into containers;
+- host networking is used so ROS 1 callbacks can reach the nodes.
+
+Changing remote mode or the URI is blocked while workspace processes are
+running.
+
+## Docker cp profiles
+
+`docker_cp_image_tag.yaml` defines optional copy rules keyed by `default` or
+by ROS workspace name.
+
+- `host_to_container` entries run automatically after eligible containers
+  appear.
+- `container_to_host` entries run from **Tools > Docker > Execute Docker cp**
+  for the current running tab.
+
+When the Docker image default workspace is active, user edits are saved to
+`~/.config/mobipick-labs-docker-gui/docker_cp_image_tag.yaml`. When a ROS
+workspace is active, edits are saved to
+`~/.config/mobipick-labs-docker-gui/docker_cp_profiles/{workspace}_docker_cp_image_tag.yaml`.
+The editor shows workspaces rather than Docker image tags. Add Row opens a
+path setup dialog; the host side uses a local file picker, and the container
+side can use a selected running setup container or manual path entry. Empty
+profiles in the active writable file override bundled entries.
+
+## Logging and reports
+
+Every process tab uses `LogTextEdit`, which buffers updates to keep high-volume
+process output responsive. The log widget keeps only the configured maximum
+block count.
+
+GUI-originated messages and executed commands are written to the **Log** tab.
+Users can save the current tab, save all tabs, or load a saved HTML log into a
+closable tab. The bottom search row searches only the current log tab.
+
+The bug report dialog collects selected diagnostic sections, including GUI
+version, selected workspace, selected image/workspace match, optional command
+outputs, workspace graph, log tab text, and user notes. Keep new diagnostics
+optional so report generation remains useful on machines without every tool
+installed.
+
+## User documentation dialog
+
+The Help documentation window renders
+`resources/gui_user_documentation.md` with `QTextBrowser`. It supports keyword
+search from a line edit plus Find and Previous buttons. Matching keywords are
+highlighted and the current match is selected and scrolled into view.
+
+When editing user documentation, keep the text task-oriented and avoid
+developer internals. Developer details belong in this README or code comments.
+
+## Shutdown behavior
+
+Closing the GUI starts a controlled shutdown:
+
+1. cancel Auto Launch timers and pending recording start;
+2. stop screen recording if active;
+3. stop the external terminal container;
+4. kill GUI-owned background `QProcess` instances;
+5. stop simulator and related Mobipick containers;
+6. run `clean.bash` when available;
+7. revoke temporary X11 access;
+8. quit the Qt application.
+
+Avoid adding early returns in shutdown paths unless they still leave the GUI in
+a recoverable state.
+
+## Development guidelines
+
+- Keep user-visible defaults in `resources/config/` and hard fallbacks in
+  `config.py`.
+- Keep per-user writes out of packaged resources.
+- Prefer extending existing helper methods in `MainWindow` before adding a new
+  orchestration path.
+- Add tests under `tests/mobipick_gui/` for new behavior.
+- Stub Docker and external tools in tests unless the test only validates command
+  construction.
+- For new package resources, update `pyproject.toml` and `MANIFEST.in`.
+- For new user-visible controls, update
+  `resources/gui_user_documentation.md`.
+- For new developer-facing configuration, update this README.
+
+## Troubleshooting for developers
+
+- If no images appear, open **Configure Image Filters** to inspect
+  `images.discovery_filters`, `images.blacklist`, and the preview of local
+  images from `docker images`.
+- If GUI tests create real dialogs unexpectedly, set
+  `QT_QPA_PLATFORM=offscreen` and monkeypatch Docker discovery.
+- If a workspace does not mount, check the selected image profile for
+  `supports_host_workspaces`.
+- If RViz or Gazebo windows do not open, verify X11, `DISPLAY`, Docker
+  permissions, and temporary `xhost` access.
+- If recordings produce no MP4, inspect the session `ffmpeg.log` and the
+  configured display/resolution.
+- If window layout replay does nothing, install `wmctrl` and `xprop` and save a
+  layout after simulator windows are visible.

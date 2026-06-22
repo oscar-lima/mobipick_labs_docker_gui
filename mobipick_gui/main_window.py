@@ -1,55 +1,99 @@
 from __future__ import annotations
 
+import copy
 import html
 import json
 import os
 import re
 import shlex
+import signal
 import subprocess
 import sys
 import time
 import uuid
 from collections import deque
 from datetime import datetime
+from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Callable, Match, Optional
+from urllib.parse import urlsplit
 
-from PyQt5.QtCore import QProcess, QProcessEnvironment, QTimer, Qt
-from PyQt5.QtGui import QTextCursor, QTextDocument
+import yaml
+from PyQt5.QtCore import QEvent, QIODevice, QPoint, QProcess, QProcessEnvironment, QTimer, Qt
+from PyQt5.QtGui import QColor, QGuiApplication, QPixmap, QTextCursor, QTextDocument
 from PyQt5.QtWidgets import (
+    QAction,
+    QAbstractItemView,
     QApplication,
     QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
+    QDoubleSpinBox,
     QFileDialog,
+    QFormLayout,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QPushButton,
     QScrollArea,
     QSizePolicy,
     QTabBar,
+    QTableWidget,
+    QTableWidgetItem,
     QTabWidget,
     QTextEdit,
+    QToolTip,
     QVBoxLayout,
     QWidget,
 )
 
 from .ansi import CSI_SEQ_RE, OSC_SEQ_RE, ansi_to_html
+from .bug_report import BugReportDialog
 from .config import (
+    BUTTON_CONFIG_FILE,
     CONFIG,
-    CONFIG_FILE,
+    DEFAULT_BUTTON_COMMANDS,
     DEFAULT_YAML_PATH,
     PROJECT_ROOT,
     SCRIPT_CLEAN,
+    USER_DATA_DIR,
+    USER_CONFIG_FILE,
+    WINDOW_LAYOUT_FILE,
     load_docker_cp_config,
+    load_docker_cp_user_config,
+    load_button_layout,
+    load_launch_sequence_plan,
+    save_button_layout,
+    save_docker_cp_config,
+    save_launch_sequence_plan,
+    save_user_config_update,
+    user_configuration_paths,
+    writable_button_config_path,
+    writable_docker_cp_config_path,
+    writable_launch_sequence_path,
+    writable_workspace_button_config_path,
+    writable_workspace_docker_cp_config_path,
 )
+from .documentation_dialog import DocumentationDialog
+from .external_links import open_external_url
+from .settings_transfer import export_settings, import_settings
 
-CONTAINER_SCRIPTS_DIR = '/root/scripts_430ofkjl04fsw'
+CONTAINER_SCRIPTS_DIR = str(
+    CONFIG.get('process', {}).get('container_scripts_dir', '/scripts_430ofkjl04fsw')
+)
 from .process_tab import ProcessTab
+from .setup_wizard import ImageSetupWizard, SetupWizardSelection
+from .version import get_version
+from .window_layout import WindowLayoutManager
+from .workspace_dialog import WorkspaceManagerDialog
+from .workspaces import RosWorkspace, WorkspaceRegistry
 
 _SIGINT_TRIGGERED = False
 
@@ -58,6 +102,1599 @@ def trigger_sigint():
     """Signal the GUI to start its shutdown sequence."""
     global _SIGINT_TRIGGERED
     _SIGINT_TRIGGERED = True
+
+
+def _text_width(font_metrics, text: str) -> int:
+    """Return the display width for text across supported PyQt5 versions."""
+    if hasattr(font_metrics, 'horizontalAdvance'):
+        return font_metrics.horizontalAdvance(text)
+    return font_metrics.width(text)
+
+
+def _configure_expanding_toolbar_button(button: QPushButton) -> None:
+    """Let toolbar buttons grow with the window while keeping text readable."""
+    button.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+
+
+class ButtonProfileTable(QTableWidget):
+    """Toolbar button editor table with priority-based column sizing."""
+
+    FIELD_ORDER = ['key', 'label', 'command', 'service', 'tooltip']
+    MIN_WIDTHS = {
+        'key': 96,
+        'label': 132,
+        'command': 280,
+        'service': 112,
+        'tooltip': 72,
+    }
+    MAX_DESIRED_WIDTHS = {
+        'key': 220,
+        'label': 280,
+        'command': 760,
+        'service': 180,
+        'tooltip': 240,
+    }
+    EXPAND_WEIGHTS = {
+        'key': 1,
+        'label': 2,
+        'command': 7,
+        'service': 1,
+        'tooltip': 0,
+    }
+
+    def __init__(
+        self,
+        columns: list[tuple[str, str]],
+        parent: QWidget | None = None,
+    ):
+        super().__init__(0, len(columns), parent)
+        self._column_fields = [field for field, _label in columns]
+        self.setHorizontalHeaderLabels([label for _field, label in columns])
+        self.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
+        header = self.horizontalHeader()
+        header.setStretchLastSection(False)
+        header.setSectionResizeMode(QHeaderView.Fixed)
+        header.setMinimumSectionSize(48)
+
+    def resizeEvent(self, event):  # noqa: N802 - Qt API
+        super().resizeEvent(event)
+        self.apply_column_widths()
+
+    def apply_column_widths(self) -> None:
+        if self.columnCount() <= 0:
+            return
+        widths = self._responsive_column_widths()
+        for column, width in enumerate(widths):
+            self.setColumnWidth(column, width)
+
+    def _responsive_column_widths(self) -> list[int]:
+        desired = self._desired_column_widths()
+        minimum = [
+            min(desired[index], self.MIN_WIDTHS.get(field, 90))
+            for index, field in enumerate(self._column_fields)
+        ]
+        available = max(self.viewport().width(), sum(minimum))
+        widths = list(minimum)
+        remaining = available - sum(widths)
+
+        for field in self.FIELD_ORDER:
+            if remaining <= 0:
+                break
+            if field not in self._column_fields:
+                continue
+            index = self._column_fields.index(field)
+            growth = max(0, desired[index] - widths[index])
+            add = min(growth, remaining)
+            widths[index] += add
+            remaining -= add
+
+        if remaining > 0:
+            weighted_fields = [
+                field
+                for field in self.FIELD_ORDER
+                if field in self._column_fields
+                and self.EXPAND_WEIGHTS.get(field, 0) > 0
+            ]
+            total_weight = sum(
+                self.EXPAND_WEIGHTS[field]
+                for field in weighted_fields
+            )
+            for field in weighted_fields:
+                index = self._column_fields.index(field)
+                add = remaining * self.EXPAND_WEIGHTS[field] // total_weight
+                widths[index] += add
+            used = sum(widths)
+            if used < available:
+                widths[self._column_fields.index('command')] += available - used
+        return widths
+
+    def _desired_column_widths(self) -> list[int]:
+        metrics = self.fontMetrics()
+        widths: list[int] = []
+        for column, field in enumerate(self._column_fields):
+            header = self.horizontalHeaderItem(column)
+            header_text = header.text() if header else field
+            content_width = _text_width(metrics, header_text)
+            for row in range(self.rowCount()):
+                item = self.item(row, column)
+                if item:
+                    content_width = max(
+                        content_width,
+                        _text_width(metrics, item.text()),
+                    )
+            desired = content_width + 32
+            widths.append(
+                min(
+                    max(desired, self.MIN_WIDTHS.get(field, 90)),
+                    self.MAX_DESIRED_WIDTHS.get(field, 360),
+                )
+            )
+        return widths
+
+
+class ImageBlacklistDialog(QDialog):
+    """Edit Docker image ignore patterns with a live result preview."""
+
+    def __init__(
+        self,
+        patterns: list[str],
+        discovery_filters: list[str],
+        image_refs: list[str],
+        matcher: Callable[[str, str], bool],
+        parent: QWidget | None = None,
+    ):
+        super().__init__(parent)
+        self._matcher = matcher
+        self._image_refs = list(dict.fromkeys(ref for ref in image_refs if ref))
+
+        self.setWindowTitle('Docker Image Filters')
+        self.resize(1040, 640)
+
+        layout = QVBoxLayout(self)
+        intro = QLabel(
+            'Discovery filters choose which local images are offered by the '
+            'GUI. Ignore patterns then remove unwanted matches.'
+        )
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+
+        body = QHBoxLayout()
+        layout.addLayout(body, 1)
+
+        editor_column = QVBoxLayout()
+        body.addLayout(editor_column, 1)
+
+        editor_column.addWidget(QLabel('Discovery filters'))
+        self.discovery_filter_editor = QTextEdit()
+        self.discovery_filter_editor.setAcceptRichText(False)
+        self.discovery_filter_editor.setPlainText('\n'.join(discovery_filters))
+        self.discovery_filter_editor.setPlaceholderText(
+            'mobipick\nx_mobipick_labs'
+        )
+        self.discovery_filter_editor.setMinimumWidth(320)
+        self.discovery_filter_editor.setMaximumHeight(140)
+        self.discovery_filter_editor.setSizePolicy(
+            QSizePolicy.Expanding,
+            QSizePolicy.Fixed,
+        )
+        editor_column.addWidget(self.discovery_filter_editor)
+
+        filter_actions = QHBoxLayout()
+        add_filter = QPushButton('Add Repository Filter')
+        add_filter.clicked.connect(self._add_selected_repository_filter)
+        filter_actions.addWidget(add_filter)
+        filter_actions.addStretch(1)
+        editor_column.addLayout(filter_actions)
+
+        editor_column.addWidget(QLabel('Ignored refs and patterns'))
+        self.pattern_editor = QTextEdit()
+        self.pattern_editor.setAcceptRichText(False)
+        self.pattern_editor.setPlainText('\n'.join(patterns))
+        self.pattern_editor.setPlaceholderText('*n8n*\nrepo/image:tag')
+        self.pattern_editor.setMinimumWidth(320)
+        self.pattern_editor.setSizePolicy(
+            QSizePolicy.Expanding,
+            QSizePolicy.Expanding,
+        )
+        editor_column.addWidget(self.pattern_editor, 1)
+
+        image_row = QHBoxLayout()
+        self.image_combo = QComboBox()
+        self.image_combo.setMinimumWidth(280)
+        self.image_combo.setSizePolicy(
+            QSizePolicy.Expanding,
+            QSizePolicy.Fixed,
+        )
+        if self._image_refs:
+            self.image_combo.addItems(self._image_refs)
+        else:
+            self.image_combo.addItem('No matching local Docker images found')
+            self.image_combo.setEnabled(False)
+        image_row.addWidget(self.image_combo, 1)
+
+        add_exact = QPushButton('Add Image')
+        add_exact.clicked.connect(self._add_selected_image)
+        image_row.addWidget(add_exact)
+        editor_column.addLayout(image_row)
+
+        add_repo = QPushButton('Add Repository Pattern')
+        add_repo.clicked.connect(self._add_selected_repository_pattern)
+        editor_column.addWidget(add_repo)
+
+        preview_column = QVBoxLayout()
+        body.addLayout(preview_column, 2)
+
+        self.summary_label = QLabel()
+        self.summary_label.setWordWrap(True)
+        preview_column.addWidget(self.summary_label)
+
+        self.preview_table = QTableWidget(0, 4)
+        self.preview_table.setHorizontalHeaderLabels(
+            ['Result', 'Image', 'Discovery filter', 'Ignore pattern']
+        )
+        self.preview_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.preview_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.preview_table.verticalHeader().setVisible(False)
+        header = self.preview_table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.Stretch)
+        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        preview_column.addWidget(self.preview_table, 1)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.Ok | QDialogButtonBox.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+        self.pattern_editor.textChanged.connect(self._refresh_preview)
+        self.discovery_filter_editor.textChanged.connect(self._refresh_preview)
+        self._refresh_preview()
+
+    def patterns(self) -> list[str]:
+        return self._normalize_patterns(self.pattern_editor.toPlainText())
+
+    def discovery_filters(self) -> list[str]:
+        return self._normalize_patterns(
+            self.discovery_filter_editor.toPlainText()
+        )
+
+    @staticmethod
+    def _normalize_patterns(text: str) -> list[str]:
+        patterns: list[str] = []
+        for item in re.split(r'[\n,]+', text or ''):
+            pattern = item.strip()
+            if pattern and pattern not in patterns:
+                patterns.append(pattern)
+        return patterns
+
+    def _selected_image_ref(self) -> str:
+        if not self.image_combo.isEnabled():
+            return ''
+        return str(self.image_combo.currentText() or '').strip()
+
+    def _add_selected_image(self) -> None:
+        self._append_pattern(self._selected_image_ref())
+
+    def _add_selected_repository_pattern(self) -> None:
+        self._append_pattern(self._repository_pattern_for_selected_image())
+
+    def _add_selected_repository_filter(self) -> None:
+        self._append_discovery_filter(
+            self._repository_filter_for_selected_image()
+        )
+
+    def _repository_pattern_for_selected_image(self) -> str:
+        image_ref = self._selected_image_ref()
+        if not image_ref:
+            return ''
+        repository = self._repository_for_image_ref(image_ref)
+        return f'{repository}:*' if repository else ''
+
+    def _repository_filter_for_selected_image(self) -> str:
+        return self._repository_for_image_ref(self._selected_image_ref())
+
+    @staticmethod
+    def _repository_for_image_ref(image_ref: str) -> str:
+        last_slash = image_ref.rfind('/')
+        last_colon = image_ref.rfind(':')
+        return (
+            image_ref[:last_colon]
+            if last_colon > last_slash
+            else image_ref
+        )
+
+    def _append_pattern(self, pattern: str) -> None:
+        pattern = str(pattern or '').strip()
+        if not pattern:
+            return
+        patterns = self.patterns()
+        if pattern not in patterns:
+            patterns.append(pattern)
+        self.pattern_editor.setPlainText('\n'.join(patterns))
+        cursor = self.pattern_editor.textCursor()
+        cursor.movePosition(QTextCursor.End)
+        self.pattern_editor.setTextCursor(cursor)
+
+    def _append_discovery_filter(self, discovery_filter: str) -> None:
+        discovery_filter = str(discovery_filter or '').strip()
+        if not discovery_filter:
+            return
+        filters = self.discovery_filters()
+        if discovery_filter not in filters:
+            filters.append(discovery_filter)
+        self.discovery_filter_editor.setPlainText('\n'.join(filters))
+        cursor = self.discovery_filter_editor.textCursor()
+        cursor.movePosition(QTextCursor.End)
+        self.discovery_filter_editor.setTextCursor(cursor)
+
+    def _refresh_preview(self) -> None:
+        patterns = self.patterns()
+        discovery_filters = self.discovery_filters()
+        rows: list[tuple[str, str, str, str]] = []
+        used_count = 0
+        ignored_count = 0
+        hidden_count = 0
+        for image_ref in self._image_refs:
+            filter_match = next(
+                (
+                    discovery_filter
+                    for discovery_filter in discovery_filters
+                    if discovery_filter.lower() in image_ref.lower()
+                ),
+                '',
+            )
+            matched_pattern = next(
+                (
+                    pattern
+                    for pattern in patterns
+                    if self._matcher(image_ref, pattern)
+                ),
+                '',
+            )
+            if matched_pattern:
+                rows.append(('Ignored', image_ref, filter_match, matched_pattern))
+                ignored_count += 1
+            elif discovery_filters and not filter_match:
+                rows.append(('Hidden', image_ref, '', ''))
+                hidden_count += 1
+            else:
+                rows.append(('Used', image_ref, filter_match, ''))
+                used_count += 1
+
+        self.summary_label.setText(
+            f'{used_count} image(s) will be used; '
+            f'{ignored_count} image(s) will be ignored; '
+            f'{hidden_count} image(s) will be hidden by discovery filters.'
+        )
+        self.preview_table.setRowCount(len(rows))
+        for row, (
+            result,
+            image_ref,
+            filter_match,
+            matched_pattern,
+        ) in enumerate(rows):
+            result_item = QTableWidgetItem(result)
+            if result == 'Ignored':
+                result_item.setForeground(QColor('#9a3412'))
+            elif result == 'Hidden':
+                result_item.setForeground(QColor('#525252'))
+            else:
+                result_item.setForeground(QColor('#166534'))
+            self.preview_table.setItem(row, 0, result_item)
+            self.preview_table.setItem(row, 1, QTableWidgetItem(image_ref))
+            self.preview_table.setItem(row, 2, QTableWidgetItem(filter_match))
+            self.preview_table.setItem(row, 3, QTableWidgetItem(matched_pattern))
+
+
+class ButtonProfileDialog(QDialog):
+    """Edit the configurable top-row command buttons."""
+
+    COLUMNS = [
+        ('key', 'Key'),
+        ('label', 'Label'),
+        ('command', 'Command'),
+        ('service', 'Service'),
+        ('tooltip', 'Tooltip'),
+    ]
+    BOOL_FIELDS: set[str] = set()
+    REQUIRED_KEYS = {'sim', 'rviz'}
+    RESERVED_KEYS = {'roscore', 'terminal'}
+    KEY_RE = re.compile(r'^[A-Za-z0-9_.-]+$')
+
+    def __init__(
+        self,
+        entries: list[dict],
+        source_path: Path,
+        save_path: Path,
+        parent: QWidget | None = None,
+    ):
+        super().__init__(None)
+        self.setWindowTitle('Configure Toolbar Buttons')
+        self.setWindowFlag(Qt.Window, True)
+        self.resize(960, 560)
+        self._owner = parent
+        self._source_path = source_path
+        self._save_path = save_path
+
+        root = QVBoxLayout(self)
+        note = QLabel(
+            'Roscore and Terminal are always present and are not editable here. '
+            'Every listed button runs its command in its own tab. Sim and RViz '
+            'cannot be removed.'
+        )
+        note.setWordWrap(True)
+        root.addWidget(note)
+
+        path_label = QLabel(
+            f'Loaded from: {source_path}\nSaves to: {save_path}'
+        )
+        path_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        root.addWidget(path_label)
+
+        self.table = ButtonProfileTable(self.COLUMNS)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SingleSelection)
+        root.addWidget(self.table, 1)
+
+        for entry in entries:
+            self._append_row(entry)
+        self.table.apply_column_widths()
+
+        actions = QHBoxLayout()
+        add_button = QPushButton('Add Command')
+        add_button.clicked.connect(self._add_command_row)
+        actions.addWidget(add_button)
+        remove_button = QPushButton('Remove Selected')
+        remove_button.clicked.connect(self._remove_selected_row)
+        actions.addWidget(remove_button)
+        up_button = QPushButton('Move Up')
+        up_button.clicked.connect(lambda: self._move_selected_row(-1))
+        actions.addWidget(up_button)
+        down_button = QPushButton('Move Down')
+        down_button.clicked.connect(lambda: self._move_selected_row(1))
+        actions.addWidget(down_button)
+        load_button = QPushButton('Load Profile')
+        load_button.clicked.connect(self._load_profile)
+        actions.addWidget(load_button)
+        export_button = QPushButton('Export Profile')
+        export_button.clicked.connect(self._export_profile)
+        actions.addWidget(export_button)
+        actions.addStretch(1)
+        root.addLayout(actions)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.Save | QDialogButtonBox.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        root.addWidget(buttons)
+
+    def _append_row(self, entry: dict) -> None:
+        row = self.table.rowCount()
+        self.table.insertRow(row)
+        key_text = str(entry.get('key') or '').strip()
+        locked = key_text in self.REQUIRED_KEYS
+        for column, (field, _label) in enumerate(self.COLUMNS):
+            if field in self.BOOL_FIELDS:
+                item = QTableWidgetItem()
+                item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsUserCheckable)
+                item.setCheckState(
+                    Qt.Checked if bool(entry.get(field, False)) else Qt.Unchecked
+                )
+            else:
+                value = entry.get(field, '')
+                item = QTableWidgetItem('' if value is None else str(value))
+                flags = Qt.ItemIsEnabled | Qt.ItemIsSelectable
+                if not (
+                    locked
+                    and field in {'key', 'kind', 'action'}
+                ):
+                    flags |= Qt.ItemIsEditable
+                item.setFlags(flags)
+            if column == 0:
+                item.setData(Qt.UserRole, copy.deepcopy(entry))
+            self.table.setItem(row, column, item)
+        self.table.apply_column_widths()
+
+    def _selected_row(self) -> int:
+        indexes = self.table.selectionModel().selectedRows()
+        return indexes[0].row() if indexes else -1
+
+    def _field_column(self, field: str) -> int:
+        return next(
+            index
+            for index, (candidate, _label) in enumerate(self.COLUMNS)
+            if candidate == field
+        )
+
+    def _row_key(self, row: int) -> str:
+        item = self.table.item(row, self._field_column('key'))
+        return item.text().strip() if item else ''
+
+    def _next_command_key(self) -> str:
+        existing = {
+            self._row_key(row)
+            for row in range(self.table.rowCount())
+        }
+        index = 1
+        while f'command_{index}' in existing:
+            index += 1
+        return f'command_{index}'
+
+    def _add_command_row(self) -> None:
+        key = self._next_command_key()
+        self._append_row(
+            {
+                'key': key,
+                'label': key.replace('_', ' ').title(),
+                'kind': 'command',
+                'action': '',
+                'command': '',
+                'requires_roscore': True,
+                'reuse_tab': False,
+                'world_config_required': False,
+                'world_arg_name': 'world_config',
+                'host': False,
+                'pass_ros_master_uri': False,
+                'service': '',
+            }
+        )
+        self.table.selectRow(self.table.rowCount() - 1)
+
+    def _replace_rows(self, entries: list[dict]) -> None:
+        self.table.setRowCount(0)
+        for entry in entries:
+            self._append_row(entry)
+        self.table.apply_column_widths()
+
+    def _profile_dialog_start_dir(self) -> str:
+        for path in (self._save_path, self._source_path):
+            try:
+                if path.parent:
+                    return str(path.parent)
+            except AttributeError:
+                continue
+        return str(Path.home())
+
+    def _validated_layout(self) -> list[dict] | None:
+        entries = self.button_layout()
+        error = self._validation_error(entries)
+        if error:
+            QMessageBox.warning(self, 'Toolbar Buttons', error)
+            return None
+        return entries
+
+    def _export_profile(self) -> None:
+        entries = self._validated_layout()
+        if entries is None:
+            return
+        path, _selected_filter = QFileDialog.getSaveFileName(
+            self,
+            'Export Toolbar Button Profile',
+            self._profile_dialog_start_dir(),
+            'YAML files (*.yaml *.yml);;All files (*)',
+        )
+        if not path:
+            return
+        target = Path(path).expanduser()
+        if not target.suffix:
+            target = target.with_suffix('.yaml')
+        try:
+            saved_path = save_button_layout(target, entries)
+        except OSError as exc:
+            QMessageBox.warning(
+                self,
+                'Toolbar Buttons',
+                f'Failed to export toolbar button profile:\n{exc}',
+            )
+            return
+        QMessageBox.information(
+            self,
+            'Toolbar Buttons',
+            f'Exported toolbar button profile to:\n{saved_path}',
+        )
+
+    def _load_profile(self) -> None:
+        path, _selected_filter = QFileDialog.getOpenFileName(
+            self,
+            'Load Toolbar Button Profile',
+            self._profile_dialog_start_dir(),
+            'YAML files (*.yaml *.yml);;All files (*)',
+        )
+        if not path:
+            return
+        source = Path(path).expanduser()
+        try:
+            entries = load_button_layout(source)
+        except Exception as exc:
+            QMessageBox.warning(
+                self,
+                'Toolbar Buttons',
+                f'Failed to load toolbar button profile:\n{exc}',
+            )
+            return
+        self._replace_rows(entries)
+        self.table.selectRow(0)
+
+    def _remove_selected_row(self) -> None:
+        row = self._selected_row()
+        if row < 0:
+            return
+        key = self._row_key(row)
+        if key in self.REQUIRED_KEYS:
+            QMessageBox.information(
+                self,
+                'Toolbar Buttons',
+                'Sim and RViz cannot be removed.',
+            )
+            return
+        self.table.removeRow(row)
+
+    def _move_selected_row(self, direction: int) -> None:
+        row = self._selected_row()
+        target = row + direction
+        if row < 0 or target < 0 or target >= self.table.rowCount():
+            return
+        values = [self._row_snapshot(row), self._row_snapshot(target)]
+        self.table.removeRow(max(row, target))
+        self.table.removeRow(min(row, target))
+        insert_first = min(row, target)
+        ordered = values if direction < 0 else values[::-1]
+        for offset, entry in enumerate(ordered):
+            self._insert_snapshot(insert_first + offset, entry)
+        self.table.selectRow(target)
+        self.table.apply_column_widths()
+
+    def _insert_snapshot(self, row: int, entry: dict) -> None:
+        self.table.insertRow(row)
+        self._write_snapshot_to_row(row, entry)
+
+    def _write_snapshot_to_row(self, row: int, entry: dict) -> None:
+        key_text = str(entry.get('key') or '').strip()
+        locked = key_text in self.REQUIRED_KEYS
+        for column, (field, _label) in enumerate(self.COLUMNS):
+            if field in self.BOOL_FIELDS:
+                item = QTableWidgetItem()
+                item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsUserCheckable)
+                item.setCheckState(
+                    Qt.Checked if bool(entry.get(field, False)) else Qt.Unchecked
+                )
+            else:
+                item = QTableWidgetItem(str(entry.get(field, '') or ''))
+                flags = Qt.ItemIsEnabled | Qt.ItemIsSelectable
+                if not (
+                    locked
+                    and field in {'key', 'kind', 'action'}
+                ):
+                    flags |= Qt.ItemIsEditable
+                item.setFlags(flags)
+            if column == 0:
+                item.setData(Qt.UserRole, copy.deepcopy(entry))
+            self.table.setItem(row, column, item)
+        self.table.apply_column_widths()
+
+    def _row_snapshot(self, row: int) -> dict:
+        base_item = self.table.item(row, 0)
+        base = copy.deepcopy(base_item.data(Qt.UserRole) if base_item else {})
+        if not isinstance(base, dict):
+            base = {}
+        original_key = str(base.get('key') or '').strip()
+        for column, (field, _label) in enumerate(self.COLUMNS):
+            item = self.table.item(row, column)
+            if field in self.BOOL_FIELDS:
+                base[field] = bool(item and item.checkState() == Qt.Checked)
+            else:
+                base[field] = item.text().strip() if item else ''
+        current_key = str(base.get('key') or '').strip()
+        if (
+            original_key
+            and current_key
+            and current_key != original_key
+            and current_key not in self.REQUIRED_KEYS
+        ):
+            base['kind'] = 'command'
+            base['action'] = ''
+        return base
+
+    def button_layout(self) -> list[dict]:
+        return [
+            self._row_snapshot(row)
+            for row in range(self.table.rowCount())
+        ]
+
+    def _validation_error(self, entries: list[dict]) -> str:
+        keys: list[str] = []
+        for entry in entries:
+            key = str(entry.get('key') or '').strip()
+            if not key:
+                return 'Every button needs a key.'
+            if not self.KEY_RE.fullmatch(key):
+                return (
+                    f'Button key "{key}" may contain only letters, numbers, '
+                    'dot, underscore, and hyphen.'
+                )
+            if key in self.RESERVED_KEYS:
+                return 'Roscore and Terminal are fixed buttons and cannot be edited here.'
+            if key in keys:
+                return f'Button key "{key}" is duplicated.'
+            keys.append(key)
+            kind = str(entry.get('kind') or 'builtin').strip().lower()
+            entry['kind'] = kind
+            if key in self.REQUIRED_KEYS:
+                required_action = key
+                if kind != 'builtin' or str(entry.get('action') or key) != required_action:
+                    return 'Sim and RViz must keep their builtin actions.'
+                entry['action'] = required_action
+            if not str(entry.get('command') or '').strip():
+                return f'Button "{key}" needs a command.'
+        missing = sorted(self.REQUIRED_KEYS - set(keys))
+        if missing:
+            return f'Missing required button(s): {", ".join(missing)}.'
+        return ''
+
+    def accept(self) -> None:
+        entries = self.button_layout()
+        error = self._validation_error(entries)
+        if error:
+            QMessageBox.warning(self, 'Toolbar Buttons', error)
+            return
+        super().accept()
+
+
+class AutoLaunchWizard(QDialog):
+    """Collect and persist an auto-launch timeline."""
+
+    def __init__(
+        self,
+        buttons: list[tuple[str, str]],
+        timeline: list[dict],
+        save_path: Path,
+        recording_start_delay_seconds: float = 0.0,
+        parent: QWidget | None = None,
+    ):
+        super().__init__(parent)
+        self.setWindowTitle('Configure Auto Launch')
+        self._rows: list[tuple[str, QCheckBox, QDoubleSpinBox]] = []
+
+        existing = {
+            str(entry.get('button')): float(entry.get('at_seconds', 0.0))
+            for entry in timeline
+            if isinstance(entry, dict) and entry.get('button') is not None
+        }
+
+        root = QVBoxLayout(self)
+        root.addWidget(QLabel('Select launch steps and start delays.'))
+
+        for index, (key, label) in enumerate(buttons):
+            row = QHBoxLayout()
+            checkbox = QCheckBox(label)
+            checkbox.setProperty('button_key', key)
+            checked = key in existing
+            if not existing and key != 'terminal':
+                checked = True
+            checkbox.setChecked(checked)
+
+            delay = QDoubleSpinBox()
+            delay.setRange(0.0, 3600.0)
+            delay.setDecimals(1)
+            delay.setSingleStep(1.0)
+            delay.setSuffix(' s')
+            delay.setValue(existing.get(key, float(index * 2)))
+            delay.setEnabled(checkbox.isChecked())
+            checkbox.toggled.connect(delay.setEnabled)
+
+            row.addWidget(checkbox, 1)
+            row.addWidget(QLabel('Delay:'))
+            row.addWidget(delay)
+            root.addLayout(row)
+            self._rows.append((key, checkbox, delay))
+
+        recording_row = QHBoxLayout()
+        recording_row.addWidget(QLabel('Extra recording start delay:'), 1)
+        self._recording_delay = QDoubleSpinBox()
+        self._recording_delay.setRange(0.0, 3600.0)
+        self._recording_delay.setDecimals(1)
+        self._recording_delay.setSingleStep(1.0)
+        self._recording_delay.setSuffix(' s')
+        self._recording_delay.setValue(max(0.0, float(recording_start_delay_seconds or 0)))
+        self._recording_delay.setToolTip(
+            'Additional time to wait after the last launch/layout delay '
+            'before Auto Launch recording starts.'
+        )
+        recording_row.addWidget(self._recording_delay)
+        root.addLayout(recording_row)
+
+        path_label = QLabel(f'Saves to: {save_path}')
+        path_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        root.addWidget(path_label)
+
+        self._button_box = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
+        self._button_box.accepted.connect(self.accept)
+        self._button_box.rejected.connect(self.reject)
+        root.addWidget(self._button_box)
+
+    def timeline(self) -> list[dict]:
+        """Return selected launch steps sorted by delay."""
+        entries = [
+            {
+                'button': key,
+                'at_seconds': delay.value(),
+            }
+            for key, checkbox, delay in self._rows
+            if checkbox.isChecked()
+        ]
+        return sorted(entries, key=lambda entry: (entry['at_seconds'], entry['button']))
+
+    def recording_start_delay_seconds(self) -> float:
+        """Return extra delay before recording starts after the launch timeline."""
+        return max(0.0, float(self._recording_delay.value()))
+
+    def accept(self):
+        if not self.timeline():
+            QMessageBox.warning(
+                self,
+                'Auto Launch',
+                'Select at least one launch step before saving.',
+            )
+            return
+        super().accept()
+
+
+class DockerCpConfigDialog(QDialog):
+    """Edit persistent docker cp path mappings."""
+
+    IMAGE_SETUP_PREFIX = '__image__:'
+    DEFAULT_CONTAINER_PATH = (
+        '/root/catkin_ws/src/mobipick_labs/tables_demo_bringup/config/'
+        'pick_n_place.rviz'
+    )
+    CONTAINER_CONFIG_SUFFIX = (
+        'src/mobipick_labs/tables_demo_bringup/config/pick_n_place.rviz'
+    )
+
+    def __init__(
+        self,
+        effective_config: dict[str, dict[str, list[dict]]],
+        user_config: dict[str, dict[str, list[dict]]],
+        selected_workspace: str,
+        workspace_names: list[str],
+        save_path: Path,
+        container_options_provider: Callable[..., list[tuple[str, str]]] | None = None,
+        container_path_provider: Callable[[str, str], str] | None = None,
+        host_start_provider: Callable[[str], Path] | None = None,
+        parent: QWidget | None = None,
+    ):
+        super().__init__(parent)
+        self.setWindowTitle('Configure Docker cp Paths')
+        self.resize(900, 620)
+        self._effective_config = copy.deepcopy(effective_config or {})
+        self._user_config = copy.deepcopy(user_config or {})
+        self._selected_workspace = (selected_workspace or '').strip()
+        self._workspace_names = [
+            str(name).strip()
+            for name in (workspace_names or [])
+            if str(name).strip()
+        ]
+        self._container_options_provider = container_options_provider
+        self._container_path_provider = container_path_provider
+        self._host_start_provider = host_start_provider
+        self._loading_profile = False
+
+        root = QVBoxLayout(self)
+
+        profile_row = QHBoxLayout()
+        profile_row.addWidget(QLabel('Workspace:'))
+        self.profile_combo = QComboBox()
+        for label, key in self._profile_items():
+            self.profile_combo.addItem(label, key)
+        self.profile_combo.currentIndexChanged.connect(self._load_selected_profile)
+        profile_row.addWidget(self.profile_combo, 1)
+        root.addLayout(profile_row)
+
+        self.tabs = QTabWidget()
+        self.host_to_container_table = self._make_table(
+            'Host source path',
+            'Container destination path',
+        )
+        self.container_to_host_table = self._make_table(
+            'Container source path',
+            'Host destination path',
+        )
+        self.tabs.addTab(
+            self._table_page(self.host_to_container_table),
+            'Host to Container',
+        )
+        self.tabs.addTab(
+            self._table_page(self.container_to_host_table),
+            'Container to Host',
+        )
+        root.addWidget(self.tabs, 1)
+
+        self.preview = QTextEdit()
+        self.preview.setReadOnly(True)
+        self.preview.setMinimumHeight(110)
+        root.addWidget(self.preview)
+
+        path_label = QLabel(f'Saves to: {save_path}')
+        path_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        root.addWidget(path_label)
+
+        self._button_box = QDialogButtonBox(
+            QDialogButtonBox.Save | QDialogButtonBox.Cancel
+        )
+        self._button_box.accepted.connect(self.accept)
+        self._button_box.rejected.connect(self.reject)
+        root.addWidget(self._button_box)
+
+        self._load_selected_profile()
+
+    def _profile_items(self) -> list[tuple[str, str]]:
+        items = [('Docker image default', 'default')]
+        items.extend((name, name) for name in self._workspace_names)
+        seen: set[str] = set()
+        result: list[tuple[str, str]] = []
+        for label, key in items:
+            if key in seen:
+                continue
+            result.append((label, key))
+            seen.add(key)
+        selected = self._selected_workspace or 'default'
+        if selected in seen:
+            for index, (_label, key) in enumerate(result):
+                if key == selected:
+                    result.insert(0, result.pop(index))
+                    break
+        return result
+
+    def _make_table(self, first_header: str, second_header: str) -> QTableWidget:
+        table = QTableWidget(0, 2)
+        table.setHorizontalHeaderLabels([first_header, second_header])
+        table.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
+        header = table.horizontalHeader()
+        header.setStretchLastSection(False)
+        header.setMinimumSectionSize(180)
+        header.setSectionResizeMode(0, QHeaderView.Stretch)
+        header.setSectionResizeMode(1, QHeaderView.Stretch)
+        table.itemChanged.connect(lambda _item: self._update_preview())
+        return table
+
+    def _table_page(self, table: QTableWidget) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.addWidget(table)
+
+        row = QHBoxLayout()
+        add_button = QPushButton('Add Row')
+        add_button.clicked.connect(
+            lambda _checked=False, tbl=table: (
+                self._add_row_from_dialog(tbl)
+            )
+        )
+        row.addWidget(add_button)
+        remove_button = QPushButton('Remove Selected')
+        remove_button.clicked.connect(
+            lambda _checked=False, tbl=table: self._remove_selected_rows(tbl)
+        )
+        row.addWidget(remove_button)
+        row.addStretch(1)
+        layout.addLayout(row)
+        return page
+
+    def _add_row_from_dialog(self, table: QTableWidget) -> None:
+        host_first = table is self.host_to_container_table
+        dialog = DockerCpPathDialog(
+            host_first=host_first,
+            host_start_path=self._host_start_path(
+                self._selected_workspace_key()
+            ),
+            container_path=self._default_container_path(
+                self._selected_workspace_key()
+            ),
+            container_options_provider=self._container_options_for_selected_workspace,
+            container_path_provider=self._container_path_provider,
+            parent=self,
+        )
+        if dialog.exec_() != QDialog.Accepted:
+            return
+        first, second = dialog.paths()
+        self._add_row(table, first, second)
+
+    def _container_options_for_selected_workspace(self) -> list[tuple[str, str]]:
+        if not self._container_options_provider:
+            return []
+        workspace_key = self._selected_workspace_key()
+        try:
+            return self._container_options_provider(workspace_key)
+        except TypeError:
+            return self._container_options_provider()
+
+    @classmethod
+    def _default_container_path(cls, workspace_name: str = '') -> str:
+        workspace = str(workspace_name or '').strip() or 'clean_mobipick_labs_ws'
+        preferred_text = f'{workspace}/{cls.CONTAINER_CONFIG_SUFFIX}'
+        preferred = Path(preferred_text)
+        candidates = [
+            preferred,
+            Path.home() / 'ros_ws' / preferred,
+        ]
+        if any(candidate.exists() for candidate in candidates):
+            return preferred_text
+        return cls.DEFAULT_CONTAINER_PATH
+
+    def _host_start_path(self, workspace_name: str) -> Path:
+        if self._host_start_provider:
+            return self._host_start_provider(workspace_name)
+        return Path.home()
+
+    def _selected_workspace_key(self) -> str:
+        data = self.profile_combo.currentData()
+        return str(data or 'default').strip() or 'default'
+
+    def _profile_section(self, key: str) -> dict[str, list[dict]]:
+        if key in self._user_config:
+            return copy.deepcopy(self._user_config.get(key) or {})
+        return copy.deepcopy(self._effective_config.get(key) or {})
+
+    def _load_selected_profile(self) -> None:
+        self._loading_profile = True
+        key = self._selected_workspace_key()
+        section = self._profile_section(key)
+        if not section and key != 'default':
+            section = self._profile_section('default')
+        self._set_table_entries(
+            self.host_to_container_table,
+            section.get('host_to_container', []),
+            host_first=True,
+        )
+        self._set_table_entries(
+            self.container_to_host_table,
+            section.get('container_to_host', []),
+            host_first=False,
+        )
+        self._loading_profile = False
+        self._update_preview()
+
+    def _store_current_profile(self) -> bool:
+        if getattr(self, '_loading_profile', False):
+            return False
+        key = self._selected_workspace_key()
+        if not key:
+            return False
+        try:
+            section = self._current_section()
+        except ValueError:
+            return False
+        self._user_config[key] = section
+        return True
+
+    def _set_table_entries(
+        self,
+        table: QTableWidget,
+        entries: list[dict],
+        *,
+        host_first: bool,
+    ) -> None:
+        table.blockSignals(True)
+        table.setRowCount(0)
+        for entry in entries or []:
+            if not isinstance(entry, dict):
+                continue
+            host = str(entry.get('host') or '').strip()
+            container = str(entry.get('container') or '').strip()
+            if not host or not container:
+                continue
+            if host_first:
+                self._add_row(table, host, container)
+            else:
+                self._add_row(table, container, host)
+        table.blockSignals(False)
+
+    def _add_row(
+        self,
+        table: QTableWidget,
+        first: str = '',
+        second: str = '',
+    ) -> None:
+        row = table.rowCount()
+        table.insertRow(row)
+        table.setItem(row, 0, QTableWidgetItem(first))
+        table.setItem(row, 1, QTableWidgetItem(second))
+        self._update_preview()
+
+    def _remove_selected_rows(self, table: QTableWidget) -> None:
+        rows = {index.row() for index in table.selectedIndexes()}
+        for row in sorted(rows, reverse=True):
+            table.removeRow(row)
+        self._update_preview()
+
+    def _table_entries(
+        self,
+        table: QTableWidget,
+        *,
+        host_first: bool,
+    ) -> list[dict[str, str]]:
+        entries: list[dict[str, str]] = []
+        for row in range(table.rowCount()):
+            first_item = table.item(row, 0)
+            second_item = table.item(row, 1)
+            first = first_item.text().strip() if first_item else ''
+            second = second_item.text().strip() if second_item else ''
+            if not first and not second:
+                continue
+            if not first or not second:
+                raise ValueError('Every docker cp row needs both paths.')
+            host, container = (first, second) if host_first else (second, first)
+            entries.append({'host': host, 'container': container})
+        return entries
+
+    def _current_section(self) -> dict[str, list[dict[str, str]]]:
+        return {
+            'host_to_container': self._table_entries(
+                self.host_to_container_table,
+                host_first=True,
+            ),
+            'container_to_host': self._table_entries(
+                self.container_to_host_table,
+                host_first=False,
+            ),
+        }
+
+    def _update_preview(self) -> None:
+        key = self._selected_workspace_key()
+        try:
+            section = self._current_section()
+        except ValueError:
+            self.preview.setPlainText(
+                'Complete both paths in each row to preview commands.'
+            )
+            return
+        lines = [f'Workspace: {key or "default"}']
+        for entry in section['host_to_container']:
+            lines.append(
+                f'docker cp {entry["host"]} <container>:{entry["container"]}'
+            )
+        for entry in section['container_to_host']:
+            lines.append(
+                f'docker cp <container>:{entry["container"]} {entry["host"]}'
+            )
+        if len(lines) == 1:
+            lines.append('No docker cp commands configured for this profile.')
+        self.preview.setPlainText('\n'.join(lines))
+        self._store_current_profile()
+
+    def docker_cp_config(self) -> dict[str, dict[str, list[dict]]]:
+        self._store_current_profile()
+        return copy.deepcopy(self._user_config)
+
+    def accept(self):
+        key = self._selected_workspace_key()
+        if not key:
+            QMessageBox.warning(
+                self,
+                'Docker cp Paths',
+                'Select a workspace before saving.',
+            )
+            return
+        try:
+            section = self._current_section()
+        except ValueError as exc:
+            QMessageBox.warning(self, 'Docker cp Paths', str(exc))
+            return
+        self._user_config[key] = section
+        self._store_current_profile()
+        super().accept()
+
+
+class DockerCpPathDialog(QDialog):
+    """Collect one docker cp mapping with file pickers where available."""
+
+    def __init__(
+        self,
+        *,
+        host_first: bool,
+        host_start_path: str | Path | None = None,
+        container_path: str,
+        container_options_provider: Callable[[], list[tuple[str, str]]] | None = None,
+        container_path_provider: Callable[[str, str], str] | None = None,
+        parent: QWidget | None = None,
+    ):
+        super().__init__(parent)
+        self._host_first = host_first
+        self._host_start_path = (
+            Path(host_start_path).expanduser()
+            if host_start_path
+            else Path.home()
+        )
+        self._container_options_provider = container_options_provider
+        self._container_path_provider = container_path_provider
+        self.setWindowTitle(
+            'Add Host to Container Path'
+            if host_first
+            else 'Add Container to Host Path'
+        )
+
+        root = QVBoxLayout(self)
+        form = QFormLayout()
+        form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+
+        self.host_path_edit = QLineEdit()
+        self.host_path_edit.setPlaceholderText('Select an existing host file')
+        self._configure_path_edit(self.host_path_edit)
+        host_row = QHBoxLayout()
+        host_row.addWidget(self.host_path_edit, 1)
+        host_browse = QPushButton('Browse')
+        host_browse.clicked.connect(self._browse_host_path)
+        host_row.addWidget(host_browse)
+
+        self.container_path_edit = QLineEdit(container_path)
+        self.container_path_edit.setPlaceholderText('Container file path')
+        self._configure_path_edit(self.container_path_edit)
+        container_row = QHBoxLayout()
+        container_row.addWidget(self.container_path_edit, 1)
+        container_browse = QPushButton('Browse')
+        container_browse.clicked.connect(self._browse_container_path)
+        container_row.addWidget(container_browse)
+        default_button = QPushButton('Default')
+        default_button.clicked.connect(
+            lambda _checked=False: self.container_path_edit.setText(
+                container_path
+            )
+        )
+        container_row.addWidget(default_button)
+
+        if host_first:
+            form.addRow('Host source file:', host_row)
+            form.addRow('Container destination:', container_row)
+        else:
+            form.addRow('Container source:', container_row)
+            form.addRow('Host destination file:', host_row)
+
+        root.addLayout(form)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        root.addWidget(buttons)
+        self._fit_to_path_texts()
+
+    def _configure_path_edit(self, edit: QLineEdit) -> None:
+        edit.setMinimumWidth(520)
+        edit.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        edit.textChanged.connect(lambda _text: self._fit_to_path_texts())
+
+    def _fit_to_path_texts(self) -> None:
+        metrics = self.fontMetrics()
+        longest = max(
+            (
+                self.host_path_edit.text(),
+                self.container_path_edit.text(),
+                self.host_path_edit.placeholderText(),
+                self.container_path_edit.placeholderText(),
+            ),
+            key=lambda text: _text_width(metrics, text),
+        )
+        desired = _text_width(metrics, longest) + 360
+        width = min(max(760, desired), 1400)
+        self.setMinimumWidth(width)
+        if self.width() < width:
+            self.resize(width, max(self.height(), self.sizeHint().height()))
+
+    def _browse_host_path(self) -> None:
+        current = self.host_path_edit.text().strip()
+        start = str(self._host_browse_start(current, self._host_start_path))
+        selected, _filter = QFileDialog.getOpenFileName(
+            self,
+            'Select Host File',
+            start,
+        )
+        if selected:
+            self.host_path_edit.setText(selected)
+
+    @staticmethod
+    def _host_browse_start(current: str, default_start: Path) -> Path:
+        if current:
+            parent = Path(current).expanduser().parent
+            if parent.is_dir():
+                return parent.resolve()
+        start = Path(default_start).expanduser()
+        if start.is_file():
+            start = start.parent
+        if start.is_dir():
+            return start.resolve()
+        return Path.home()
+
+    def _browse_container_path(self) -> None:
+        if self._container_options_provider and self._container_path_provider:
+            dialog = DockerCpContainerSelectDialog(
+                self._container_options_provider(),
+                self,
+            )
+            if dialog.exec_() != QDialog.Accepted:
+                return
+            container_ref = dialog.container_ref()
+            if container_ref:
+                selected = self._container_path_provider(
+                    container_ref,
+                    self.container_path_edit.text().strip(),
+                )
+                if selected:
+                    self.container_path_edit.setText(selected)
+                return
+
+        selected, _filter = QFileDialog.getOpenFileName(
+            self,
+            'Select Container File',
+            self._container_browse_start(),
+        )
+        if selected:
+            self.container_path_edit.setText(
+                self._container_path_from_selection(Path(selected))
+            )
+
+    @staticmethod
+    def _container_browse_start(workspace_name: str = '') -> str:
+        preferred = Path(DockerCpConfigDialog._default_container_path(workspace_name))
+        candidates = [
+            preferred,
+            Path.home() / 'ros_ws' / preferred,
+        ]
+        for candidate in candidates:
+            if candidate.is_file():
+                return str(candidate.resolve())
+            if candidate.parent.is_dir():
+                return str(candidate.parent.resolve())
+        return str(Path.home())
+
+    @staticmethod
+    def _container_path_from_selection(path: Path) -> str:
+        suffix = Path(DockerCpConfigDialog.CONTAINER_CONFIG_SUFFIX)
+        parts = path.parts
+        suffix_parts = suffix.parts
+        for index in range(0, len(parts) - len(suffix_parts)):
+            if parts[index + 1:index + 1 + len(suffix_parts)] == suffix_parts:
+                workspace = parts[index]
+                return f'{workspace}/{DockerCpConfigDialog.CONTAINER_CONFIG_SUFFIX}'
+        return str(path)
+
+    def paths(self) -> tuple[str, str]:
+        host = self.host_path_edit.text().strip()
+        container = self.container_path_edit.text().strip()
+        return (host, container) if self._host_first else (container, host)
+
+    def accept(self) -> None:
+        host = self.host_path_edit.text().strip()
+        container = self.container_path_edit.text().strip()
+        if not host or not container:
+            QMessageBox.warning(
+                self,
+                'Docker cp Paths',
+                'Choose both the host file and container path.',
+            )
+            return
+        host_path = Path(os.path.expanduser(os.path.expandvars(host)))
+        if not host_path.is_file():
+            QMessageBox.warning(
+                self,
+                'Docker cp Paths',
+                'Choose an existing host file.',
+            )
+            return
+        super().accept()
+
+
+class DockerCpContainerSelectDialog(QDialog):
+    """Choose a running container for container-side path setup."""
+
+    def __init__(
+        self,
+        options: list[tuple[str, str]],
+        parent: QWidget | None = None,
+    ):
+        super().__init__(parent)
+        self.setWindowTitle('Select Setup Container')
+        self.resize(520, 140)
+
+        root = QVBoxLayout(self)
+        root.addWidget(QLabel('Container used to browse or verify paths:'))
+        self.container_combo = QComboBox()
+        for label, ref in options or []:
+            clean_ref = str(ref or '').strip()
+            if clean_ref:
+                self.container_combo.addItem(str(label or clean_ref), clean_ref)
+        root.addWidget(self.container_combo)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        root.addWidget(buttons)
+
+    def container_ref(self) -> str:
+        return str(self.container_combo.currentData() or '').strip()
+
+    def accept(self) -> None:
+        if not self.container_ref():
+            QMessageBox.warning(
+                self,
+                'Docker cp Paths',
+                'Select a running container or type the path manually.',
+            )
+            return
+        super().accept()
+
+
+class DockerCpContainerPathDialog(QDialog):
+    """Browse existing container paths while allowing arbitrary destinations."""
+
+    def __init__(
+        self,
+        *,
+        container_ref: str,
+        start_path: str,
+        list_provider: Callable[[str, str], list[dict[str, object]]],
+        parent: QWidget | None = None,
+    ):
+        super().__init__(parent)
+        self._container_ref = container_ref
+        self._list_provider = list_provider
+        self.setWindowTitle('Select Container File')
+        self.resize(900, 560)
+
+        root = QVBoxLayout(self)
+        root.addWidget(QLabel(f'Container: {container_ref}'))
+
+        path_row = QHBoxLayout()
+        self.path_edit = QLineEdit(start_path)
+        self.path_edit.setMinimumWidth(620)
+        self.path_edit.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        path_row.addWidget(self.path_edit, 1)
+        up_button = QPushButton('Up')
+        up_button.clicked.connect(self._go_up)
+        path_row.addWidget(up_button)
+        refresh_button = QPushButton('Refresh')
+        refresh_button.clicked.connect(self._refresh)
+        path_row.addWidget(refresh_button)
+        root.addLayout(path_row)
+
+        self.entries = QListWidget()
+        self.entries.itemDoubleClicked.connect(self._activate_item)
+        root.addWidget(self.entries, 1)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        root.addWidget(buttons)
+
+        self._refresh()
+
+    def selected_path(self) -> str:
+        return self.path_edit.text().strip()
+
+    def _refresh(self) -> None:
+        self.entries.clear()
+        for entry in self._list_provider(
+            self._container_ref,
+            self.path_edit.text().strip(),
+        ):
+            error = str(entry.get('error') or '').strip()
+            if error:
+                item = QListWidgetItem(error)
+                item.setForeground(QColor('firebrick'))
+                item.setFlags(item.flags() & ~Qt.ItemIsEnabled)
+                self.entries.addItem(item)
+                continue
+            path = str(entry.get('path') or '').strip()
+            if not path:
+                continue
+            is_dir = bool(entry.get('is_dir'))
+            name = str(entry.get('name') or Path(path).name or path)
+            label = f'[dir] {name}' if is_dir else name
+            item = QListWidgetItem(label)
+            item.setData(Qt.UserRole, {'path': path, 'is_dir': is_dir})
+            self.entries.addItem(item)
+        if self.entries.count() == 0:
+            item = QListWidgetItem('No files found in this directory.')
+            item.setForeground(QColor('gray'))
+            item.setFlags(item.flags() & ~Qt.ItemIsEnabled)
+            self.entries.addItem(item)
+
+    def _activate_item(self, item: QListWidgetItem) -> None:
+        data = item.data(Qt.UserRole) or {}
+        path = str(data.get('path') or '').strip()
+        if not path:
+            return
+        self.path_edit.setText(path)
+        if bool(data.get('is_dir')):
+            self._refresh()
+
+    def _go_up(self) -> None:
+        current = self.path_edit.text().strip() or '/'
+        parent = str(Path(current).parent)
+        self.path_edit.setText(parent if parent else '/')
+        self._refresh()
+
+
+class WorkspaceMatchDialog(QDialog):
+    """Edit image-to-workspace compatibility profile entries."""
+
+    def __init__(
+        self,
+        images: list[str],
+        workspaces: list[str],
+        matches: dict[str, list[str]],
+        parent=None,
+    ):
+        super().__init__(parent)
+        self.setWindowTitle('Workspace Matches')
+        self.resize(520, 460)
+        self._matches = {
+            image: list(dict.fromkeys(values))
+            for image, values in matches.items()
+        }
+        self._checkboxes: dict[str, QCheckBox] = {}
+
+        layout = QVBoxLayout(self)
+        form = QFormLayout()
+        self.image_combo = QComboBox()
+        for image in images:
+            self.image_combo.addItem(image, image)
+        self.image_combo.currentIndexChanged.connect(self._load_image)
+        form.addRow('Docker image:', self.image_combo)
+        layout.addLayout(form)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        content = QWidget()
+        self.checkbox_layout = QVBoxLayout(content)
+        self._add_checkbox('Docker image default', 'Docker image default')
+        for workspace in workspaces:
+            self._add_checkbox(workspace, workspace)
+        self.checkbox_layout.addStretch(1)
+        scroll.setWidget(content)
+        layout.addWidget(scroll)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.Save | QDialogButtonBox.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+        self._load_image()
+
+    def _add_checkbox(self, label: str, value: str) -> None:
+        checkbox = QCheckBox(label)
+        checkbox.stateChanged.connect(self._store_current_image)
+        self._checkboxes[value] = checkbox
+        self.checkbox_layout.addWidget(checkbox)
+
+    def _current_image(self) -> str:
+        return str(self.image_combo.currentData() or '').strip()
+
+    def _store_current_image(self) -> None:
+        image = self._current_image()
+        if not image:
+            return
+        self._matches[image] = [
+            value
+            for value, checkbox in self._checkboxes.items()
+            if checkbox.isChecked()
+        ]
+
+    def _load_image(self) -> None:
+        image = self._current_image()
+        selected = set(self._matches.get(image, []))
+        for value, checkbox in self._checkboxes.items():
+            checkbox.blockSignals(True)
+            checkbox.setChecked(value in selected)
+            checkbox.blockSignals(False)
+
+    def accept(self) -> None:
+        self._store_current_image()
+        super().accept()
+
+    def matches(self) -> dict[str, list[str]]:
+        return copy.deepcopy(self._matches)
 
 
 class MainWindow(QMainWindow):
@@ -72,8 +1709,7 @@ class MainWindow(QMainWindow):
 
         window_cfg = CONFIG['window']
         self.setWindowTitle(window_cfg['title'])
-        if len(window_cfg.get('geometry', [])) == 4:
-            self.setGeometry(*window_cfg['geometry'])
+        self._restore_window_state(window_cfg)
 
         self._killing = False
         self._last_search = ''
@@ -81,6 +1717,18 @@ class MainWindow(QMainWindow):
         self._custom_counter = 0
         self._timers_cfg = CONFIG['timers']
         self._images_cfg = CONFIG['images']
+        self._image_profiles = self._normalize_image_profiles(
+            self._images_cfg.get('profiles', [])
+        )
+        self._workspace_warning_cfg = CONFIG.get(
+            'workspace_mismatch_warning',
+            {},
+        )
+        self._workspace_mismatch_session_exceptions = (
+            self._normalize_workspace_mismatch_exceptions(
+                self._workspace_warning_cfg.get('silenced_exceptions', [])
+            )
+        )
         self._selected_image = self._images_cfg.get('default', '')
         self._image_choices: list[str] = []
         self._related_patterns: list[str] = []
@@ -94,6 +1742,26 @@ class MainWindow(QMainWindow):
         self._roscore_running_cached = False
         self._roscore_stopping = False
         self._roscore_last_start_ts: float | None = None
+        self._ros_cfg = CONFIG.get('ros', {})
+        configured_master = self._normalize_ros_master_uri(
+            self._ros_cfg.get('remote_master_uri', '')
+        )
+        self._remote_master_uri_value = (
+            configured_master or 'http://mobipick-os-sensor:11311'
+        )
+        self._remote_ros_service = str(
+            self._ros_cfg.get('remote_service', 'mobipick_remote_cmd')
+        ).strip() or 'mobipick_remote_cmd'
+        remote_default = self._ros_cfg.get(
+            'remote_enabled_by_default',
+            False,
+        )
+        if isinstance(remote_default, str):
+            self._remote_master_enabled_value = (
+                remote_default.strip().lower() in {'1', 'true', 'yes', 'on'}
+            )
+        else:
+            self._remote_master_enabled_value = bool(remote_default)
         self._terminal_cfg = CONFIG.get('terminal', {})
         drop_to_host_user_default = self._terminal_cfg.get('drop_to_host_user', True)
         if drop_to_host_user_default is None:
@@ -114,13 +1782,51 @@ class MainWindow(QMainWindow):
         self._terminal_stream_tab_key: str | None = None
         self._terminal_stream_counter = 0
         self._project_root = PROJECT_ROOT
-        self._docker_cp_config = load_docker_cp_config()
+        self._workspace_load_error = ''
+        workspace_registry = WorkspaceRegistry(
+            container_workspace_root=(
+                Path(
+                    CONFIG['process']['qprocess_env'][
+                        'MOBIPICK_HOST_HOME'
+                    ]
+                )
+                / 'ros_ws'
+            ),
+        )
+        try:
+            workspace_registry.load()
+        except Exception as exc:
+            self._workspace_load_error = (
+                f'Failed to load workspace registry '
+                f'{workspace_registry.path}: {exc}'
+            )
+        self._workspace_registry = workspace_registry
+        self._empty_workspace_dir = (
+            self._workspace_registry.path.parent / 'empty_workspace'
+        )
+        try:
+            self._empty_workspace_dir.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            self._empty_workspace_dir = PROJECT_ROOT / 'empty_workspace'
+        self._workspace_dialog: WorkspaceManagerDialog | None = None
+        self._setup_wizard_dialog: ImageSetupWizard | None = None
+        self._setup_wizard_auto_scheduled = False
+        self._docker_cp_config = load_docker_cp_config(
+            self._workspace_docker_cp_config_path()
+        )
         self._synced_container_refs: set[str] = set()
         self._toggle_states: dict[str, str] = {}
         self._last_log_origin: dict[str, str] = {}
         self._gui_log_color = str(CONFIG['log'].get('gui_log_color', '#ff00ff'))
         self._command_log_color = str(CONFIG['log'].get('command_log_color', '#4da3ff'))
         self._default_image_dialog_shown = False
+        self._bug_report_dialog: BugReportDialog | None = None
+        self._documentation_dialog: DocumentationDialog | None = None
+        self._config_paths_dialog: QDialog | None = None
+        self._config_path_contents_dialog: QDialog | None = None
+        self._view_actions: dict[str, QAction] = {}
+        self._active_menu_tooltip_action: QAction | None = None
+        self._create_menu_bar()
 
         # sim state
         self._sim_container_name = 'mobipick-run'
@@ -133,36 +1839,144 @@ class MainWindow(QMainWindow):
         self._exit_in_progress = False
         self._exit_dialog: Optional[QMessageBox] = None
         self._docker_stop_timeout = self._normalize_stop_timeout(CONFIG['exit'].get('docker_stop_timeout'))
+        self._button_layout = load_button_layout(
+            self._workspace_button_config_path()
+        )
+        self._launch_plan = load_launch_sequence_plan(
+            self._workspace_button_config_path(),
+            self._workspace_launch_config_path(),
+        )
+        self._launch_retry_ms = max(0, int(self._launch_plan.get('retry_delay_ms', 750) or 0))
+        self._launch_max_retry = max(0, int(self._launch_plan.get('max_retry_attempts', 6) or 0))
+        self._button_widgets: dict[str, QPushButton] = {}
+        self._config_buttons: dict[str, dict] = {}
+        self._config_button_order: list[str] = []
+        self._auto_launch_running = False
+        self._auto_launch_stopping = False
+        self._auto_launch_timers: list[QTimer] = []
+        self._auto_launch_active_keys: list[str] = []
+        self._auto_launch_run_count = 0
+        self._window_layout_cfg = CONFIG.get('window_layout', {})
+        raw_auto_apply = self._window_layout_cfg.get('auto_apply', True)
+        if isinstance(raw_auto_apply, str):
+            self._window_layout_auto_apply = raw_auto_apply.strip().lower() not in {'0', 'false', 'no', 'off'}
+        else:
+            self._window_layout_auto_apply = bool(raw_auto_apply)
+        self._window_layout_path_template = (
+            self._window_layout_cfg.get('state_file') or str(WINDOW_LAYOUT_FILE)
+        )
+        self._window_layout_path = self._workspace_window_layout_path()
+        self._window_layout_delay_ms = self._compute_window_layout_delay_ms()
+        self._window_layout_manager = WindowLayoutManager(
+            state_file=self._window_layout_path,
+            log_info=self._log_info,
+            log_warning=lambda msg: self._append_gui_html('log', f'<i>{html.escape(msg)}</i>'),
+            log_debug=lambda msg: self._console_log(3, msg),
+            apply_delay_ms=self._window_layout_delay_ms,
+        )
+        self._window_layout_manager.record_baseline(exclude_titles={self.windowTitle()})
+        self._window_layout_dialog: QDialog | None = None
+        self._recording_cfg = CONFIG.get('recording', {})
+        self._recording_default_checked = bool(
+            self._recording_cfg.get('enabled_by_default', False)
+        )
+        self._recording_remember_output_dir = bool(
+            self._recording_cfg.get('remember_output_dir', False)
+        )
+        self._recording_show_control_window = bool(
+            self._recording_cfg.get('show_control_window', True)
+        )
+        self._recording_output_root = self._resolve_recording_output_root()
+        self._recording_workspace_name = self._normalize_workspace_name(self._recording_cfg.get('workspace_name'))
+        active_workspace = self._workspace_registry.active_workspace()
+        if active_workspace:
+            self._recording_workspace_name = active_workspace.name
+        self._screen_resolution = ''
+        self._recording_counter = self._load_recording_counter()
+        self._recording_resolutions = self._load_recording_resolutions()
+        self._recording_default_resolution = self._select_default_resolution()
+        self._recording_start_timer: QTimer | None = None
+        self._recording_proc: QProcess | None = None
+        self._recording_session: dict | None = None
+        self._recording_window: QDialog | None = None
+        self._recording_stop_button: QPushButton | None = None
+        self._recording_path_label: QLabel | None = None
+        self._recording_indicator_timer: QTimer | None = None
+        self._recording_indicator_on = False
 
         central = QWidget()
         self.setCentralWidget(central)
         root = QVBoxLayout(central)
 
+        workspace_row = QHBoxLayout()
+        workspace_row.addWidget(QLabel('ROS 1 workspace:'))
+        self.workspace_combo = QComboBox()
+        self.workspace_combo.setSizePolicy(
+            QSizePolicy.Expanding,
+            QSizePolicy.Preferred,
+        )
+        self.workspace_combo.currentIndexChanged.connect(
+            self._on_workspace_changed
+        )
+        workspace_row.addWidget(self.workspace_combo)
+        self.manage_workspaces_button = QPushButton('Configure Workspaces')
+        self.manage_workspaces_button.clicked.connect(
+            self._open_workspace_manager
+        )
+        workspace_row.addWidget(self.manage_workspaces_button)
+        root.addLayout(workspace_row)
+
+        self.ros_master_controls = QWidget()
+        ros_master_row = QHBoxLayout(self.ros_master_controls)
+        ros_master_row.setContentsMargins(0, 0, 0, 0)
+        self.remote_master_checkbox = QCheckBox('Use remote ROS master')
+        self.remote_master_checkbox.setChecked(
+            self._remote_master_enabled_value
+        )
+        self.remote_master_checkbox.setToolTip(
+            'Run ROS tool containers with host networking and connect them '
+            'to the selected external ROS 1 master.'
+        )
+        ros_master_row.addWidget(self.remote_master_checkbox)
+        ros_master_row.addWidget(QLabel('ROS_MASTER_URI:'))
+        self.remote_master_input = QLineEdit(
+            self._remote_master_uri_value
+        )
+        self.remote_master_input.setPlaceholderText(
+            'http://mobipick-os-sensor:11311'
+        )
+        self.remote_master_input.setEnabled(
+            self._remote_master_enabled_value
+        )
+        self.remote_master_input.setToolTip(
+            'ROS 1 master used by RViz, RQt, scripts, terminals, and custom '
+            'commands while remote mode is enabled.'
+        )
+        ros_master_row.addWidget(self.remote_master_input)
+        root.addWidget(self.ros_master_controls)
+        self.remote_master_checkbox.toggled.connect(
+            self._on_remote_master_toggled
+        )
+        self.remote_master_input.editingFinished.connect(
+            self._on_remote_master_uri_edited
+        )
+
         # top controls
         top = QHBoxLayout()
+        self._top_controls_layout = top
         self.roscore_button = QPushButton()
+        _configure_expanding_toolbar_button(self.roscore_button)
         self.roscore_button.clicked.connect(self._on_roscore_toggle_clicked)
         top.addWidget(self.roscore_button)
+        self._button_widgets['roscore'] = self.roscore_button
 
-        self.sim_toggle_button = QPushButton()
-        self.sim_toggle_button.clicked.connect(self._on_sim_toggle_clicked)
-        top.addWidget(self.sim_toggle_button)
-
-        self.tables_button = QPushButton()
-        self.tables_button.clicked.connect(self._on_tables_toggle_clicked)
-        top.addWidget(self.tables_button)
-
-        self.rviz_button = QPushButton()
-        self.rviz_button.clicked.connect(self._on_rviz_toggle_clicked)
-        top.addWidget(self.rviz_button)
-
-        self.rqt_button = QPushButton()
-        self.rqt_button.clicked.connect(self._on_rqt_toggle_clicked)
-        top.addWidget(self.rqt_button)
+        self._build_configurable_buttons(top)
 
         self.terminal_button = QPushButton()
+        _configure_expanding_toolbar_button(self.terminal_button)
         self.terminal_button.clicked.connect(self._on_terminal_toggle_clicked)
         top.addWidget(self.terminal_button)
+        self._button_widgets['terminal'] = self.terminal_button
 
         self.terminal_root_checkbox = QCheckBox('Run as root')
         self.terminal_root_checkbox.setToolTip('When checked, new terminals run as root inside the container.')
@@ -173,6 +1987,7 @@ class MainWindow(QMainWindow):
         spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         top.addWidget(spacer)
         root.addLayout(top)
+        self._populate_workspace_combo()
 
         self.clear_button = QPushButton('Clear Current Tab')
         self.clear_button.clicked.connect(self.clear_current_tab)
@@ -188,13 +2003,25 @@ class MainWindow(QMainWindow):
         self.manage_images_button.setToolTip('Remove docker images that match the configured filters')
         self.manage_images_button.clicked.connect(self.manage_images)
 
+        self.setup_wizard_button = QPushButton('Setup Wizard')
+        self.setup_wizard_button.setToolTip('Configure Docker images and first-run setup')
+        self.setup_wizard_button.clicked.connect(
+            lambda _checked=False: self._open_setup_wizard()
+        )
+
+        self.build_custom_image_button = QPushButton('Build Custom Image')
+        self.build_custom_image_button.setToolTip('Build a host-user development Docker image')
+        self.build_custom_image_button.clicked.connect(
+            lambda _checked=False: self._open_custom_image_builder()
+        )
+
         self.execute_docker_cp_button = QPushButton('Execute Docker cp')
         self.execute_docker_cp_button.setToolTip('Copy configured paths from the active container to the host')
         self.execute_docker_cp_button.clicked.connect(self.execute_docker_cp_from_container)
 
-        self.refresh_sim_button = QPushButton('Update Status')
-        self.refresh_sim_button.setToolTip('Re-check running status for toggles')
-        self.refresh_sim_button.clicked.connect(self._on_refresh_clicked)
+        self.window_layout_button = QPushButton('Window Layout')
+        self.window_layout_button.setToolTip('Open helper to save window positions for wmctrl replay')
+        self.window_layout_button.clicked.connect(self._on_window_layout_clicked)
 
         self.save_current_button = QPushButton('Save Current Log')
         self.save_current_button.clicked.connect(self.save_current_log)
@@ -207,6 +2034,53 @@ class MainWindow(QMainWindow):
 
         # actions row
         actions = QHBoxLayout()
+
+        self.auto_launch_button = QPushButton()
+        self.auto_launch_button.clicked.connect(self._on_auto_launch_toggle_clicked)
+        auto_launch_tooltip = str(self._launch_plan.get('button', {}).get('tooltip') or '').strip()
+        self._auto_launch_base_tooltip = auto_launch_tooltip
+        if auto_launch_tooltip:
+            self.auto_launch_button.setToolTip(auto_launch_tooltip)
+        actions.addWidget(self.auto_launch_button)
+        self._button_widgets['auto_launch'] = self.auto_launch_button
+
+        self.recording_controls = QWidget()
+        recording_row = QHBoxLayout(self.recording_controls)
+        recording_row.setContentsMargins(0, 0, 0, 0)
+        self.record_checkbox = QCheckBox('Record Auto Launch')
+        self.record_checkbox.setToolTip(
+            'Record the Auto Launch run: screen video plus run logs. '
+            'Recording starts after you press Auto Launch and its timeline '
+            'and window-layout delay finish.'
+        )
+        self.record_checkbox.setChecked(self._recording_default_checked)
+        self.record_checkbox.toggled.connect(self._on_record_checkbox_toggled)
+        recording_row.addWidget(self.record_checkbox)
+        self.recording_indicator = QLabel('REC off')
+        self.recording_indicator.setMinimumWidth(170)
+        self.recording_indicator.setAlignment(Qt.AlignCenter)
+        recording_row.addWidget(self.recording_indicator)
+        self.recording_options_button = QPushButton('Recording Options')
+        self.recording_options_button.clicked.connect(
+            self._open_recording_options
+        )
+        recording_row.addWidget(self.recording_options_button)
+        self.record_resolution_combo = QComboBox()
+        self.record_resolution_combo.setInsertPolicy(QComboBox.NoInsert)
+        self.record_resolution_combo.addItems(self._recording_resolutions)
+        if self._recording_default_resolution in self._recording_resolutions:
+            self.record_resolution_combo.setCurrentIndex(
+                self._recording_resolutions.index(self._recording_default_resolution)
+            )
+        else:
+            self.record_resolution_combo.setCurrentIndex(0)
+        self.record_resolution_combo.setToolTip('Select the video resolution used for Auto Launch recording.')
+        recording_row.addWidget(self.record_resolution_combo)
+        actions.addWidget(self.recording_controls)
+        self._update_recording_location_tooltip()
+        self._set_recording_indicator(
+            'armed' if self.record_checkbox.isChecked() else 'off'
+        )
 
         self.world_label = QLabel('world_config:')
         actions.addWidget(self.world_label)
@@ -222,13 +2096,11 @@ class MainWindow(QMainWindow):
         actions.addWidget(self.image_combo)
         self.image_combo.currentIndexChanged.connect(self._on_image_changed)
 
-        self.reload_images_button = QPushButton('Refresh Images')
-        self.reload_images_button.clicked.connect(self._reload_images)
-        actions.addWidget(self.reload_images_button)
-
         root.addLayout(actions)
 
-        scripts_row = QHBoxLayout()
+        self.script_controls = QWidget()
+        scripts_row = QHBoxLayout(self.script_controls)
+        scripts_row.setContentsMargins(0, 0, 0, 0)
         scripts_row.addWidget(QLabel('Scripts:'))
         self.script_combo = QComboBox()
         self.script_combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
@@ -239,7 +2111,7 @@ class MainWindow(QMainWindow):
         self.run_script_button = QPushButton('Run Script')
         self.run_script_button.clicked.connect(self._on_run_script_clicked)
         scripts_row.addWidget(self.run_script_button)
-        root.addLayout(scripts_row)
+        root.addWidget(self.script_controls)
 
         self.run_script_button.setEnabled(False)
         self.script_combo.setEnabled(False)
@@ -250,7 +2122,9 @@ class MainWindow(QMainWindow):
         self._load_available_images()
 
         # custom command row
-        cmdrow = QHBoxLayout()
+        self.command_controls = QWidget()
+        cmdrow = QHBoxLayout(self.command_controls)
+        cmdrow.setContentsMargins(0, 0, 0, 0)
         self.command_input = QLineEdit()
         self.command_input.setPlaceholderText('Enter custom command, press Enter to run')
         self.command_input.returnPressed.connect(self._on_command_input_return)
@@ -268,7 +2142,8 @@ class MainWindow(QMainWindow):
         self.reuse_checkbox = QCheckBox('Run in current custom tab')
         self.reuse_checkbox.setChecked(True)
         cmdrow.addWidget(self.reuse_checkbox)
-        root.addLayout(cmdrow)
+        root.addWidget(self.command_controls)
+        self._apply_view_action_visibility()
 
         # tabs
         self.tabs = QTabWidget()
@@ -279,18 +2154,11 @@ class MainWindow(QMainWindow):
         controls_row = QHBoxLayout()
         controls_row.addWidget(self.clear_button)
         controls_row.addWidget(self.clear_all_button)
-        controls_row.addWidget(self.commit_current_tab_button)
-        controls_row.addWidget(self.manage_images_button)
-        controls_row.addWidget(self.execute_docker_cp_button)
 
         spacer_controls = QWidget()
         spacer_controls.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         controls_row.addWidget(spacer_controls)
 
-        controls_row.addWidget(self.save_current_button)
-        controls_row.addWidget(self.load_log_button)
-        controls_row.addWidget(self.save_all_button)
-        controls_row.addWidget(self.refresh_sim_button)
         root.addLayout(controls_row)
 
         # search row (bottom)
@@ -308,17 +2176,11 @@ class MainWindow(QMainWindow):
         search.addWidget(self.find_next_button)
         root.addLayout(search)
 
-        # fixed tabs
-        self._ensure_tab('roscore', 'Roscore', closable=False)
-        self._ensure_tab('sim', 'Sim', closable=False)
-        self._ensure_tab('tables', 'Tables Demo', closable=False)
-        self._ensure_tab('rviz', 'RViz', closable=False)
-        self._ensure_tab('rqt', 'RQt Tables', closable=False)
-        # central log tab
-        self._ensure_tab('log', 'Log', closable=False)
+        self._create_workspace_tabs()
 
         self._apply_env_to_all_tabs()
         self._refresh_script_options()
+        self._window_layout_manager.load_layout()
 
         # polling
         self.poll_timer = QTimer(self)
@@ -334,10 +2196,2842 @@ class MainWindow(QMainWindow):
         self.update_sim_status_from_poll(force=True)
 
         self._console_log(1, f'Mobipick Labs Control ready (verbosity {self._verbosity})')
+        if self._workspace_load_error:
+            self._console_log(1, self._workspace_load_error)
+        self._schedule_first_run_setup_wizard()
 
         app_instance = QApplication.instance()
         if app_instance:
             app_instance.aboutToQuit.connect(self._ensure_cleanup_before_exit)
+
+    # ---------- Menu bar ----------
+
+    def _create_menu_bar(self) -> None:
+        menu_bar = self.menuBar()
+
+        workspace_menu = self._add_menu(menu_bar, 'Workspace')
+        self._add_menu_action(
+            workspace_menu,
+            'Configure Workspaces',
+            self._open_workspace_manager,
+        )
+        self._add_menu_action(
+            workspace_menu,
+            'Configure Workspace Matches',
+            self._open_workspace_match_editor,
+            tooltip='Edit which Docker images match which ROS workspaces',
+        )
+        self._add_menu_action(
+            workspace_menu,
+            'Build Active Workspace',
+            self._build_active_workspace,
+        )
+
+        settings_menu = self._add_menu(menu_bar, 'Settings')
+        self._add_menu_action(
+            settings_menu,
+            'Export All Settings...',
+            self._export_all_settings,
+            tooltip='Save portable GUI settings to one YAML file',
+        )
+        self._add_menu_action(
+            settings_menu,
+            'Import All Settings...',
+            self._import_all_settings,
+            tooltip='Load portable GUI settings from one YAML file',
+        )
+        settings_menu.addSeparator()
+        self._add_menu_action(
+            settings_menu,
+            'Show Configuration Paths',
+            self._show_configuration_paths,
+            tooltip='Show writable config and data paths managed by the GUI',
+        )
+
+        tools_menu = self._add_menu(menu_bar, 'Tools')
+        self._add_menu_action(
+            tools_menu,
+            'Configure Toolbar Buttons',
+            self._open_button_profile_dialog,
+            tooltip='Edit the active workspace toolbar button profile',
+        )
+        tools_menu.addSeparator()
+
+        docker_menu = self._add_menu(tools_menu, 'Docker')
+        self._add_menu_action(docker_menu, 'Manage Images', self.manage_images)
+        self._add_menu_action(
+            docker_menu,
+            'Setup Wizard',
+            lambda _checked=False: self._open_setup_wizard(),
+        )
+        self._add_menu_action(
+            docker_menu,
+            'Configure Image Filters',
+            self._open_image_blacklist_dialog,
+            tooltip='Choose which Docker images are shown or ignored',
+        )
+        self._add_menu_action(
+            docker_menu,
+            'Build Custom Image',
+            lambda _checked=False: self._open_custom_image_builder(),
+            tooltip='Build a host-user development Docker image',
+        )
+        self._add_menu_action(
+            docker_menu,
+            'Commit Current Tab',
+            self.commit_current_tab,
+        )
+        self._add_menu_action(
+            docker_menu,
+            'Execute Docker cp',
+            self.execute_docker_cp_from_container,
+            tooltip='Copy configured paths from the active container to the host',
+        )
+        self._add_menu_action(
+            docker_menu,
+            'Configure Docker cp Paths',
+            self._open_docker_cp_config_dialog,
+            tooltip='Edit persistent docker cp paths for default or image-specific profiles',
+        )
+
+        layout_menu = self._add_menu(tools_menu, 'Layout')
+        self._add_menu_action(
+            layout_menu,
+            'Window Layout',
+            self._on_window_layout_clicked,
+            tooltip='Open helper to save window positions for wmctrl replay',
+        )
+
+        automation_menu = self._add_menu(tools_menu, 'Automation')
+        self._add_menu_action(
+            automation_menu,
+            'Configure Auto Launch',
+            self._open_auto_launch_wizard,
+        )
+        tools_menu.addSeparator()
+        self._add_menu_action(
+            tools_menu,
+            'Update Status',
+            self._on_refresh_clicked,
+            tooltip='Refresh Docker container status',
+        )
+
+        view_menu = self._add_menu(menu_bar, 'View')
+        self._view_actions['recording'] = self._add_checkable_menu_action(
+            view_menu,
+            'Recording Controls',
+            self._set_recording_controls_visible,
+        )
+        self._view_actions['scripts'] = self._add_checkable_menu_action(
+            view_menu,
+            'Script Controls',
+            self._set_script_controls_visible,
+        )
+        self._view_actions['commands'] = self._add_checkable_menu_action(
+            view_menu,
+            'Command Controls',
+            self._set_command_controls_visible,
+        )
+        self._view_actions['remote_master'] = self._add_checkable_menu_action(
+            view_menu,
+            'Remote ROS Master',
+            self._set_remote_master_controls_visible,
+        )
+        view_menu.addSeparator()
+        self._add_menu_action(view_menu, 'Refresh Images', self._reload_images)
+
+        logs_menu = self._add_menu(menu_bar, 'Logs')
+        self._add_menu_action(logs_menu, 'Save Current Log', self.save_current_log)
+        self._add_menu_action(logs_menu, 'Load Log', self.load_log_file)
+        self._add_menu_action(logs_menu, 'Save All Logs', self.save_all_logs)
+        logs_menu.addSeparator()
+        self._add_menu_action(logs_menu, 'Clear Current Tab', self.clear_current_tab)
+        self._add_menu_action(logs_menu, 'Clear All Tabs', self.clear_all_tabs)
+
+        help_menu = self._add_menu(menu_bar, 'Help')
+        self._add_menu_action(
+            help_menu,
+            'Documentation',
+            self._open_documentation_dialog,
+        )
+        self._add_menu_action(
+            help_menu,
+            'File Bug Report...',
+            self._open_bug_report_dialog,
+        )
+        self._add_menu_action(help_menu, 'About', self._show_about_dialog)
+
+    def _add_menu(self, parent, text: str):
+        menu = parent.addMenu(text)
+        menu.setMouseTracking(True)
+        menu.installEventFilter(self)
+        return menu
+
+    def eventFilter(self, watched, event):  # noqa: N802 - Qt API
+        if isinstance(watched, QMenu):
+            if event.type() == QEvent.MouseMove:
+                self._update_menu_tooltip(watched, event)
+            elif event.type() in (QEvent.Leave, QEvent.Hide):
+                self._hide_menu_tooltip()
+        return super().eventFilter(watched, event)
+
+    def _update_menu_tooltip(self, menu: QMenu, event) -> None:
+        action = menu.actionAt(event.pos())
+        tooltip = ''
+        if action is not None:
+            tooltip = str(action.property('mobipick_menu_tooltip') or '')
+        if action is None or not tooltip:
+            self._hide_menu_tooltip()
+            return
+        if action is self._active_menu_tooltip_action and QToolTip.isVisible():
+            return
+
+        self._active_menu_tooltip_action = action
+        action_rect = menu.actionGeometry(action)
+        tooltip_pos = event.globalPos() + QPoint(12, 16)
+        QToolTip.showText(tooltip_pos, tooltip, menu, action_rect)
+
+    def _hide_menu_tooltip(self) -> None:
+        self._active_menu_tooltip_action = None
+        QToolTip.hideText()
+
+    def _add_menu_action(
+        self,
+        menu,
+        text: str,
+        slot,
+        *,
+        tooltip: str = '',
+    ) -> QAction:
+        action = QAction(text, self)
+        if tooltip:
+            action.setProperty('mobipick_menu_tooltip', tooltip)
+            action.setToolTip(tooltip)
+            action.setStatusTip(tooltip)
+        action.triggered.connect(
+            lambda _checked=False, callback=slot: callback()
+        )
+        menu.addAction(action)
+        return action
+
+    def _add_checkable_menu_action(self, menu, text: str, slot) -> QAction:
+        action = QAction(text, self)
+        action.setCheckable(True)
+        action.setChecked(False)
+        action.toggled.connect(slot)
+        menu.addAction(action)
+        return action
+
+    def _export_all_settings(self) -> None:
+        selected, _ = QFileDialog.getSaveFileName(
+            self,
+            'Export Mobipick GUI settings',
+            str(Path.home() / 'mobipick-gui-settings.yaml'),
+            'YAML files (*.yaml *.yml)',
+        )
+        if not selected:
+            return
+        try:
+            export_settings(Path(selected), self._workspace_registry)
+        except (OSError, ValueError) as exc:
+            QMessageBox.critical(self, 'Export Settings', str(exc))
+            return
+        QMessageBox.information(
+            self,
+            'Export Settings',
+            f'Settings exported to:\n{selected}',
+        )
+
+    def _import_all_settings(self) -> None:
+        if self._workspace_processes_running():
+            QMessageBox.warning(
+                self,
+                'Import Settings',
+                'Stop running workspace processes before importing settings.',
+            )
+            return
+        selected, _ = QFileDialog.getOpenFileName(
+            self,
+            'Import Mobipick GUI settings',
+            str(Path.home()),
+            'YAML files (*.yaml *.yml);;All files (*)',
+        )
+        if not selected:
+            return
+        start = self._workspace_registry.master_folder or str(Path.home())
+        master = QFileDialog.getExistingDirectory(
+            self,
+            'Choose the workspace master folder for imported settings',
+            start,
+        )
+        if not master:
+            return
+        answer = QMessageBox.question(
+            self,
+            'Import Settings',
+            'Importing will replace the configured workspace list and active '
+            'workspace. All current tabs and log output will be discarded. '
+            'Workspace files on disk will not be changed.\n\n'
+            'Continue?',
+        )
+        if answer != QMessageBox.Yes:
+            return
+        try:
+            import_settings(
+                Path(selected),
+                self._workspace_registry,
+                master_folder=Path(master),
+            )
+        except (OSError, ValueError, yaml.YAMLError) as exc:
+            QMessageBox.critical(self, 'Import Settings', str(exc))
+            return
+        self._apply_imported_workspace_settings()
+        QMessageBox.information(
+            self,
+            'Import Settings',
+            'Settings imported. Restart the GUI to apply general GUI '
+            'configuration overrides.',
+        )
+
+    def _show_configuration_paths(self) -> None:
+        if self._config_paths_dialog:
+            self._config_paths_dialog.raise_()
+            self._config_paths_dialog.activateWindow()
+            return
+        dialog = QDialog(self)
+        dialog.setWindowTitle('Configuration Paths')
+        layout = QVBoxLayout(dialog)
+        legend = QLabel(
+            'These paths are affected by the GUI. Manual editing is not '
+            'recommended.'
+        )
+        legend.setWordWrap(True)
+        layout.addWidget(legend)
+
+        paths = QTableWidget()
+        paths.setColumnCount(4)
+        paths.setHorizontalHeaderLabels(['Setting', 'Path', 'Copy', 'Show'])
+        paths.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        paths.setSelectionBehavior(QAbstractItemView.SelectRows)
+        paths.setSelectionMode(QAbstractItemView.SingleSelection)
+        paths.verticalHeader().setVisible(False)
+        header = paths.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.Stretch)
+        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        rows = self._configuration_path_rows()
+        paths.setRowCount(len(rows))
+        for row, (label, raw_path) in enumerate(rows):
+            path = Path(raw_path).expanduser()
+            paths.setItem(row, 0, QTableWidgetItem(label))
+            paths.setItem(row, 1, QTableWidgetItem(str(path)))
+            copy_button = QPushButton('Copy')
+            show_button = QPushButton('Show')
+            copy_button.clicked.connect(
+                lambda _checked=False, item_path=path: (
+                    self._copy_configuration_path(item_path)
+                )
+            )
+            show_button.clicked.connect(
+                lambda _checked=False, item_label=label, item_path=path: (
+                    self._show_single_configuration_path_content(
+                        item_label,
+                        item_path,
+                    )
+                )
+            )
+            paths.setCellWidget(row, 2, copy_button)
+            paths.setCellWidget(row, 3, show_button)
+        paths.resizeColumnsToContents()
+        layout.addWidget(paths)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Close)
+        copy_button = buttons.addButton(
+            'Copy All Paths',
+            QDialogButtonBox.ActionRole,
+        )
+        show_button = buttons.addButton(
+            'Show All Contents',
+            QDialogButtonBox.ActionRole,
+        )
+        copy_button.clicked.connect(self._copy_configuration_paths)
+        show_button.clicked.connect(self._show_configuration_path_contents)
+        buttons.rejected.connect(dialog.close)
+        layout.addWidget(buttons)
+
+        dialog.finished.connect(self._on_configuration_paths_closed)
+        self._config_paths_dialog = dialog
+        self._resize_configuration_paths_dialog(dialog, paths)
+        dialog.show()
+
+    def _resize_configuration_paths_dialog(
+        self,
+        dialog: QDialog,
+        paths: QTableWidget,
+    ) -> None:
+        desired_width = (
+            paths.verticalHeader().width()
+            + sum(
+                max(paths.columnWidth(column), paths.sizeHintForColumn(column))
+                for column in range(paths.columnCount())
+            )
+            + paths.frameWidth() * 2
+            + 56
+        )
+        screen = QGuiApplication.screenAt(self.frameGeometry().center())
+        if screen is None:
+            screen = QGuiApplication.primaryScreen()
+        if screen is not None:
+            available = screen.availableGeometry()
+            desired_width = min(desired_width, max(760, available.width() - 80))
+        dialog.resize(max(760, desired_width), 420)
+
+    def _configuration_path_rows(self) -> list[tuple[str, Path]]:
+        rows = user_configuration_paths(
+            workspace_registry_path=self._workspace_registry.path,
+            window_layout_template=self._window_layout_path_template,
+        )
+        active = self._workspace_registry.active_workspace()
+        if active:
+            if active.button_config:
+                rows.append(
+                    ('Active workspace button profile', Path(active.button_config))
+                )
+            if active.launch_config:
+                rows.append(
+                    ('Active workspace auto launch', Path(active.launch_config))
+                )
+        return rows
+
+    def _configuration_paths_text(self) -> str:
+        rows = self._configuration_path_rows()
+        width = max(len(label) for label, _path in rows) if rows else 0
+        return '\n'.join(
+            f'{label:{width}}  {Path(path).expanduser()}'
+            for label, path in rows
+        )
+
+    def _copy_configuration_paths(self) -> None:
+        QApplication.clipboard().setText(self._configuration_paths_text())
+
+    @staticmethod
+    def _copy_configuration_path(path: Path) -> None:
+        QApplication.clipboard().setText(str(Path(path).expanduser()))
+
+    def _show_configuration_path_contents(self) -> None:
+        self._open_configuration_path_contents_dialog(
+            'Configuration Path Contents',
+            self._configuration_path_contents_text(),
+        )
+
+    def _show_single_configuration_path_content(
+        self,
+        label: str,
+        path: Path,
+    ) -> None:
+        path = Path(path).expanduser()
+        text = (
+            f'## {label}\n{path}\n\n'
+            f'{self._read_configuration_path_content(path)}'
+        )
+        self._open_configuration_path_contents_dialog(
+            f'{label} Contents',
+            text,
+        )
+
+    def _open_configuration_path_contents_dialog(
+        self,
+        title: str,
+        text: str,
+    ) -> None:
+        if self._config_path_contents_dialog:
+            self._config_path_contents_dialog.close()
+        dialog = QDialog(self)
+        dialog.setWindowTitle(title)
+        dialog.resize(900, 620)
+        layout = QVBoxLayout(dialog)
+
+        contents = QTextEdit()
+        contents.setReadOnly(True)
+        contents.setLineWrapMode(QTextEdit.NoWrap)
+        contents.setPlainText(text)
+        layout.addWidget(contents)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Close)
+        buttons.rejected.connect(dialog.close)
+        layout.addWidget(buttons)
+
+        dialog.finished.connect(self._on_configuration_path_contents_closed)
+        self._config_path_contents_dialog = dialog
+        dialog.show()
+
+    def _configuration_path_contents_text(self) -> str:
+        sections = []
+        for label, raw_path in self._configuration_path_rows():
+            path = Path(raw_path).expanduser()
+            sections.append(f'## {label}\n{path}\n')
+            sections.append(self._read_configuration_path_content(path))
+        return '\n\n'.join(sections)
+
+    def _read_configuration_path_content(self, path: Path) -> str:
+        path_text = str(path)
+        if '{workspace}' in path_text or '{workspace_slug}' in path_text:
+            template_parent = path.parent
+            if template_parent.exists():
+                return self._format_directory_listing(template_parent)
+            return '(template path; directory has not been created yet)'
+        if path.is_dir():
+            return self._format_directory_listing(path)
+        if path.is_file():
+            try:
+                text = path.read_text(encoding='utf-8')
+            except (OSError, UnicodeDecodeError) as exc:
+                return f'(cannot read file: {exc})'
+            limit = 200000
+            if len(text) > limit:
+                return text[:limit] + '\n\n(truncated)'
+            return text or '(empty file)'
+        return '(path has not been created yet)'
+
+    @staticmethod
+    def _format_directory_listing(path: Path) -> str:
+        try:
+            children = sorted(path.iterdir(), key=lambda item: item.name.lower())
+        except OSError as exc:
+            return f'(cannot list directory: {exc})'
+        if not children:
+            return '(empty directory)'
+        return '\n'.join(
+            f'{"[dir] " if child.is_dir() else "      "}{child.name}'
+            for child in children
+        )
+
+    def _on_configuration_paths_closed(self, _result: int) -> None:
+        self._config_paths_dialog = None
+
+    def _on_configuration_path_contents_closed(self, _result: int) -> None:
+        self._config_path_contents_dialog = None
+
+    def _apply_view_action_visibility(self) -> None:
+        recording = self._view_actions.get('recording')
+        scripts = self._view_actions.get('scripts')
+        commands = self._view_actions.get('commands')
+        remote_master = self._view_actions.get('remote_master')
+        self._set_recording_controls_visible(
+            bool(recording and recording.isChecked())
+        )
+        self._set_script_controls_visible(
+            bool(scripts and scripts.isChecked())
+        )
+        self._set_command_controls_visible(
+            bool(commands and commands.isChecked())
+        )
+        self._set_remote_master_controls_visible(
+            bool(remote_master and remote_master.isChecked())
+        )
+
+    def _set_recording_controls_visible(self, visible: bool) -> None:
+        controls = getattr(self, 'recording_controls', None)
+        if controls is not None:
+            controls.setVisible(bool(visible))
+
+    def _set_script_controls_visible(self, visible: bool) -> None:
+        controls = getattr(self, 'script_controls', None)
+        if controls is not None:
+            controls.setVisible(bool(visible))
+
+    def _set_command_controls_visible(self, visible: bool) -> None:
+        controls = getattr(self, 'command_controls', None)
+        if controls is not None:
+            controls.setVisible(bool(visible))
+
+    def _set_remote_master_controls_visible(self, visible: bool) -> None:
+        controls = getattr(self, 'ros_master_controls', None)
+        if controls is not None:
+            controls.setVisible(bool(visible))
+
+    def _show_about_dialog(self) -> None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle('About Mobipick Labs Control')
+        dialog.setModal(True)
+
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(24, 20, 24, 20)
+        layout.setSpacing(14)
+
+        logo_label = QLabel()
+        logo_label.setAlignment(Qt.AlignCenter)
+        logo = QPixmap(str(PROJECT_ROOT / 'images' / 'dfki_logo.svg'))
+        if logo.isNull():
+            logo_label.setText('DFKI')
+        else:
+            logo_label.setPixmap(logo.scaledToWidth(220, Qt.SmoothTransformation))
+        layout.addWidget(logo_label)
+
+        details = QLabel(
+            '<h2>Mobipick Labs Docker GUI</h2>'
+            f'<p>Version: {html.escape(get_version())}</p>'
+            '<p>Maintainer:<br>'
+            'Mobipick Labs<br>'
+            '<a href="mailto:mobipick-labs@dfki.de">'
+            'mobipick-labs@dfki.de</a></p>'
+            '<p>Mobipick Labs:<br>'
+            '<a href="https://github.com/DFKI-NI/mobipick_labs">'
+            'https://github.com/DFKI-NI/mobipick_labs</a></p>'
+        )
+        details.setTextFormat(Qt.RichText)
+        details.setOpenExternalLinks(False)
+        details.setTextInteractionFlags(Qt.TextBrowserInteraction)
+        details.setAlignment(Qt.AlignCenter)
+        details.linkActivated.connect(self._open_about_link)
+        layout.addWidget(details)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok)
+        buttons.accepted.connect(dialog.accept)
+        layout.addWidget(buttons)
+
+        dialog.exec_()
+
+    def _open_about_link(self, link: str) -> None:
+        if not open_external_url(link):
+            QMessageBox.warning(
+                self,
+                'About',
+                'Unable to open the selected link.',
+            )
+
+    def _open_documentation_dialog(self) -> None:
+        if self._documentation_dialog:
+            self._documentation_dialog.raise_()
+            self._documentation_dialog.activateWindow()
+            return
+        dialog = DocumentationDialog(
+            PROJECT_ROOT / 'gui_user_documentation.md',
+            self,
+        )
+        dialog.finished.connect(self._on_documentation_dialog_closed)
+        self._documentation_dialog = dialog
+        dialog.show()
+
+    def _on_documentation_dialog_closed(self, _result: int) -> None:
+        self._documentation_dialog = None
+
+    def _open_bug_report_dialog(self) -> None:
+        if self._bug_report_dialog:
+            self._bug_report_dialog.raise_()
+            self._bug_report_dialog.activateWindow()
+            return
+        dialog = BugReportDialog(self._build_bug_report_context, self)
+        dialog.finished.connect(self._on_bug_report_dialog_closed)
+        self._bug_report_dialog = dialog
+        dialog.show()
+
+    def _on_bug_report_dialog_closed(self, _result: int) -> None:
+        self._bug_report_dialog = None
+
+    def _build_bug_report_context(self) -> dict:
+        active = self._workspace_registry.active_workspace()
+        workspaces = []
+        for workspace in self._workspace_registry.workspaces:
+            try:
+                directory = str(workspace.directory)
+            except OSError:
+                directory = workspace.path
+            workspaces.append(
+                {
+                    'name': workspace.name,
+                    'path': directory,
+                    'extends': list(workspace.extends),
+                    'image': workspace.image,
+                    'runtime_built': self._workspace_registry.is_runtime_built(
+                        workspace
+                    ),
+                    'active': workspace.name == self._workspace_registry.active,
+                }
+            )
+
+        return {
+            'generated_at': datetime.now().astimezone().isoformat(
+                timespec='seconds'
+            ),
+            'gui_version': get_version(),
+            'selected_workspace': (
+                {
+                    'name': active.name,
+                    'path': str(active.directory),
+                    'extends': list(active.extends),
+                    'image': active.image,
+                    'runtime_built': self._workspace_registry.is_runtime_built(
+                        active
+                    ),
+                    'active': True,
+                }
+                if active
+                else {}
+            ),
+            'selected_image': self._selected_image or '(none)',
+            'active_workspace_name': self._workspace_registry.active,
+            'workspace_match': self._bug_report_workspace_match(),
+            'host_workspace_mount': (
+                'enabled'
+                if self._selected_image
+                and self._image_supports_host_workspaces(self._selected_image)
+                else 'disabled'
+            ),
+            'workspace_registry_path': str(self._workspace_registry.path),
+            'workspace_master_folder': self._workspace_registry.master_folder,
+            'workspaces': workspaces,
+            'log_tab_text': self._bug_report_log_tab_text(),
+        }
+
+    def _bug_report_workspace_match(self) -> str:
+        image_ref = self._selected_image or ''
+        active_name = self._workspace_registry.active
+        if not image_ref:
+            return 'no Docker image selected'
+        compatible = self._image_compatible_with_workspace(
+            image_ref,
+            active_name,
+        )
+        if compatible is True:
+            return 'workspace match'
+        if compatible is False:
+            return 'image profile does not list the active workspace'
+        if active_name and not self._image_supports_host_workspaces(image_ref):
+            return 'selected image uses its baked workspace'
+        if active_name:
+            return 'unknown (no explicit compatibility profile)'
+        return 'not applicable (Docker image default workspace)'
+
+    def _bug_report_log_tab_text(self) -> str:
+        tab = self.tasks.get('log')
+        if not tab:
+            return ''
+        return tab.output.toPlainText()
+
+    # ---------- ROS workspace management ----------
+
+    def _workspace_button_config_path(self) -> str | None:
+        workspace = self._workspace_registry.active_workspace()
+        if workspace and workspace.button_config:
+            return workspace.button_config
+        return (
+            str(CONFIG.get('buttons', {}).get('config_file') or '')
+            or str(BUTTON_CONFIG_FILE)
+        )
+
+    def _workspace_launch_config_path(self) -> str | None:
+        workspace = self._workspace_registry.active_workspace()
+        if workspace and workspace.launch_config:
+            return workspace.launch_config
+        return None
+
+    def _resolved_button_config_path(self) -> Path:
+        raw_path = Path(self._workspace_button_config_path() or BUTTON_CONFIG_FILE)
+        raw_path = raw_path.expanduser()
+        if not raw_path.is_absolute():
+            raw_path = PROJECT_ROOT / raw_path
+        return raw_path
+
+    def _button_profile_save_path(self, source_path: Path) -> Path:
+        workspace = self._workspace_registry.active_workspace()
+        if workspace is None:
+            return writable_button_config_path(source_path)
+        return writable_workspace_button_config_path(source_path, workspace.name)
+
+    def _workspace_docker_cp_config_path(self) -> Path:
+        workspace = self._workspace_registry.active_workspace()
+        if workspace is None:
+            return writable_docker_cp_config_path()
+        return writable_workspace_docker_cp_config_path(workspace.name)
+
+    def _open_button_profile_dialog(self) -> None:
+        if self._workspace_processes_running():
+            QMessageBox.warning(
+                self,
+                'Toolbar Buttons',
+                'Stop running workspace processes before editing toolbar buttons.',
+            )
+            return
+        source_path = self._resolved_button_config_path()
+        save_path = self._button_profile_save_path(source_path)
+        dialog = ButtonProfileDialog(
+            self._button_layout_for_editor(),
+            source_path,
+            save_path,
+            self,
+        )
+        if dialog.exec_() != QDialog.Accepted:
+            return
+        button_layout = dialog.button_layout()
+        try:
+            saved_path = save_button_layout(save_path, button_layout)
+            self._remember_button_profile_path(
+                saved_path,
+                source_path,
+                button_layout,
+            )
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(
+                self,
+                'Toolbar Buttons',
+                f'Failed to save toolbar button profile:\n{exc}',
+            )
+            return
+
+        self._reset_workspace_tabs()
+        self._reload_workspace_profile()
+        self._create_workspace_tabs()
+        self._apply_env_to_all_tabs()
+        self._log_info(f'saved toolbar button profile to {saved_path}')
+
+    def _remember_button_profile_path(
+        self,
+        saved_path: Path,
+        source_path: Path,
+        entries: list[dict],
+    ) -> None:
+        workspace = self._workspace_registry.active_workspace()
+        if workspace is not None:
+            changed = False
+            if saved_path != source_path:
+                workspace.button_config = str(saved_path)
+                changed = True
+            if workspace.sim_command and self._entry_command(entries, 'sim'):
+                workspace.sim_command = ''
+                changed = True
+            if changed:
+                self._workspace_registry.save()
+            if self._workspace_dialog:
+                self._workspace_dialog.refresh(self._workspace_registry.active)
+            return
+        if saved_path == source_path:
+            return
+        save_user_config_update({
+            'buttons': {
+                'config_file': str(saved_path),
+            },
+        })
+
+    @staticmethod
+    def _entry_command(entries: list[dict], key: str) -> str:
+        for entry in entries:
+            if str(entry.get('key') or '').strip() == key:
+                return str(entry.get('command') or '').strip()
+        return ''
+
+    def _button_layout_for_editor(self) -> list[dict]:
+        entries = copy.deepcopy(self._button_layout)
+        effective_commands = {
+            'sim': self._workspace_sim_command(),
+            'tables': self._tables_demo_command(),
+            'rviz': self._rviz_command(),
+            'rqt': self._rqt_tables_command(),
+        }
+        for entry in entries:
+            key = str(entry.get('key') or '').strip()
+            command = effective_commands.get(key)
+            if command:
+                entry['command'] = command
+        return entries
+
+    def _workspace_runtime_env(
+        self,
+        workspace_name: str | None = None,
+        *,
+        force_host_workspace: bool = False,
+    ) -> dict[str, str]:
+        requested_name = (
+            self._workspace_registry.active
+            if workspace_name is None
+            else workspace_name
+        )
+        if (
+            requested_name
+            and not force_host_workspace
+            and not self._image_supports_host_workspaces(self._selected_image)
+        ):
+            workspace_name = ''
+        return self._workspace_registry.runtime_environment(
+            empty_mount_source=self._empty_workspace_dir,
+            workspace_name=workspace_name,
+        )
+
+    @staticmethod
+    def _normalize_image_profiles(entries) -> list[dict]:
+        profiles: list[dict] = []
+        if not isinstance(entries, list):
+            return profiles
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            ref = str(entry.get('ref') or '').strip()
+            match = str(entry.get('match') or '').strip()
+            if not ref and not match:
+                continue
+            user = str(
+                entry.get('user')
+                or entry.get('container_user')
+                or ''
+            ).strip()
+            compatible = entry.get('compatible_workspaces', [])
+            if isinstance(compatible, str):
+                compatible_items = [
+                    item.strip()
+                    for item in compatible.split(',')
+                    if item.strip()
+                ]
+            elif isinstance(compatible, list):
+                compatible_items = [
+                    str(item).strip()
+                    for item in compatible
+                    if str(item).strip()
+                ]
+            else:
+                compatible_items = []
+            profiles.append(
+                {
+                    'ref': ref,
+                    'match': match,
+                    'user': user,
+                    'supports_host_workspaces': entry.get(
+                        'supports_host_workspaces',
+                        entry.get('host_workspaces'),
+                    ),
+                    'compatible_workspaces': compatible_items,
+                    'workdir': str(entry.get('workdir') or '').strip(),
+                    'entrypoint': str(
+                        entry.get('entrypoint')
+                        or '/usr/local/bin/entrypoint_user.sh'
+                    ).strip(),
+                    'description': str(
+                        entry.get('description') or ''
+                    ).strip(),
+                }
+            )
+        return profiles
+
+    def _image_profile(self, image_ref: str | None = None) -> dict | None:
+        ref = str(image_ref if image_ref is not None else self._selected_image)
+        ref = ref.strip()
+        if not ref:
+            return None
+        for profile in self._image_profiles:
+            if profile.get('ref') == ref:
+                return profile
+        for profile in self._image_profiles:
+            pattern = profile.get('match') or ''
+            if pattern and fnmatchcase(ref, pattern):
+                return profile
+        return None
+
+    def _image_supports_host_workspaces(
+        self,
+        image_ref: str | None = None,
+    ) -> bool:
+        profile = self._image_profile(image_ref)
+        value = (
+            profile.get('supports_host_workspaces')
+            if profile
+            else self._images_cfg.get('default_supports_host_workspaces')
+        )
+        if isinstance(value, str):
+            return value.strip().lower() in {'1', 'true', 'yes', 'on'}
+        return bool(value)
+
+    def _image_container_user(self, image_ref: str | None = None) -> str:
+        profile = self._image_profile(image_ref)
+        raw_user = (
+            profile.get('user')
+            if profile and profile.get('user')
+            else self._images_cfg.get('default_user', 'root')
+        )
+        user = str(raw_user or 'root').strip()
+        if user.lower() == 'host':
+            return str(
+                CONFIG['process']['compose_run_env'].get(
+                    'MOBIPICK_HOST_USER',
+                    '',
+                )
+            ).strip() or str(os.environ.get('USER') or 'root')
+        if user.lower() in {'', 'root'}:
+            return 'root'
+        return user
+
+    def _image_entrypoint(self, image_ref: str | None = None) -> str:
+        profile = self._image_profile(image_ref)
+        if profile and profile.get('entrypoint'):
+            return str(profile['entrypoint'])
+        return '/usr/local/bin/entrypoint_user.sh'
+
+    def _image_workdir(self, image_ref: str | None = None) -> str:
+        profile = self._image_profile(image_ref)
+        if profile and profile.get('workdir'):
+            return str(profile['workdir'])
+        return ''
+
+    def _image_runtime_env(
+        self,
+        workspace_env: dict[str, str] | None = None,
+        *,
+        image_ref: str | None = None,
+    ) -> dict[str, str]:
+        workspace_env = workspace_env or self._workspace_runtime_env()
+        image = image_ref or self._selected_image
+        workdir = self._image_workdir(image)
+        if not workdir:
+            workdir = workspace_env.get('MOBIPICK_WORKSPACE_PATH') or '/tmp'
+        return {
+            'MOBIPICK_CONTAINER_USER': self._image_container_user(
+                image
+            ),
+            'MOBIPICK_CONTAINER_ENTRYPOINT': self._image_entrypoint(
+                image
+            ),
+            'MOBIPICK_CONTAINER_WORKDIR': workdir,
+        }
+
+    def _image_compatible_with_workspace(
+        self,
+        image_ref: str,
+        workspace_name: str,
+    ) -> bool | None:
+        profile = self._image_profile(image_ref)
+        if not profile:
+            return None
+        compatible = profile.get('compatible_workspaces') or []
+        if '*' in compatible:
+            return True
+        if workspace_name:
+            return workspace_name in compatible
+        return (
+            ''
+            in compatible
+            or 'Docker image default' in compatible
+            or 'image default' in compatible
+        )
+
+    @staticmethod
+    def _normalize_workspace_mismatch_exceptions(value) -> list[dict[str, str]]:
+        if not isinstance(value, list):
+            return []
+        normalized: list[dict[str, str]] = []
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            image = str(item.get('image') or '').strip()
+            workspace = str(item.get('workspace') or '').strip()
+            if not image:
+                continue
+            if not workspace:
+                workspace = 'Docker image default'
+            entry = {'image': image, 'workspace': workspace}
+            if entry not in normalized:
+                normalized.append(entry)
+        return normalized
+
+    def _workspace_mismatch_workspace_key(self) -> str:
+        return (
+            str(self._workspace_registry.active or '').strip()
+            or 'Docker image default'
+        )
+
+    def _workspace_mismatch_exception_entry(self) -> dict[str, str] | None:
+        image = str(self._selected_image or '').strip()
+        if not image:
+            return None
+        workspace = self._workspace_mismatch_workspace_key()
+        return {'image': image, 'workspace': workspace}
+
+    def _workspace_mismatch_exception_exists(self) -> bool:
+        entry = self._workspace_mismatch_exception_entry()
+        if not entry:
+            return False
+        return entry in self._workspace_mismatch_session_exceptions
+
+    def _workspace_mismatch_warning_reason(self) -> str:
+        image = str(self._selected_image or '').strip()
+        if not image:
+            return ''
+        workspace = str(self._workspace_registry.active or '').strip()
+        if self._image_compatible_with_workspace(image, workspace) is True:
+            return ''
+        if not self._image_supports_host_workspaces(image):
+            return (
+                'The selected Docker image does not mount host workspaces. '
+                'Commands will run against the workspace baked into the image.'
+            )
+        if not workspace:
+            return (
+                'The selected Docker image does not declare a workspace match '
+                'for Docker image default.'
+            )
+        return (
+            'The selected Docker image does not declare a workspace match for '
+            'the active ROS 1 workspace.'
+        )
+
+    def _remember_workspace_mismatch_exception(self) -> None:
+        entry = self._workspace_mismatch_exception_entry()
+        if not entry:
+            return
+        exceptions = list(self._workspace_mismatch_session_exceptions)
+        if entry not in exceptions:
+            exceptions.append(entry)
+        self._workspace_mismatch_session_exceptions = exceptions
+        self._workspace_warning_cfg['silenced_exceptions'] = exceptions
+        save_user_config_update({
+            'workspace_mismatch_warning': {
+                'silenced_exceptions': exceptions,
+            },
+        })
+
+    def _mark_current_image_workspace_match(self) -> None:
+        image = str(self._selected_image or '').strip()
+        workspace = self._workspace_mismatch_workspace_key()
+        self._mark_image_workspace_match(image, workspace)
+
+    def _mark_image_workspace_match(self, image: str, workspace: str) -> None:
+        image = str(image or '').strip()
+        workspace = str(workspace or '').strip() or 'Docker image default'
+        compatible_workspace = '' if workspace == 'Docker image default' else workspace
+        if not image:
+            return
+        if self._image_compatible_with_workspace(
+            image,
+            compatible_workspace,
+        ) is True:
+            return
+        profiles = copy.deepcopy(self._images_cfg.get('profiles', []) or [])
+        match_profile = self._image_profile(image) or {}
+        updated = False
+        for profile in profiles:
+            if not isinstance(profile, dict):
+                continue
+            if str(profile.get('ref') or '').strip() != image:
+                continue
+            compatible = self._compatible_workspace_list(
+                profile.get('compatible_workspaces')
+            )
+            if workspace not in compatible:
+                compatible.append(workspace)
+            profile['compatible_workspaces'] = compatible
+            updated = True
+            break
+        if not updated:
+            profile = {
+                'ref': image,
+                'user': match_profile.get(
+                    'user',
+                    self._images_cfg.get('default_user', 'root'),
+                ),
+                'supports_host_workspaces': match_profile.get(
+                    'supports_host_workspaces',
+                    self._images_cfg.get('default_supports_host_workspaces'),
+                ),
+                'compatible_workspaces': [workspace],
+            }
+            for key in ('workdir', 'entrypoint', 'description'):
+                value = match_profile.get(key)
+                if value not in (None, ''):
+                    profile[key] = value
+            profiles.append(profile)
+
+        save_user_config_update({'images': {'profiles': profiles}})
+        self._images_cfg['profiles'] = profiles
+        CONFIG['images']['profiles'] = profiles
+        self._image_profiles = self._normalize_image_profiles(
+            self._images_cfg.get('profiles', [])
+        )
+        self._refresh_image_combo_labels()
+        self._log_info(
+            f'marked {image} as a workspace match for {workspace}'
+        )
+
+    def _open_workspace_match_editor(self) -> None:
+        images = list(self._image_choices)
+        if not images:
+            QMessageBox.information(
+                self,
+                'Workspace Matches',
+                'No local Docker images are available to configure.',
+            )
+            return
+        dialog = WorkspaceMatchDialog(
+            images,
+            [workspace.name for workspace in self._workspace_registry.workspaces],
+            self._workspace_match_map(images),
+            self,
+        )
+        if dialog.exec_() != QDialog.Accepted:
+            return
+        try:
+            self._save_workspace_match_map(dialog.matches())
+        except Exception as exc:
+            QMessageBox.warning(
+                self,
+                'Workspace Matches',
+                f'Failed to save workspace matches:\n{exc}',
+            )
+            return
+        self._refresh_image_combo_labels()
+        self._log_info('workspace matches updated')
+
+    def _workspace_match_map(self, images: list[str]) -> dict[str, list[str]]:
+        result: dict[str, list[str]] = {}
+        for image in images:
+            profile = self._image_profile(image) or {}
+            compatible = self._compatible_workspace_list(
+                profile.get('compatible_workspaces')
+            )
+            values = []
+            for item in compatible:
+                if item in {'', 'image default'}:
+                    item = 'Docker image default'
+                if item not in values:
+                    values.append(item)
+            result[image] = values
+        return result
+
+    def _save_workspace_match_map(
+        self,
+        matches: dict[str, list[str]],
+    ) -> None:
+        profiles = copy.deepcopy(self._images_cfg.get('profiles', []) or [])
+        for image, workspaces in matches.items():
+            profiles = self._profiles_with_workspace_matches(
+                profiles,
+                image,
+                workspaces,
+            )
+        save_user_config_update({'images': {'profiles': profiles}})
+        self._images_cfg['profiles'] = profiles
+        CONFIG['images']['profiles'] = profiles
+        self._image_profiles = self._normalize_image_profiles(profiles)
+
+    def _profiles_with_workspace_matches(
+        self,
+        profiles: list,
+        image: str,
+        workspaces: list[str],
+    ) -> list:
+        image = str(image or '').strip()
+        if not image:
+            return profiles
+        compatible = [
+            str(workspace or '').strip() or 'Docker image default'
+            for workspace in workspaces
+            if str(workspace or '').strip()
+        ]
+        compatible = list(dict.fromkeys(compatible))
+        match_profile = self._image_profile(image) or {}
+        for profile in profiles:
+            if not isinstance(profile, dict):
+                continue
+            if str(profile.get('ref') or '').strip() != image:
+                continue
+            profile['compatible_workspaces'] = compatible
+            return profiles
+        profile = {
+            'ref': image,
+            'user': match_profile.get(
+                'user',
+                self._images_cfg.get('default_user', 'root'),
+            ),
+            'supports_host_workspaces': match_profile.get(
+                'supports_host_workspaces',
+                self._images_cfg.get('default_supports_host_workspaces'),
+            ),
+            'compatible_workspaces': compatible,
+        }
+        for key in ('workdir', 'entrypoint', 'description'):
+            value = match_profile.get(key)
+            if value not in (None, ''):
+                profile[key] = value
+        profiles.append(profile)
+        return profiles
+
+    def _mark_workspace_build_image_match(self, workspace: RosWorkspace) -> bool:
+        try:
+            self._mark_image_workspace_match(
+                self._selected_image,
+                workspace.name,
+            )
+        except Exception as exc:
+            QMessageBox.warning(
+                self,
+                'Build Workspace',
+                f'Failed to save image/workspace match:\n{exc}',
+            )
+            return False
+        return True
+
+    @staticmethod
+    def _compatible_workspace_list(value) -> list[str]:
+        if isinstance(value, str):
+            return [
+                item.strip()
+                for item in value.split(',')
+                if item.strip()
+            ]
+        if isinstance(value, list):
+            return [
+                str(item).strip()
+                for item in value
+                if str(item).strip()
+            ]
+        return []
+
+    def _confirm_workspace_mismatch_warning(self, action_label: str) -> bool:
+        reason = self._workspace_mismatch_warning_reason()
+        if not reason or self._workspace_mismatch_exception_exists():
+            return True
+
+        workspace = self._workspace_mismatch_workspace_key()
+        image = self._selected_image or '(none)'
+        message = QMessageBox(self)
+        message.setIcon(QMessageBox.Warning)
+        message.setWindowTitle('Workspace/Image Mismatch')
+        message.setText(
+            f'{action_label} is about to run without a workspace match.'
+        )
+        message.setInformativeText(
+            f'Active workspace: {workspace}\n'
+            f'Docker image: {image}\n\n'
+            f'{reason}\n\n'
+            'Continue only if this image/workspace combination is intentional.'
+        )
+        continue_button = message.addButton('Continue', QMessageBox.AcceptRole)
+        mark_match_button = message.addButton(
+            'Mark as Workspace Match',
+            QMessageBox.AcceptRole,
+        )
+        message.addButton(QMessageBox.Cancel)
+        remember = QCheckBox(
+            'Do not warn again for this image/workspace pair'
+        )
+        message.setCheckBox(remember)
+        message.setDefaultButton(QMessageBox.Cancel)
+        message.exec_()
+        clicked = message.clickedButton()
+        if clicked == mark_match_button:
+            try:
+                self._mark_current_image_workspace_match()
+            except Exception as exc:
+                QMessageBox.warning(
+                    self,
+                    'Workspace Match',
+                    f'Failed to save workspace match:\n{exc}',
+                )
+                return False
+            return True
+        if clicked != continue_button:
+            return False
+        if remember.isChecked():
+            try:
+                self._remember_workspace_mismatch_exception()
+            except Exception as exc:
+                self._append_gui_html(
+                    'log',
+                    '<i>Failed to save workspace mismatch warning '
+                    f'exception: {html.escape(str(exc))}</i>',
+                )
+        else:
+            entry = self._workspace_mismatch_exception_entry()
+            if entry and entry not in self._workspace_mismatch_session_exceptions:
+                self._workspace_mismatch_session_exceptions.append(entry)
+        return True
+
+    def _image_choice_label(self, image_ref: str) -> str:
+        active_name = self._workspace_registry.active
+        compatible = self._image_compatible_with_workspace(
+            image_ref,
+            active_name,
+        )
+        if compatible is True:
+            return f'{image_ref}  [workspace match]'
+        if active_name and not self._image_supports_host_workspaces(image_ref):
+            return f'{image_ref}  [image default only]'
+        return image_ref
+
+    def _image_choice_tooltip(self, image_ref: str) -> str:
+        profile = self._image_profile(image_ref)
+        parts = [image_ref]
+        if profile and profile.get('description'):
+            parts.append(str(profile['description']))
+        user = self._image_container_user(image_ref)
+        parts.append(f'Container user: {user}')
+        if self._image_supports_host_workspaces(image_ref):
+            parts.append('Host workspace mount: enabled')
+        else:
+            parts.append('Host workspace mount: disabled; uses image workspace')
+        return '\n'.join(parts)
+
+    def _decorate_image_combo_item(self, index: int, image_ref: str) -> None:
+        self.image_combo.setItemData(
+            index,
+            self._image_choice_tooltip(image_ref),
+            Qt.ToolTipRole,
+        )
+        self.image_combo.setItemData(index, None, Qt.ForegroundRole)
+        if self._image_compatible_with_workspace(
+            image_ref,
+            self._workspace_registry.active,
+        ) is True:
+            self.image_combo.setItemData(
+                index,
+                QColor('#1b7f3a'),
+                Qt.ForegroundRole,
+            )
+        elif (
+            self._workspace_registry.active
+            and not self._image_supports_host_workspaces(image_ref)
+        ):
+            self.image_combo.setItemData(
+                index,
+                QColor('#9a6700'),
+                Qt.ForegroundRole,
+            )
+
+    def _refresh_image_combo_labels(self) -> None:
+        if not hasattr(self, 'image_combo') or not self._image_choices:
+            return
+        self.image_combo.blockSignals(True)
+        for index, image_ref in enumerate(self._image_choices):
+            self.image_combo.setItemText(
+                index,
+                self._image_choice_label(image_ref),
+            )
+            self.image_combo.setItemData(index, image_ref)
+            self._decorate_image_combo_item(index, image_ref)
+        if self._selected_image in self._image_choices:
+            self.image_combo.setCurrentIndex(
+                self._image_choices.index(self._selected_image)
+            )
+        self.image_combo.blockSignals(False)
+        self.image_combo.setToolTip(
+            self._image_choice_tooltip(self._selected_image)
+            if self._selected_image
+            else 'No image selected'
+        )
+
+    def _workspace_image(self, name: str | None) -> str:
+        return self._workspace_registry.image_for(
+            name,
+            str(self._images_cfg.get('default', '') or ''),
+        )
+
+    def _workspace_match_image(
+        self,
+        name: str | None,
+        choices: list[str] | None = None,
+    ) -> str:
+        workspace_name = str(name or '').strip()
+        image_choices = choices if choices is not None else self._image_choices
+        for image_ref in image_choices:
+            if self._image_compatible_with_workspace(
+                image_ref,
+                workspace_name,
+            ) is True:
+                return image_ref
+        return ''
+
+    def _populate_workspace_combo(self) -> None:
+        selected = self._workspace_registry.active
+        self.workspace_combo.blockSignals(True)
+        self.workspace_combo.clear()
+        self.workspace_combo.addItem('Docker image default', '')
+        for workspace in self._workspace_registry.workspaces:
+            self.workspace_combo.addItem(
+                f'{workspace.name}  [{workspace.directory}]',
+                workspace.name,
+            )
+        index = self.workspace_combo.findData(selected)
+        self.workspace_combo.setCurrentIndex(index if index >= 0 else 0)
+        self.workspace_combo.blockSignals(False)
+        active = self._workspace_registry.active_workspace()
+        host_workspace_enabled = self._image_supports_host_workspaces(
+            self._selected_image
+        )
+        if active:
+            setup_status = (
+                'built'
+                if self._workspace_registry.is_runtime_built(active)
+                else 'not built; base ROS remains available'
+            )
+            mount_status = (
+                'host workspace will be mounted'
+                if host_workspace_enabled
+                else 'selected image uses its baked Docker workspace'
+            )
+            self.workspace_combo.setToolTip(
+                f'{active.directory}\n{setup_status}\n{mount_status}'
+            )
+        else:
+            self.workspace_combo.setToolTip(
+                'Use the catkin workspace bundled in the selected Docker image.'
+            )
+        self._refresh_image_combo_labels()
+
+    def _on_workspace_changed(self, index: int) -> None:
+        name = str(self.workspace_combo.itemData(index) or '')
+        if name == self._workspace_registry.active:
+            return
+        self._activate_workspace(name)
+
+    def _workspace_processes_running(self) -> bool:
+        return bool(
+            self._roscore_running_cached
+            or self._sim_running_cached
+            or self._terminal_running_cached
+            or self._recording_is_active()
+            or any(tab.is_running() for tab in self.tasks.values())
+        )
+
+    def _activate_workspace(self, name: str) -> bool:
+        if name == self._workspace_registry.active:
+            self._populate_workspace_combo()
+            return True
+        workspace = self._workspace_registry.get(name) if name else None
+        if name and workspace is None:
+            QMessageBox.warning(
+                self,
+                'ROS 1 Workspace',
+                f'Workspace "{name}" is not configured.',
+            )
+            self._populate_workspace_combo()
+            return False
+        if self._workspace_processes_running():
+            QMessageBox.warning(
+                self,
+                'ROS 1 Workspace',
+                'Stop running workspace processes before switching.',
+            )
+            self._populate_workspace_combo()
+            return False
+
+        target_image = (
+            self._workspace_match_image(name)
+            or self._workspace_image(name)
+        )
+        if target_image and target_image not in self._image_choices:
+            QMessageBox.warning(
+                self,
+                'ROS 1 Workspace',
+                f'The Docker image configured for this workspace is not '
+                f'installed:\n\n{target_image}\n\n'
+                'Install it or update the workspace settings before switching.',
+            )
+            self._populate_workspace_combo()
+            return False
+
+        current_name = self._workspace_registry.active or 'Docker image default'
+        target_name = name or 'Docker image default'
+        answer = QMessageBox.question(
+            self,
+            'Switch ROS 1 Workspace',
+            f'Switch from "{current_name}" to "{target_name}"?\n\n'
+            'All current tabs and their log output will be discarded and '
+            'recreated for the selected workspace.\n\n'
+            f'Docker image: {target_image or "(none)"}',
+            QMessageBox.Yes | QMessageBox.Cancel,
+            QMessageBox.Cancel,
+        )
+        if answer != QMessageBox.Yes:
+            self._populate_workspace_combo()
+            if self._workspace_dialog:
+                self._workspace_dialog.refresh(
+                    self._workspace_registry.active
+                )
+            return False
+
+        previous_name = self._workspace_registry.active
+        self._workspace_registry.active = name
+        try:
+            self._workspace_registry.save()
+        except (OSError, ValueError) as exc:
+            self._workspace_registry.active = previous_name
+            QMessageBox.critical(self, 'ROS 1 Workspace', str(exc))
+            self._populate_workspace_combo()
+            return False
+
+        self._reset_workspace_tabs()
+        self._reload_workspace_profile()
+        self._reload_window_layout_for_workspace()
+        if target_image:
+            self._select_image(target_image, log_selection=False)
+        self._create_workspace_tabs()
+        self._apply_env_to_all_tabs()
+
+        if workspace:
+            self._recording_workspace_name = workspace.name
+            self._log_info(
+                f'active ROS 1 workspace: {workspace.name} '
+                f'({workspace.directory})'
+            )
+        else:
+            configured_name = self._recording_cfg.get(
+                'workspace_name',
+                'workspace',
+            )
+            self._recording_workspace_name = self._normalize_workspace_name(
+                configured_name
+            )
+            self._log_info('using the Docker image default ROS 1 workspace')
+        self._populate_workspace_combo()
+        if self._workspace_dialog:
+            self._workspace_dialog.refresh(name)
+        return True
+
+    def _reset_workspace_tabs(self) -> None:
+        self._cancel_auto_launch_timers()
+        self._cancel_recording_schedule()
+        self._auto_launch_running = False
+        self._auto_launch_stopping = False
+        self._auto_launch_active_keys.clear()
+        self._auto_launch_run_count = 0
+        self._script_active_tab_key = None
+        self._terminal_stream_tab_key = None
+        self._custom_counter = 0
+        self._last_log_origin.clear()
+        self._synced_container_refs.clear()
+        self._toggle_states.clear()
+
+        for tab in list(self.tasks.values()):
+            index = self.tabs.indexOf(tab.output)
+            if index >= 0:
+                self.tabs.removeTab(index)
+            tab.proc.deleteLater()
+            tab.output.deleteLater()
+        self.tasks.clear()
+
+    def _create_workspace_tabs(self) -> None:
+        self._ensure_tab('roscore', 'Roscore', closable=False)
+        for key in self._config_button_order:
+            config = self._config_buttons[key]
+            self._ensure_tab(
+                key,
+                str(config.get('label') or key),
+                closable=False,
+            )
+        self._ensure_tab('sim', 'Sim', closable=False)
+        self._ensure_tab('tables', 'Tables Demo', closable=False)
+        self._ensure_tab('rviz', 'RViz', closable=False)
+        self._ensure_tab('rqt', 'RQt Tables', closable=False)
+        self._ensure_tab('log', 'Log', closable=False)
+
+    def _refresh_launch_plan_settings(self) -> None:
+        self._launch_retry_ms = max(
+            0,
+            int(self._launch_plan.get('retry_delay_ms', 750) or 0),
+        )
+        self._launch_max_retry = max(
+            0,
+            int(self._launch_plan.get('max_retry_attempts', 6) or 0),
+        )
+        if hasattr(self, '_window_layout_cfg'):
+            self._window_layout_delay_ms = self._compute_window_layout_delay_ms()
+            manager = getattr(self, '_window_layout_manager', None)
+            if manager is not None:
+                manager.set_apply_delay_ms(self._window_layout_delay_ms)
+
+    def _reload_workspace_profile(self) -> None:
+        old_keys = list(self._config_button_order)
+        for key in old_keys:
+            button = self._button_widgets.pop(key, None)
+            if button:
+                self._top_controls_layout.removeWidget(button)
+                button.deleteLater()
+        self._button_layout = load_button_layout(
+            self._workspace_button_config_path()
+        )
+        self._launch_plan = load_launch_sequence_plan(
+            self._workspace_button_config_path(),
+            self._workspace_launch_config_path(),
+        )
+        self._docker_cp_config = load_docker_cp_config(
+            self._workspace_docker_cp_config_path()
+        )
+        self._synced_container_refs.clear()
+        self._refresh_launch_plan_settings()
+        terminal_index = self._top_controls_layout.indexOf(
+            self.terminal_button
+        )
+        self._build_configurable_buttons(
+            self._top_controls_layout,
+            insert_at=terminal_index,
+        )
+        self._auto_launch_base_tooltip = str(
+            self._launch_plan.get('button', {}).get('tooltip') or ''
+        )
+        if getattr(self, 'record_checkbox', None) and self.record_checkbox.isChecked():
+            state = 'active' if self._recording_is_active() else 'armed'
+        else:
+            state = 'off'
+        self._set_auto_launch_recording_hint(state)
+        self._update_buttons()
+
+    def _open_workspace_manager(self) -> None:
+        if self._workspace_dialog:
+            self._workspace_dialog.raise_()
+            self._workspace_dialog.activateWindow()
+            return
+        dialog = WorkspaceManagerDialog(
+            self._workspace_registry,
+            self,
+            replace_allowed=lambda: not self._workspace_processes_running(),
+            image_choices=self._image_choices,
+            image_workspace_path=self._image_workdir(self._selected_image),
+        )
+        dialog.workspace_activated.connect(self._activate_workspace)
+        dialog.build_requested.connect(self._build_workspace)
+        dialog.settings_imported.connect(
+            self._apply_imported_workspace_settings
+        )
+        dialog.finished.connect(self._on_workspace_manager_closed)
+        self._workspace_dialog = dialog
+        dialog.show()
+
+    def _apply_imported_workspace_settings(self) -> None:
+        self._reset_workspace_tabs()
+        self._reload_workspace_profile()
+        target_image = (
+            self._workspace_match_image(self._workspace_registry.active)
+            or self._workspace_image(self._workspace_registry.active)
+        )
+        if target_image and target_image in self._image_choices:
+            self._select_image(target_image, log_selection=False)
+        self._create_workspace_tabs()
+        self._apply_env_to_all_tabs()
+        active = self._workspace_registry.active_workspace()
+        self._recording_workspace_name = (
+            active.name
+            if active
+            else self._normalize_workspace_name(
+                self._recording_cfg.get('workspace_name', 'workspace')
+            )
+        )
+        self._populate_workspace_combo()
+
+    def _on_workspace_manager_closed(self, _result: int) -> None:
+        self._workspace_dialog = None
+        self._populate_workspace_combo()
+
+    # ---------- First-run setup and custom image builds ----------
+
+    def _setup_wizard_cfg(self) -> dict:
+        cfg = CONFIG.get('setup_wizard', {})
+        return cfg if isinstance(cfg, dict) else {}
+
+    def _schedule_first_run_setup_wizard(self) -> None:
+        if self._setup_wizard_auto_scheduled:
+            return
+        if not self._should_auto_show_setup_wizard():
+            return
+        self._setup_wizard_auto_scheduled = True
+        QTimer.singleShot(0, self._open_setup_wizard)
+
+    def _should_auto_show_setup_wizard(self) -> bool:
+        cfg = self._setup_wizard_cfg()
+        if not self._bool_config_value(cfg.get('show_on_first_run', True)):
+            return False
+        if self._bool_config_value(cfg.get('completed', False)):
+            return False
+        if self._image_choices:
+            return False
+        platform = os.environ.get('QT_QPA_PLATFORM', '').strip().lower()
+        return platform != 'offscreen'
+
+    def _should_offer_setup_for_missing_default_image(self) -> bool:
+        cfg = self._setup_wizard_cfg()
+        if not self._bool_config_value(cfg.get('show_on_first_run', True)):
+            return False
+        if self._bool_config_value(cfg.get('completed', False)):
+            return False
+        platform = os.environ.get('QT_QPA_PLATFORM', '').strip().lower()
+        return platform != 'offscreen'
+
+    def _can_offer_setup_wizard(self) -> bool:
+        cfg = self._setup_wizard_cfg()
+        if not self._bool_config_value(cfg.get('show_on_first_run', True)):
+            return False
+        platform = os.environ.get('QT_QPA_PLATFORM', '').strip().lower()
+        return platform != 'offscreen'
+
+    @staticmethod
+    def _bool_config_value(value, default: bool = False) -> bool:
+        if value is None:
+            return default
+        if isinstance(value, str):
+            return value.strip().lower() in {'1', 'true', 'yes', 'on'}
+        return bool(value)
+
+    def _open_custom_image_builder(self) -> None:
+        self._open_setup_wizard(build_custom_default=True)
+
+    def _open_setup_wizard(self, *, build_custom_default: bool = False) -> None:
+        if self._setup_wizard_dialog:
+            self._setup_wizard_dialog.raise_()
+            self._setup_wizard_dialog.activateWindow()
+            return
+        cfg = self._setup_wizard_cfg()
+        public_images = self._normalize_image_list(
+            cfg.get('public_images')
+        ) or [
+            str(self._images_cfg.get('default', '') or '').strip()
+        ]
+        default_image = str(
+            self._images_cfg.get('default')
+            or (public_images[0] if public_images else '')
+        ).strip()
+        host_user = str(
+            cfg.get('host_user')
+            or CONFIG['process']['compose_run_env'].get(
+                'MOBIPICK_HOST_USER',
+                '',
+            )
+        ).strip()
+        host_uid = str(
+            cfg.get('host_uid')
+            or CONFIG['process']['compose_run_env'].get('MOBIPICK_UID', '')
+        ).strip()
+        host_gid = str(
+            cfg.get('host_gid')
+            or CONFIG['process']['compose_run_env'].get('MOBIPICK_GID', '')
+        ).strip()
+        base_image = str(
+            cfg.get('development_base_image')
+            or 'ozkrelo/x_mobipick_labs:noetic-v1.2'
+        ).strip()
+        target_image = self._default_custom_image_ref(host_user, cfg)
+        source_image = str(
+            cfg.get('source_image')
+            or target_image
+            or base_image
+            or default_image
+        ).strip()
+        active = self._workspace_registry.active
+        workspace_names = [
+            workspace.name
+            for workspace in self._workspace_registry.workspaces
+        ]
+        wizard = ImageSetupWizard(
+            public_images=public_images,
+            default_image=default_image,
+            host_user=host_user,
+            host_uid=host_uid,
+            host_gid=host_gid,
+            base_image=base_image,
+            target_image=target_image,
+            workspace_names=workspace_names,
+            active_workspace=active,
+            build_custom_default=build_custom_default,
+            configuration_paths=[
+                (label, str(path))
+                for label, path in user_configuration_paths(
+                    workspace_registry_path=self._workspace_registry.path,
+                    window_layout_template=self._window_layout_path_template,
+                )
+            ],
+            source_master_folder=self._default_source_master_folder(),
+            source_workspace_name=str(
+                cfg.get('source_workspace_name')
+                or 'clean_mobipick_labs_ws'
+            ).strip(),
+            source_repository=str(
+                cfg.get('source_repository')
+                or 'https://github.com/DFKI-NI/mobipick_labs.git'
+            ).strip(),
+            source_branch=str(cfg.get('source_branch') or 'noetic').strip(),
+            source_image=source_image,
+            install_source_default=self._bool_config_value(
+                cfg.get('source_install_by_default', False)
+            ),
+            image_blacklist=self._image_blacklist_patterns(),
+            parent=self,
+        )
+        wizard.accepted.connect(lambda: self._apply_setup_wizard(wizard.selection()))
+        wizard.finished.connect(self._on_setup_wizard_closed)
+        self._setup_wizard_dialog = wizard
+        wizard.show()
+
+    def _default_source_master_folder(self) -> str:
+        if self._workspace_registry.master_folder:
+            return self._workspace_registry.master_folder
+        host_home = str(
+            CONFIG['process']['qprocess_env'].get(
+                'MOBIPICK_HOST_HOME',
+                '',
+            )
+        ).strip()
+        if host_home:
+            return str(Path(host_home).expanduser() / 'ros_ws')
+        return str(Path.home() / 'ros_ws')
+
+    def _on_setup_wizard_closed(self, _result: int) -> None:
+        self._setup_wizard_dialog = None
+
+    def _default_custom_image_ref(self, host_user: str, cfg: dict) -> str:
+        repo = str(
+            cfg.get('development_image_repository')
+            or 'ozkrelo/x_mobipick_labs'
+        ).strip()
+        template = str(
+            cfg.get('development_image_tag_template')
+            or '{user}_user_from_1.2'
+        )
+        safe_user = self._safe_image_tag_part(host_user or 'user')
+        try:
+            tag = template.format(user=safe_user)
+        except (KeyError, ValueError):
+            tag = f'{safe_user}_user_from_1.2'
+        tag = self._safe_image_tag_part(tag)
+        return f'{repo}:{tag}' if repo else tag
+
+    @staticmethod
+    def _safe_image_tag_part(value: str) -> str:
+        cleaned = re.sub(r'[^A-Za-z0-9_.-]+', '-', str(value).strip())
+        cleaned = cleaned.strip('.-')
+        return cleaned or 'user'
+
+    @staticmethod
+    def _normalize_image_list(value) -> list[str]:
+        if isinstance(value, str):
+            raw_items = re.split(r'[\n,]+', value)
+        elif isinstance(value, list):
+            raw_items = value
+        else:
+            raw_items = []
+        images: list[str] = []
+        for item in raw_items:
+            image = str(item).strip()
+            if image and image not in images:
+                images.append(image)
+        return images
+
+    def _image_blacklist_patterns(self) -> list[str]:
+        images_cfg = self.__dict__.get('_images_cfg', {}) or {}
+        return self._normalize_image_list(images_cfg.get('blacklist'))
+
+    def _image_discovery_filters(self) -> list[str]:
+        images_cfg = self.__dict__.get('_images_cfg', {}) or {}
+        return self._normalize_image_list(images_cfg.get('discovery_filters'))
+
+    @staticmethod
+    def _image_ref_matches_pattern(image_ref: str, pattern: str) -> bool:
+        image_text = str(image_ref or '').strip().lower()
+        pattern_text = str(pattern or '').strip().lower()
+        if not image_text or not pattern_text:
+            return False
+        if fnmatchcase(image_text, pattern_text):
+            return True
+        if not any(char in pattern_text for char in '*?['):
+            return pattern_text in image_text
+        return False
+
+    def _image_ref_blacklisted(
+        self,
+        image_ref: str,
+        patterns: list[str] | None = None,
+    ) -> bool:
+        active_patterns = (
+            patterns
+            if patterns is not None
+            else self._image_blacklist_patterns()
+        )
+        return any(
+            self._image_ref_matches_pattern(image_ref, pattern)
+            for pattern in active_patterns
+        )
+
+    def _open_image_blacklist_dialog(self) -> None:
+        records, _error_message = self._discover_filtered_image_records(
+            blacklist_patterns=[],
+            discovery_filters=[],
+        )
+        image_refs = [
+            record.get('ref', '')
+            for record in records
+            if record.get('ref')
+        ]
+        if not image_refs:
+            image_refs = list(getattr(self, '_image_choices', []))
+        dialog = ImageBlacklistDialog(
+            self._image_blacklist_patterns(),
+            self._image_discovery_filters(),
+            image_refs,
+            self._image_ref_matches_pattern,
+            self,
+        )
+        if dialog.exec_() != QDialog.Accepted:
+            return
+        patterns = dialog.patterns()
+        discovery_filters = dialog.discovery_filters()
+        try:
+            save_user_config_update(
+                {
+                    'images': {
+                        'blacklist': patterns,
+                        'discovery_filters': discovery_filters,
+                    }
+                }
+            )
+        except OSError as exc:
+            QMessageBox.warning(
+                self,
+                'Docker Image Filters',
+                f'Failed to save image filters:\n{exc}',
+            )
+            return
+        self._images_cfg['discovery_filters'] = discovery_filters
+        self._images_cfg['blacklist'] = patterns
+        CONFIG['images']['discovery_filters'] = discovery_filters
+        CONFIG['images']['blacklist'] = patterns
+        self._load_available_images(show_feedback=False)
+        self._log_info('docker image filters updated')
+
+    def _apply_setup_wizard(self, selection: SetupWizardSelection) -> None:
+        if selection.default_image:
+            self._images_cfg['default'] = selection.default_image
+        profile = None
+        if selection.build_custom_image:
+            validation_error = self._validate_custom_image_selection(selection)
+            if validation_error:
+                QMessageBox.warning(self, 'Build Custom Image', validation_error)
+                return
+            profile = self._custom_image_profile(selection)
+            self._upsert_runtime_image_profile(profile)
+        if selection.install_source_workspace:
+            validation_error = self._validate_source_workspace_selection(
+                selection
+            )
+            if validation_error:
+                QMessageBox.warning(
+                    self,
+                    'Install mobipick_labs Source',
+                    validation_error,
+                )
+                return
+
+        updates = {
+            'setup_wizard': {
+                'completed': bool(selection.remember_completion),
+                'host_user': selection.host_user,
+                'host_uid': selection.host_uid,
+                'host_gid': selection.host_gid,
+                'public_images': selection.public_images,
+                'development_base_image': selection.base_image,
+                'development_image_repository': self._split_image_ref(
+                    selection.target_image
+                )[0],
+                'development_image_tag_template': (
+                    self._split_image_ref(selection.target_image)[1]
+                    or '{user}_user_from_1.2'
+                ),
+                'source_repository': selection.source_repository,
+                'source_branch': selection.source_branch,
+                'source_workspace_name': selection.source_workspace_name,
+                'source_image': selection.source_image,
+                'source_install_by_default': (
+                    selection.install_source_workspace
+                ),
+            },
+            'images': {
+                'default': selection.default_image,
+                'blacklist': list(selection.image_blacklist),
+            },
+        }
+        if profile:
+            updates['images']['profiles'] = list(
+                self._images_cfg.get('profiles', [])
+            )
+        try:
+            save_user_config_update(updates)
+        except OSError as exc:
+            QMessageBox.warning(
+                self,
+                'Setup Wizard',
+                f'Failed to save setup settings:\n{exc}',
+            )
+            return
+
+        self._images_cfg = CONFIG['images']
+        self._image_profiles = self._normalize_image_profiles(
+            self._images_cfg.get('profiles', [])
+        )
+
+        source_started = False
+
+        def start_source_once() -> None:
+            nonlocal source_started
+            if source_started or not selection.install_source_workspace:
+                return
+            source_started = True
+            self._start_source_workspace_install(selection)
+
+        wait_for_custom_image = (
+            selection.install_source_workspace
+            and selection.build_custom_image
+            and selection.source_image == selection.target_image
+        )
+        wait_for_public_pull = (
+            selection.install_source_workspace
+            and not wait_for_custom_image
+            and selection.pull_public_images
+            and selection.source_image in selection.public_images
+        )
+
+        if selection.pull_public_images and selection.public_images:
+            if wait_for_public_pull:
+                self._start_image_pulls(
+                    selection.public_images,
+                    on_success=start_source_once,
+                )
+            else:
+                self._start_image_pulls(selection.public_images)
+        if selection.build_custom_image:
+            if wait_for_custom_image:
+                self._start_custom_image_build(
+                    selection,
+                    on_success=start_source_once,
+                )
+            else:
+                self._start_custom_image_build(selection)
+        if selection.install_source_workspace and not (
+            wait_for_custom_image or wait_for_public_pull
+        ):
+            start_source_once()
+
+        if self._image_choices:
+            self._load_available_images(show_feedback=False)
+        self._log_info('setup wizard settings saved')
+
+    def _validate_custom_image_selection(
+        self,
+        selection: SetupWizardSelection,
+    ) -> str:
+        if not selection.host_user:
+            return 'Host user is required.'
+        if not selection.host_uid.isdigit() or not selection.host_gid.isdigit():
+            return 'Host UID and GID must be numeric.'
+        if ':' not in selection.base_image:
+            return 'Base image must include a tag, for example image:tag.'
+        if ':' not in selection.target_image:
+            return 'Target image must include a tag, for example image:tag.'
+        return ''
+
+    def _validate_source_workspace_selection(
+        self,
+        selection: SetupWizardSelection,
+    ) -> str:
+        if not selection.source_master_folder:
+            return 'Choose a master folder for the source workspace.'
+        if not selection.source_workspace_name:
+            return 'Enter a source workspace name.'
+        try:
+            RosWorkspace(
+                name=selection.source_workspace_name,
+                path=str(
+                    Path(selection.source_master_folder).expanduser()
+                    / selection.source_workspace_name
+                ),
+            ).normalized()
+        except ValueError as exc:
+            return str(exc)
+        if not selection.source_repository:
+            return 'Enter the mobipick_labs repository URL.'
+        if not selection.source_image:
+            return 'Choose the Docker image used to build the source workspace.'
+        return ''
+
+    def _custom_image_profile(self, selection: SetupWizardSelection) -> dict:
+        compatible = (
+            [selection.compatible_workspace]
+            if selection.compatible_workspace
+            else []
+        )
+        return {
+            'ref': selection.target_image,
+            'user': 'host',
+            'supports_host_workspaces': True,
+            'compatible_workspaces': compatible,
+            'description': (
+                'Local development image with a user matching the host.'
+            ),
+        }
+
+    def _upsert_runtime_image_profile(self, profile: dict) -> None:
+        profiles = list(self._images_cfg.get('profiles', []) or [])
+        ref = str(profile.get('ref') or '').strip()
+        updated = False
+        for index, item in enumerate(profiles):
+            if isinstance(item, dict) and str(item.get('ref') or '').strip() == ref:
+                profiles[index] = profile
+                updated = True
+                break
+        if not updated:
+            profiles.append(profile)
+        self._images_cfg['profiles'] = profiles
+        CONFIG['images']['profiles'] = profiles
+        self._image_profiles = self._normalize_image_profiles(profiles)
+
+    def _start_image_pulls(
+        self,
+        images: list[str],
+        *,
+        on_success: Callable[[], None] | None = None,
+    ) -> None:
+        key = 'setup-pull-images'
+        tab = self._ensure_tab(key, 'Pull Images', closable=True)
+        if tab.is_running():
+            self._focus_tab(key)
+            QMessageBox.information(
+                self,
+                'Pull Images',
+                'An image pull is already running.',
+            )
+            return
+        command = ' && '.join(
+            shlex.join(['docker', 'pull', image])
+            for image in images
+        )
+        if not command:
+            return
+
+        def _after_pull(code: int, _status) -> None:
+            self._load_available_images(show_feedback=False)
+            if code == 0 and on_success:
+                on_success()
+
+        tab.proc.finished.connect(_after_pull)
+        tab.start_program('bash', ['-lc', command])
+        self._focus_tab(key)
+
+    def _start_custom_image_build(
+        self,
+        selection: SetupWizardSelection,
+        *,
+        on_success: Callable[[], None] | None = None,
+    ) -> None:
+        key = 'setup-build-image'
+        tab = self._ensure_tab(key, 'Build Image', closable=True)
+        if tab.is_running():
+            self._focus_tab(key)
+            QMessageBox.information(
+                self,
+                'Build Custom Image',
+                'A custom image build is already running.',
+            )
+            return
+        try:
+            context_dir = self._write_custom_image_build_context(selection)
+        except OSError as exc:
+            QMessageBox.warning(
+                self,
+                'Build Custom Image',
+                f'Failed to prepare Docker build context:\n{exc}',
+            )
+            return
+        args = [
+            'build',
+            '--build-arg',
+            f'USER={selection.host_user}',
+            '--build-arg',
+            f'UID={selection.host_uid}',
+            '--build-arg',
+            f'GID={selection.host_gid}',
+            '-t',
+            selection.target_image,
+            str(context_dir),
+        ]
+
+        def _after_build(code: int, _status) -> None:
+            self._load_available_images(show_feedback=False)
+            if code == 0 and on_success:
+                on_success()
+
+        tab.proc.finished.connect(_after_build)
+        self._start_program_with_pseudo_terminal(tab, 'docker', args)
+        self._focus_tab(key)
+
+    def _start_source_workspace_install(
+        self,
+        selection: SetupWizardSelection,
+    ) -> None:
+        key = 'setup-source-workspace'
+        tab = self._ensure_tab(key, 'Install Source', closable=True)
+        if tab.is_running():
+            self._focus_tab(key)
+            QMessageBox.information(
+                self,
+                'Install mobipick_labs Source',
+                'A source workspace install is already running.',
+            )
+            return
+        try:
+            workspace = self._prepare_source_workspace(selection)
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(
+                self,
+                'Install mobipick_labs Source',
+                f'Failed to prepare the source workspace:\n{exc}',
+            )
+            return
+        self._ensure_network(log_key='log')
+        workspace_env = self._workspace_runtime_env(
+            workspace.name,
+            force_host_workspace=True,
+        )
+        workspace_env.update(
+            self._image_runtime_env(
+                workspace_env,
+                image_ref=selection.source_image,
+            )
+        )
+        workspace_env['MOBIPICK_IMAGE'] = selection.source_image
+        tab.set_environment_overrides(workspace_env)
+        exec_id = uuid.uuid4().hex
+        tab.exec_id = exec_id
+        tab.container_name = f'mobipick-source-{exec_id[:10]}'
+        command = self._source_workspace_install_command(
+            workspace_env['MOBIPICK_WORKSPACE_PATH'],
+            repository=selection.source_repository,
+            branch=selection.source_branch,
+        )
+        args = [
+            'compose',
+            'run',
+            '--rm',
+            '--name',
+            tab.container_name,
+            '--label',
+            f'mobipick.exec={exec_id}',
+            '--label',
+            f'mobipick.tab={key}',
+            *self._compose_env_args(
+                workspace_env,
+                container_name=tab.container_name,
+            ),
+            'mobipick_cmd',
+            'bash',
+            '-lc',
+            self._wrap_line_buffered(command),
+        ]
+
+        def _after_source_install(code: int, _status) -> None:
+            self._on_source_workspace_install_finished(
+                code,
+                workspace,
+                selection,
+            )
+
+        tab.proc.finished.connect(_after_source_install)
+        self._start_program_with_pseudo_terminal(tab, 'docker', args)
+        self._focus_tab(key)
+        self._log_info(
+            f'installing mobipick_labs source workspace at '
+            f'{workspace.directory}'
+        )
+
+    def _prepare_source_workspace(
+        self,
+        selection: SetupWizardSelection,
+    ) -> RosWorkspace:
+        master = Path(selection.source_master_folder).expanduser().resolve()
+        workspace_dir = master / selection.source_workspace_name
+        (workspace_dir / 'src').mkdir(parents=True, exist_ok=True)
+        existing = self._workspace_registry.get(selection.source_workspace_name)
+        workspace = RosWorkspace(
+            name=selection.source_workspace_name,
+            path=str(workspace_dir),
+            extends=list(existing.extends) if existing else [],
+            button_config=existing.button_config if existing else '',
+            launch_config=existing.launch_config if existing else '',
+            sim_command=existing.sim_command if existing else '',
+            image=selection.source_image,
+        ).normalized()
+        self._workspace_registry.master_folder = str(master)
+        self._workspace_registry.upsert(workspace)
+        self._workspace_registry.save()
+        self._populate_workspace_combo()
+        if self._workspace_dialog:
+            self._workspace_dialog.refresh(self._workspace_registry.active)
+        return workspace
+
+    def _source_workspace_install_command(
+        self,
+        container_workspace_path: str,
+        *,
+        repository: str,
+        branch: str,
+    ) -> str:
+        workspace = Path(container_workspace_path)
+        src_dir = workspace / 'src'
+        repo_dir = src_dir / 'mobipick_labs'
+        setup_file = workspace / 'devel' / 'setup.bash'
+        quoted_repo = self._sh_quote(repository)
+        quoted_branch = self._sh_quote(branch) if branch else ''
+        quoted_origin_branch = (
+            self._sh_quote(f'origin/{branch}') if branch else ''
+        )
+        clone_branch = f' --branch {quoted_branch}' if branch else ''
+        branch_checkout = (
+            'git -C "$repo_dir" fetch --all --prune; '
+            f'git -C "$repo_dir" checkout {quoted_branch} '
+            f'|| git -C "$repo_dir" checkout -b {quoted_branch} '
+            f'{quoted_origin_branch}; '
+            f'git -C "$repo_dir" pull --ff-only origin {quoted_branch}'
+            if branch
+            else 'git -C "$repo_dir" pull --ff-only'
+        )
+        return (
+            'set -e; '
+            'export DEBIAN_FRONTEND=noninteractive; '
+            'source /opt/ros/noetic/setup.bash; '
+            f'workspace={self._sh_quote(str(workspace))}; '
+            f'src_dir={self._sh_quote(str(src_dir))}; '
+            f'repo_dir={self._sh_quote(str(repo_dir))}; '
+            f'setup_file={self._sh_quote(str(setup_file))}; '
+            'mkdir -p "$src_dir"; '
+            'if [ -d "$repo_dir/.git" ]; then '
+            'echo "Updating existing mobipick_labs checkout"; '
+            f'{branch_checkout}; '
+            'elif [ -e "$repo_dir" ]; then '
+            'echo "Path exists but is not a git checkout: $repo_dir" >&2; '
+            'exit 1; '
+            'else '
+            'echo "Cloning mobipick_labs"; '
+            f'git clone{clone_branch} {quoted_repo} "$repo_dir"; '
+            'fi; '
+            'cd "$repo_dir"; '
+            './install-deps.sh; '
+            './build.sh; '
+            'if [ -s "$setup_file" ]; then '
+            'source "$setup_file"; '
+            'echo "Built and sourced $setup_file"; '
+            'else '
+            'echo "Build did not create $setup_file" >&2; '
+            'exit 1; '
+            'fi'
+        )
+
+    def _on_source_workspace_install_finished(
+        self,
+        code: int,
+        workspace: RosWorkspace,
+        selection: SetupWizardSelection,
+    ) -> None:
+        if code == 0:
+            try:
+                self._mark_image_workspace_match(
+                    selection.source_image,
+                    workspace.name,
+                )
+            except Exception as exc:
+                self._append_gui_html(
+                    'log',
+                    '<i>Failed to save source workspace image match: '
+                    f'{html.escape(str(exc))}</i>',
+                )
+            self._populate_workspace_combo()
+            if self._workspace_dialog:
+                self._workspace_dialog.refresh(self._workspace_registry.active)
+            self._log_info(
+                f'mobipick_labs source workspace is ready: '
+                f'{workspace.directory}'
+            )
+            if selection.activate_source_workspace:
+                self._activate_workspace(workspace.name)
+        else:
+            self._append_gui_html(
+                'log',
+                '<i>mobipick_labs source workspace install failed; '
+                'see the Install Source tab for details.</i>',
+            )
+
+    def _write_custom_image_build_context(
+        self,
+        selection: SetupWizardSelection,
+    ) -> Path:
+        slug = self._safe_image_tag_part(
+            selection.target_image.replace('/', '_').replace(':', '_')
+        )
+        context_dir = USER_DATA_DIR / 'image_builds' / slug
+        context_dir.mkdir(parents=True, exist_ok=True)
+        dockerfile = context_dir / 'Dockerfile'
+        dockerfile.write_text(
+            self._custom_image_dockerfile(selection.base_image),
+            encoding='utf-8',
+        )
+        entrypoint_source = PROJECT_ROOT / 'custom_entrypoint.sh'
+        entrypoint_target = context_dir / 'entrypoint_user.sh'
+        entrypoint_target.write_text(
+            entrypoint_source.read_text(encoding='utf-8'),
+            encoding='utf-8',
+        )
+        return context_dir
+
+    @staticmethod
+    def _custom_image_dockerfile(base_image: str) -> str:
+        return f"""FROM {base_image}
+
+ARG USER
+ARG UID
+ARG GID
+
+ENV USER=${{USER}} \\
+    HOME=/home/${{USER}}
+
+USER root
+
+RUN set -eux; \\
+    : "${{USER:?USER build-arg required}}"; \\
+    : "${{UID:?UID build-arg required}}"; \\
+    : "${{GID:?GID build-arg required}}"; \\
+    if ! getent group "${{GID}}" >/dev/null 2>&1; then \\
+        groupadd -g "${{GID}}" "${{USER}}"; \\
+    fi; \\
+    if ! id -u "${{USER}}" >/dev/null 2>&1; then \\
+        useradd -m -u "${{UID}}" -g "${{GID}}" -s /bin/bash "${{USER}}"; \\
+    fi
+
+RUN apt-get update && \\
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends sudo && \\
+    rm -rf /var/lib/apt/lists/* && \\
+    echo "${{USER}} ALL=(ALL) NOPASSWD:ALL" > "/etc/sudoers.d/${{USER}}" && \\
+    chmod 0440 "/etc/sudoers.d/${{USER}}"
+
+COPY entrypoint_user.sh /usr/local/bin/entrypoint_user.sh
+RUN chmod 0755 /usr/local/bin/entrypoint_user.sh
+
+USER ${{USER}}
+WORKDIR ${{HOME}}
+
+ENTRYPOINT ["/usr/local/bin/entrypoint_user.sh"]
+CMD ["bash"]
+"""
+
+    def _build_active_workspace(self) -> None:
+        workspace = self._workspace_registry.active_workspace()
+        if workspace:
+            self._build_workspace(workspace.name)
+
+    def _build_workspace(self, name: str) -> None:
+        workspace = self._workspace_registry.get(name)
+        if not workspace:
+            return
+        if not self._image_supports_host_workspaces(self._selected_image):
+            QMessageBox.warning(
+                self,
+                'Build Workspace',
+                'The selected Docker image uses its baked workspace and '
+                'does not mount host ROS workspaces. Select a development '
+                'image with a matching host user before building.',
+            )
+            return
+        if self._workspace_processes_running():
+            QMessageBox.warning(
+                self,
+                'Build Workspace',
+                'Stop running workspace processes before building.',
+            )
+            return
+        self._ensure_network(log_key='log')
+        key = f'build-{workspace.name}'
+        tab = self._ensure_tab(
+            key,
+            f'Build {workspace.name}',
+            closable=True,
+        )
+        if tab.is_running():
+            self._focus_tab(key)
+            return
+        if not self._mark_workspace_build_image_match(workspace):
+            return
+        workspace_env = self._workspace_runtime_env(
+            workspace.name,
+            force_host_workspace=True,
+        )
+        tab.set_environment_overrides(workspace_env)
+        exec_id = uuid.uuid4().hex
+        tab.exec_id = exec_id
+        tab.container_name = f'mobipick-build-{exec_id[:10]}'
+        command = self._workspace_registry.build_command(
+            workspace,
+            image_workspace_path=self._image_workdir(self._selected_image),
+        )
+        args = [
+            'compose',
+            'run',
+            '--rm',
+            '--name',
+            tab.container_name,
+            '--label',
+            f'mobipick.exec={exec_id}',
+            '--label',
+            f'mobipick.tab={key}',
+            *self._compose_env_args(
+                workspace_env,
+                container_name=tab.container_name,
+            ),
+            'mobipick_cmd',
+            'bash',
+            '-lc',
+            self._wrap_line_buffered(command),
+        ]
+        self._start_program_with_pseudo_terminal(tab, 'docker', args)
+        self._focus_tab(key)
+
+    def _workspace_sim_command(self) -> str:
+        workspace = self._workspace_registry.active_workspace()
+        sim_cfg = getattr(self, '_config_buttons', {}).get('sim', {})
+        command = str(sim_cfg.get('command') or '').strip()
+        if command and not (
+            sim_cfg.get('command_is_default')
+            and workspace
+            and workspace.sim_command
+        ):
+            return command
+        if workspace and workspace.sim_command:
+            return workspace.sim_command
+        return DEFAULT_BUTTON_COMMANDS['sim']
+
+    def _rviz_command(self) -> str:
+        command = self._profile_button_command('rviz')
+        if command:
+            return command
+        return DEFAULT_BUTTON_COMMANDS['rviz']
+
+    def _tables_demo_command(self) -> str:
+        command = self._profile_button_command('tables')
+        return command or DEFAULT_BUTTON_COMMANDS['tables']
+
+    def _rqt_tables_command(self) -> str:
+        command = self._profile_button_command('rqt')
+        return command or DEFAULT_BUTTON_COMMANDS['rqt']
+
+    def _profile_button_command(self, key: str) -> str:
+        cfg = getattr(self, '_config_buttons', {}).get(key, {})
+        return str(cfg.get('command') or '').strip()
+
+    def _get_button_widget(self, key: str) -> QPushButton | None:
+        return self._button_widgets.get(key)
+
+    def _auto_launch_button_cfg(self) -> dict:
+        return self._launch_plan.get('button', {}) if isinstance(self._launch_plan, dict) else {}
+
+    def _auto_launch_label(self) -> str:
+        cfg = self._auto_launch_button_cfg()
+        return str(cfg.get('label') or cfg.get('start_text') or 'Auto Launch')
+
+    def _auto_launch_start_text(self) -> str:
+        cfg = self._auto_launch_button_cfg()
+        return str(cfg.get('start_text') or cfg.get('label') or 'Start Auto Launch')
+
+    def _auto_launch_stop_text(self) -> str:
+        cfg = self._auto_launch_button_cfg()
+        return str(cfg.get('stop_text') or cfg.get('label') or 'Stop Auto Launch')
+
+    def _build_configurable_buttons(
+        self,
+        layout: QHBoxLayout,
+        *,
+        insert_at: int | None = None,
+    ):
+        self._config_buttons: dict[str, dict] = {}
+        self._config_button_order = []
+        for entry in self._button_layout:
+            if not isinstance(entry, dict):
+                continue
+            key = str(entry.get('key', '')).strip()
+            if not key or key in {'roscore', 'terminal'}:
+                continue
+            normalized = {
+                'key': key,
+                'label': entry.get('label') or entry.get('text') or key,
+                'kind': str(entry.get('kind') or entry.get('type') or 'builtin').lower(),
+                'action': entry.get('action') or key,
+                'command': entry.get('command'),
+                'tooltip': entry.get('tooltip'),
+                'requires_roscore': bool(entry.get('requires_roscore', True)),
+                'reuse_tab': bool(entry.get('reuse_tab', False)),
+                'world_arg_name': entry.get('world_arg_name', 'world_config'),
+                'world_config_required': entry.get('world_config_required', False),
+                'setup': entry.get('setup') or entry.get('pre_command') or entry.get('prologue'),
+                'host': bool(entry.get('host', False)),
+                'stop_command': entry.get('stop_command'),
+                'log_command': entry.get('log_command'),
+                'pass_ros_master_uri': entry.get('pass_ros_master_uri', False),
+                'service': entry.get('service') or '',
+            }
+            self._config_buttons[key] = normalized
+            self._config_button_order.append(key)
+            button = QPushButton(normalized['label'])
+            _configure_expanding_toolbar_button(button)
+            tooltip = normalized.get('tooltip')
+            if tooltip:
+                button.setToolTip(str(tooltip))
+            button.clicked.connect(
+                lambda _checked=False, k=key: self._on_config_button_clicked(k)
+            )
+            if insert_at is None or insert_at < 0:
+                layout.addWidget(button)
+            else:
+                layout.insertWidget(insert_at, button)
+                insert_at += 1
+            self._button_widgets[key] = button
+
+    def _on_config_button_clicked(self, key: str):
+        button = self._get_button_widget(key)
+        config = self._config_buttons.get(key, {})
+        self._log_button_click(button, config.get('label') or key)
+        if not config:
+            return
+        kind = str(config.get('kind') or 'builtin').lower()
+        if kind == 'command':
+            self._run_config_command(config)
+        else:
+            self._dispatch_builtin_action(config)
+
+    def _config_label(self, config: dict) -> str:
+        return str(config.get('label') or config.get('key') or 'Command')
+
+    def _set_config_visual(self, config: dict, state: str, text: str, enabled: bool):
+        key = str(config.get('key'))
+        if key == 'sim':
+            self.set_toggle_visual(state, text, enabled)
+            return
+        self._set_toggle_state(key, self._get_button_widget(key), state, text, enabled)
+
+    def _reset_config_button_visuals(self):
+        for key in self._config_button_order:
+            config = self._config_buttons.get(key, {})
+            label = self._config_label(config)
+            self._set_config_visual(config, 'red', f'Start {label}', True)
+
+    @staticmethod
+    def _neutralize_compose_ignore(cmd: str) -> str:
+        cmd = cmd.strip()
+        if not cmd:
+            return cmd
+        return f'COMPOSE_IGNORE_ORPHANS= {cmd}'
+
+    def _dispatch_builtin_action(self, config: dict):
+        action = str(config.get('action') or config.get('key') or '').strip().lower()
+        button = self._get_button_widget(config.get('key', ''))
+        if action in {'sim', 'toggle_sim', 'sim_toggle'}:
+            if not self._guard_toggle_action('sim', button):
+                return
+            self.toggle_sim()
+        elif action in {'tables', 'tables_demo', 'toggle_tables'}:
+            if not self._guard_toggle_action('tables', button):
+                return
+            self.toggle_tables_demo()
+        elif action in {'rviz', 'toggle_rviz'}:
+            if not self._guard_toggle_action('rviz', button):
+                return
+            self.toggle_rviz()
+        elif action in {'rqt', 'rqt_tables', 'toggle_rqt'}:
+            if not self._guard_toggle_action('rqt', button):
+                return
+            self.toggle_rqt_tables_demo()
+        elif action in {'refresh', 'refresh_status', 'refresh_sim'}:
+            self._on_refresh_clicked()
+        else:
+            QMessageBox.information(self, 'Buttons', f'No builtin action registered for "{action}".')
+
+    def _run_config_command(self, config: dict):
+        command = str(config.get('command') or '').strip()
+        if not command:
+            QMessageBox.information(self, 'Buttons', 'Command is missing for this button.')
+            return
+        key = str(config.get('key') or '').strip() or 'command'
+        button = self._get_button_widget(key)
+        if not self._guard_toggle_action(key, button):
+            return
+        setup = str(config.get('setup') or '').strip()
+        run_on_host = bool(config.get('host'))
+        stop_command = str(config.get('stop_command') or '').strip()
+        log_command = str(config.get('log_command') or '').strip()
+        pass_master = bool(config.get('pass_ros_master_uri'))
+        label = self._config_label(config)
+        tab = self._ensure_tab(key, label, closable=False)
+        if tab.is_running():
+            self._set_config_visual(config, 'yellow', f'Stopping {label}...', False)
+            def _done():
+                self._set_config_visual(config, 'red', f'Start {label}', True)
+            stop_cmd_for_running = stop_command if run_on_host else None
+            if run_on_host and stop_cmd_for_running:
+                stop_cmd_for_running = self._neutralize_compose_ignore(stop_cmd_for_running)
+            self._stop_custom_tab(tab, on_stopped=_done, stop_command=stop_cmd_for_running)
+            return
+        if not run_on_host and not self._confirm_workspace_mismatch_warning(label):
+            return
+
+        def _apply_env(cmd: str) -> str:
+            if not pass_master:
+                return cmd
+            master = self._current_master_uri()
+            if not master:
+                return cmd
+            return f"ROS_MASTER_URI={self._sh_quote(master)} {cmd}"
+
+        def _run_command():
+            key_label = config.get('key', 'button')
+            full_command = command
+            if config.get('world_config_required'):
+                arg_name = str(config.get('world_arg_name') or 'world_config')
+                world = self._current_world()
+                if world:
+                    full_command = f"{command} {arg_name}:={self._sh_quote(world)}"
+                else:
+                    self._log_info('world_config_required set but no world selected; running without flag')
+            if setup:
+                composed = f'{setup} && {full_command}'
+                full_command = f"bash -lc {self._sh_quote(composed)}"
+            full_command = _apply_env(full_command)
+            stop_command_full = _apply_env(stop_command) if stop_command else ''
+            log_command_full = _apply_env(log_command) if log_command else ''
+            if run_on_host:
+                full_command = self._neutralize_compose_ignore(full_command)
+                if stop_command_full:
+                    stop_command_full = self._neutralize_compose_ignore(stop_command_full)
+                if log_command_full:
+                    log_command_full = self._neutralize_compose_ignore(log_command_full)
+            self._log_info(f'running configured command ({key_label}): {full_command}')
+            if run_on_host:
+                tab.container_name = None
+                tab.exec_id = None
+                if log_command_full:
+                    self._sp_run(['bash', '-lc', full_command], log_key=tab.key, check=False)
+                    tab.start_program('bash', ['-lc', log_command_full])
+                else:
+                    tab.start_program('bash', ['-lc', full_command])
+            else:
+                exec_id = uuid.uuid4().hex
+                tab.exec_id = exec_id
+                tab.container_name = f'mpcmd-{exec_id[:10]}'
+                self._claim_xhost(tab, key, log_key=tab.key)
+                service = self._configured_command_service(config)
+                wrapped = self._wrap_line_buffered(full_command)
+                args = [
+                    'compose', 'run', '--rm', '--name', tab.container_name,
+                    '--label', f'mobipick.exec={exec_id}', '--label', f'mobipick.tab={key}',
+                    *self._compose_env_args(container_name=tab.container_name),
+                    service, 'bash', '-lc', wrapped
+                ]
+                tab.start_program('docker', args)
+                self._schedule_host_to_container_copy(tab)
+            self._focus_tab(key)
+            self._update_stop_custom_enabled()
+            self._set_config_visual(config, 'green', f'Stop {label}', True)
+
+        self._set_config_visual(config, 'yellow', f'Starting {label}...', False)
+        if config.get('requires_roscore', True):
+            self._ensure_roscore_ready(_run_command)
+        else:
+            _run_command()
 
     # ---------- Log tab helpers ----------
 
@@ -346,9 +5040,21 @@ class MainWindow(QMainWindow):
             return args_or_str
         return ' '.join(shlex.quote(s) for s in args_or_str)
 
-    def _compose_env_args(self, overrides: Optional[dict[str, str]] = None) -> list[str]:
+    def _compose_env_args(
+        self,
+        overrides: Optional[dict[str, str]] = None,
+        *,
+        container_name: str | None = None,
+    ) -> list[str]:
         env_args: list[str] = []
         compose_env = dict(CONFIG['process']['compose_run_env'])
+        workspace_env = self._workspace_runtime_env()
+        effective_workspace_env = dict(workspace_env)
+        if overrides:
+            for key, value in overrides.items():
+                effective_workspace_env[str(key)] = str(value)
+        compose_env.update(workspace_env)
+        compose_env.update(self._image_runtime_env(effective_workspace_env))
         if self._selected_image:
             compose_env['MOBIPICK_IMAGE'] = self._selected_image
         world = self._current_world()
@@ -361,10 +5067,67 @@ class MainWindow(QMainWindow):
             for key, value in overrides.items():
                 compose_env[str(key)] = str(value)
         for key, value in compose_env.items():
+            if key in {
+                'MOBIPICK_WORKSPACE_COMPAT_ROOTS',
+                'MOBIPICK_WORKSPACE_MOUNT_SOURCE',
+            }:
+                continue
             env_args.extend(['--env', f'{key}={value}'])
         return env_args
 
+    @staticmethod
+    def _normalize_ros_master_uri(value) -> str:
+        raw = str(value or '').strip()
+        if not raw:
+            return ''
+        if '://' not in raw:
+            raw = f'http://{raw}'
+        try:
+            parsed = urlsplit(raw)
+            port = parsed.port or 11311
+        except ValueError:
+            return ''
+        if (
+            parsed.scheme.lower() != 'http'
+            or not parsed.hostname
+            or parsed.username
+            or parsed.password
+            or parsed.query
+            or parsed.fragment
+            or parsed.path not in {'', '/'}
+        ):
+            return ''
+        hostname = parsed.hostname
+        if ':' in hostname:
+            hostname = f'[{hostname}]'
+        return f'http://{hostname}:{port}'
+
+    def _remote_master_enabled(self) -> bool:
+        return bool(
+            getattr(self, '_remote_master_enabled_value', False)
+        )
+
+    def _ros_tool_service(self) -> str:
+        if self._remote_master_enabled():
+            return self._remote_ros_service
+        return 'mobipick_cmd'
+
+    def _configured_command_service(self, config: dict) -> str:
+        service = str(config.get('service') or '').strip()
+        allowed = {'mobipick', 'mobipick_cmd', self._remote_ros_service}
+        if service in allowed:
+            return service
+        if service:
+            label = self._config_label(config)
+            self._log_info(
+                f'unknown compose service "{service}" for {label}; '
+                f'using {self._ros_tool_service()}'
+            )
+        return self._ros_tool_service()
+
     def _current_master_uri(self) -> str:
+        if self._remote_master_enabled():
+            return self._remote_master_uri_value
         if getattr(self, '_roscore_stopping', False):
             return 'http://mobipick:11311'
         if getattr(self, '_roscore_running_cached', False):
@@ -374,9 +5137,101 @@ class MainWindow(QMainWindow):
             return f'http://{self._roscore_container_name}:11311'
         return 'http://mobipick:11311'
 
+    def _set_remote_master_checkbox(self, checked: bool) -> None:
+        self.remote_master_checkbox.blockSignals(True)
+        self.remote_master_checkbox.setChecked(checked)
+        self.remote_master_checkbox.blockSignals(False)
+
+    def _on_remote_master_toggled(self, checked: bool) -> None:
+        checked = bool(checked)
+        if checked == self._remote_master_enabled_value:
+            self.remote_master_input.setEnabled(checked)
+            return
+        if self._workspace_processes_running():
+            QMessageBox.warning(
+                self,
+                'ROS Master',
+                'Stop running containers before changing the ROS master.',
+            )
+            self._set_remote_master_checkbox(
+                self._remote_master_enabled_value
+            )
+            return
+        if checked:
+            normalized = self._normalize_ros_master_uri(
+                self.remote_master_input.text()
+            )
+            if not normalized:
+                QMessageBox.warning(
+                    self,
+                    'ROS Master',
+                    'Enter a valid ROS master URI such as '
+                    'http://mobipick-os-sensor:11311.',
+                )
+                self._set_remote_master_checkbox(False)
+                return
+            self._remote_master_uri_value = normalized
+            self.remote_master_input.setText(normalized)
+        self._remote_master_enabled_value = checked
+        self.remote_master_input.setEnabled(checked)
+        self._apply_env_to_all_tabs()
+        self._update_buttons()
+        if checked:
+            self._log_info(
+                'using remote ROS master '
+                f'{self._remote_master_uri_value}'
+            )
+        else:
+            self._log_info('using local ROS master')
+
+    def _on_remote_master_uri_edited(self) -> None:
+        normalized = self._normalize_ros_master_uri(
+            self.remote_master_input.text()
+        )
+        if not normalized:
+            QMessageBox.warning(
+                self,
+                'ROS Master',
+                'Enter a valid ROS master URI such as '
+                'http://mobipick-os-sensor:11311.',
+            )
+            self.remote_master_input.setText(
+                self._remote_master_uri_value
+            )
+            return
+        if (
+            normalized != self._remote_master_uri_value
+            and self._workspace_processes_running()
+        ):
+            QMessageBox.warning(
+                self,
+                'ROS Master',
+                'Stop running containers before changing the ROS master.',
+            )
+            self.remote_master_input.setText(
+                self._remote_master_uri_value
+            )
+            return
+        self._remote_master_uri_value = normalized
+        self.remote_master_input.setText(normalized)
+        self._apply_env_to_all_tabs()
+        if self._remote_master_enabled():
+            self._log_info(f'remote ROS master set to {normalized}')
+
     def _build_process_environment(self, extra: Optional[dict[str, str]] = None) -> QProcessEnvironment:
         env = QProcessEnvironment.systemEnvironment()
+        workspace_env = self._workspace_runtime_env()
+        effective_workspace_env = dict(workspace_env)
+        if extra:
+            for key, value in extra.items():
+                effective_workspace_env[str(key)] = str(value)
         for key, value in CONFIG['process']['qprocess_env'].items():
+            env.insert(str(key), str(value))
+        for key, value in workspace_env.items():
+            env.insert(str(key), str(value))
+        for key, value in self._image_runtime_env(
+            effective_workspace_env
+        ).items():
             env.insert(str(key), str(value))
         if self._selected_image:
             env.insert('MOBIPICK_IMAGE', self._selected_image)
@@ -389,8 +5244,7 @@ class MainWindow(QMainWindow):
         return env
 
     def _terminal_env_overrides(self) -> dict[str, str]:
-        checkbox = getattr(self, 'terminal_root_checkbox', None)
-        if not checkbox or not checkbox.isChecked():
+        if not self._terminal_run_as_root_requested():
             return {}
         return {
             'MOBIPICK_UID': '0',
@@ -398,7 +5252,12 @@ class MainWindow(QMainWindow):
             'MOBIPICK_HOST_USER': 'root',
             'MOBIPICK_HOST_GROUP': 'root',
             'MOBIPICK_HOST_HOME': '/root',
+            'MOBIPICK_CONTAINER_USER': 'root',
         }
+
+    def _terminal_run_as_root_requested(self) -> bool:
+        checkbox = getattr(self, 'terminal_root_checkbox', None)
+        return bool(checkbox and checkbox.isChecked())
 
     def _prepare_run_env(self, run_kwargs: dict) -> dict:
         env = run_kwargs.get('env')
@@ -407,6 +5266,11 @@ class MainWindow(QMainWindow):
         else:
             env = {str(k): str(v) for k, v in env.items()}
         for key, value in CONFIG['process']['qprocess_env'].items():
+            env[str(key)] = str(value)
+        workspace_env = self._workspace_runtime_env()
+        for key, value in workspace_env.items():
+            env[str(key)] = str(value)
+        for key, value in self._image_runtime_env(workspace_env).items():
             env[str(key)] = str(value)
         if self._selected_image:
             env['MOBIPICK_IMAGE'] = self._selected_image
@@ -477,26 +5341,302 @@ class MainWindow(QMainWindow):
             return []
         if not config:
             return []
+        workspace = self._workspace_registry.active_workspace()
+        key = workspace.name if workspace else 'default'
+        section = config.get(key)
+        if section is None and key != 'default':
+            section = config.get('default')
+        if not isinstance(section, dict):
+            return []
+        values = section.get(direction)
+        if not isinstance(values, list):
+            return []
+        return [value for value in values if isinstance(value, dict)]
 
-        image_ref = (self._selected_image or '').strip()
-        repo, tag = self._split_image_ref(image_ref)
+    def _docker_cp_workspace_names(self) -> list[str]:
+        return [workspace.name for workspace in self._workspace_registry.workspaces]
 
-        candidates: list[str] = []
-        for candidate in ('default', '*', 'all'):
-            if candidate in config and candidate not in candidates:
-                candidates.append(candidate)
-        if '' in config and '' not in candidates and not image_ref:
-            candidates.append('')
-        for candidate in (image_ref, repo, tag):
-            if candidate and candidate in config and candidate not in candidates:
-                candidates.append(candidate)
+    def _docker_cp_host_start_path(self, workspace_name: str) -> Path:
+        workspace_key = str(workspace_name or '').strip()
+        raw_master = str(self._workspace_registry.master_folder or '').strip()
+        master = Path(raw_master).expanduser() if raw_master else None
+        if workspace_key and master is not None:
+            candidate = master / workspace_key
+            if candidate.is_dir():
+                return candidate
+        workspace = self._workspace_registry.get(workspace_key)
+        if workspace and workspace.directory.is_dir():
+            return workspace.directory
+        if master is not None and master.is_dir():
+            return master
+        return Path.home()
 
-        entries: list[dict[str, str]] = []
-        for key in candidates:
-            section = config.get(key) or {}
-            values = section.get(direction)
-            if isinstance(values, list):
-                entries.extend(v for v in values if isinstance(v, dict))
+    def _docker_ps_container_records(self) -> list[dict[str, str]]:
+        try:
+            cp = subprocess.run(
+                [
+                    'docker',
+                    'ps',
+                    '--format',
+                    '{{.ID}}\t{{.Image}}\t{{.Names}}',
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                check=False,
+                text=True,
+                timeout=8,
+            )
+        except Exception as exc:
+            self._console_log(1, f'Failed to query running containers: {exc}')
+            return []
+        records: list[dict[str, str]] = []
+        for line in (cp.stdout or '').splitlines():
+            parts = line.split('\t', 2)
+            if len(parts) != 3:
+                continue
+            container_id, image, name = (part.strip() for part in parts)
+            if self._image_ref_blacklisted(image):
+                continue
+            if container_id:
+                records.append(
+                    {
+                        'id': container_id,
+                        'image': image,
+                        'name': name,
+                    }
+                )
+        return records
+
+    def _docker_cp_workspace_match_images(self, workspace_name: str) -> list[str]:
+        match_image = ''
+        try:
+            match_image = self._workspace_match_image(workspace_name)
+        except Exception:
+            match_image = ''
+        registry_image = ''
+        image_for = getattr(self._workspace_registry, 'image_for', None)
+        if callable(image_for):
+            registry_image = image_for(workspace_name, '')
+        selected_image = ''
+        try:
+            selected_image = getattr(self, '_selected_image', '')
+        except Exception:
+            selected_image = ''
+        candidates = [
+            match_image,
+            registry_image,
+            selected_image
+            if self._image_compatible_with_workspace(
+                selected_image,
+                workspace_name,
+            ) is True
+            else '',
+        ]
+        return list(
+            dict.fromkeys(
+                image.strip()
+                for image in candidates
+                if (
+                    isinstance(image, str)
+                    and image.strip()
+                    and not self._image_ref_blacklisted(image)
+                )
+            )
+        )
+
+    def _docker_cp_setup_container_options(
+        self,
+        workspace_name: str | None = None,
+    ) -> list[tuple[str, str]]:
+        options: list[tuple[str, str]] = []
+        seen: set[str] = set()
+
+        def add_record(label: str, container_ref: str) -> None:
+            if not container_ref or container_ref in seen:
+                return
+            options.append((label, container_ref))
+            seen.add(container_ref)
+
+        def add_tab(label: str, tab: ProcessTab | None) -> None:
+            if not isinstance(tab, ProcessTab):
+                return
+            if not getattr(tab, 'container_name', None):
+                return
+            container_ref = self._container_reference_for_tab(tab)
+            if not container_ref:
+                return
+            add_record(label, container_ref)
+
+        workspace_key = (
+            self._workspace_registry.active
+            if workspace_name is None
+            else str(workspace_name or '').strip()
+        )
+        if workspace_key == 'default':
+            workspace_key = ''
+        for image_ref in self._docker_cp_workspace_match_images(workspace_key):
+            add_record(
+                f'Workspace match image ({image_ref})',
+                f'{DockerCpConfigDialog.IMAGE_SETUP_PREFIX}{image_ref}',
+            )
+
+        records = self._docker_ps_container_records()
+        for record in records:
+            image = record.get('image', '')
+            if self._image_compatible_with_workspace(image, workspace_key) is True:
+                label = (
+                    'Workspace match container '
+                    f'({record.get("name") or record["id"]}, {image})'
+                )
+                add_record(label, record['id'])
+
+        current = self.tasks.get(self._current_tab_key() or '')
+        if current:
+            add_tab('Workspace match container (current tab)', current)
+        for key in ('sim', 'roscore', 'rviz', 'tables', 'rqt'):
+            add_tab(f'Workspace match container ({key})', self.tasks.get(key))
+        for key, tab in self.tasks.items():
+            add_tab(f'{key}: {getattr(tab, "container_name", "")}', tab)
+        return options
+
+    def _docker_cp_container_path_from_setup(
+        self,
+        container_ref: str,
+        default_path: str,
+    ) -> str:
+        default_path = str(default_path or '').strip()
+        if not container_ref:
+            return default_path
+        start_path = (
+            '/'
+            if container_ref.startswith(DockerCpConfigDialog.IMAGE_SETUP_PREFIX)
+            else default_path or '/'
+        )
+        dialog = DockerCpContainerPathDialog(
+            container_ref=container_ref,
+            start_path=start_path,
+            list_provider=self._docker_cp_list_container_paths,
+        )
+        if dialog.exec_() == QDialog.Accepted and dialog.selected_path():
+            return dialog.selected_path()
+        return default_path
+
+    def _docker_cp_container_command(
+        self,
+        container_ref: str,
+        script: str,
+    ) -> list[str]:
+        image_ref = ''
+        if container_ref.startswith(DockerCpConfigDialog.IMAGE_SETUP_PREFIX):
+            image_ref = container_ref[
+                len(DockerCpConfigDialog.IMAGE_SETUP_PREFIX):
+            ]
+        if image_ref:
+            command = [
+                'docker',
+                'run',
+                '--rm',
+                '--user',
+                'root',
+                '--entrypoint',
+                'bash',
+            ]
+            workspace_env = self._docker_cp_workspace_browser_env()
+            source = workspace_env.get('MOBIPICK_WORKSPACE_MOUNT_SOURCE', '')
+            target = workspace_env.get('MOBIPICK_WORKSPACE_MOUNT_TARGET', '')
+            if source and target:
+                command.extend(['--volume', f'{source}:{target}:rw'])
+            for key, value in workspace_env.items():
+                if key in {
+                    'MOBIPICK_WORKSPACE_COMPAT_ROOTS',
+                    'MOBIPICK_WORKSPACE_MOUNT_SOURCE',
+                }:
+                    continue
+                command.extend(['--env', f'{key}={value}'])
+            command.extend([image_ref, '-lc', script])
+            return command
+        return ['docker', 'exec', container_ref, 'bash', '-lc', script]
+
+    def _docker_cp_workspace_browser_env(self) -> dict[str, str]:
+        try:
+            return self._workspace_runtime_env(force_host_workspace=True)
+        except Exception as exc:
+            self._console_log(
+                1,
+                f'Failed to prepare workspace mount for docker cp browser: {exc}',
+            )
+            return {}
+
+    def _docker_cp_list_container_paths(
+        self,
+        container_ref: str,
+        path: str,
+    ) -> list[dict[str, object]]:
+        target = str(path or '/').strip() or '/'
+        script = (
+            'set -e; '
+            f'target={shlex.quote(target)}; '
+            'if [ -d "$target" ]; then dir="$target"; '
+            'else dir=$(dirname -- "$target"); fi; '
+            'printf "__DIR__\\t%s\\n" "$dir"; '
+            'if [ -d "$dir" ]; then '
+            'for item in "$dir"/* "$dir"/.[!.]* "$dir"/..?*; do '
+            '[ -e "$item" ] || continue; '
+            'if [ -d "$item" ]; then kind=d; else kind=f; fi; '
+            'name=${item##*/}; '
+            'printf "%s\\t%s\\t%s\\n" "$kind" "$name" "$item"; '
+            'done | sort; '
+            'fi'
+        )
+        entries: list[dict[str, object]] = []
+        try:
+            cp = subprocess.run(
+                self._docker_cp_container_command(container_ref, script),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+                text=True,
+                timeout=8,
+            )
+        except Exception as exc:
+            self._console_log(
+                1,
+                f'Failed to inspect container paths in {container_ref}: {exc}',
+            )
+            return [{'error': f'Failed to inspect container paths: {exc}'}]
+        returncode = getattr(cp, 'returncode', 0)
+        if returncode != 0:
+            details = (cp.stderr or cp.stdout or '').strip()
+            if not details:
+                details = f'docker command exited with status {returncode}'
+            message = f'Unable to read container path {target}: {details}'
+            self._console_log(1, message)
+            return [{'error': message}]
+        for line in (cp.stdout or '').splitlines():
+            if not line.strip():
+                continue
+            if line.startswith('__DIR__\t'):
+                directory = line.split('\t', 1)[1].strip()
+                if directory and directory != '/':
+                    entries.append(
+                        {
+                            'name': '..',
+                            'path': str(Path(directory).parent),
+                            'is_dir': True,
+                        }
+                    )
+                continue
+            parts = line.split('\t', 2)
+            if len(parts) != 3:
+                continue
+            kind, name, item_path = parts
+            entries.append(
+                {
+                    'name': name,
+                    'path': item_path,
+                    'is_dir': kind == 'd',
+                }
+            )
         return entries
 
     @staticmethod
@@ -539,9 +5679,29 @@ class MainWindow(QMainWindow):
             if not commands:
                 return
             self._append_gui_html(tab.key, '<i>Copying configured host files into container...</i>')
+            self._log_host_to_container_commands(tab.key, commands)
             self._run_command_sequence(commands, log_key=tab.key)
 
         QTimer.singleShot(delay_ms, _attempt)
+
+    def _log_host_to_container_commands(
+        self,
+        tab_key: str,
+        commands: list[list[str]],
+    ) -> None:
+        for command in commands:
+            if len(command) < 4:
+                continue
+            host_path = command[2]
+            container_target = command[3]
+            self._append_gui_html(
+                tab_key,
+                (
+                    '<i>Copying configured path from host at '
+                    f'{html.escape(host_path)} -&gt; container at '
+                    f'{html.escape(container_target)}</i>'
+                ),
+            )
 
     def _build_host_to_container_commands(
         self,
@@ -615,10 +5775,24 @@ class MainWindow(QMainWindow):
     def _reload_images(self):
         self._load_available_images(show_feedback=True)
 
-    def _discover_filtered_image_records(self) -> tuple[list[dict[str, str]], str | None]:
+    def _discover_filtered_image_records(
+        self,
+        blacklist_patterns: list[str] | None = None,
+        discovery_filters: list[str] | None = None,
+    ) -> tuple[list[dict[str, str]], str | None]:
         images_cfg = self._images_cfg
-        filters = [f.lower() for f in images_cfg.get('discovery_filters', []) if f]
+        raw_filters = (
+            self._image_discovery_filters()
+            if discovery_filters is None
+            else discovery_filters
+        )
+        filters = [f.lower() for f in raw_filters if f]
         include_none = bool(images_cfg.get('include_none_tag', False))
+        active_blacklist = (
+            self._image_blacklist_patterns()
+            if blacklist_patterns is None
+            else blacklist_patterns
+        )
         records: list[dict[str, str]] = []
         error_message: str | None = None
 
@@ -653,6 +5827,8 @@ class MainWindow(QMainWindow):
             ref = f'{repo}:{tag}' if tag else repo
             if not ref:
                 continue
+            if self._image_ref_blacklisted(ref, active_blacklist):
+                continue
             if filters and not any(f in ref.lower() for f in filters):
                 continue
             normalized_entry = {key: ('' if value is None else str(value)) for key, value in entry.items()}
@@ -685,6 +5861,13 @@ class MainWindow(QMainWindow):
             self.image_combo.setEnabled(False)
             self.image_combo.blockSignals(False)
             self.image_combo.setToolTip('No image selected')
+            if self._can_offer_setup_wizard():
+                self._console_log(
+                    1,
+                    'no matching Docker images found; opening setup wizard'
+                )
+                QTimer.singleShot(0, self._open_setup_wizard)
+                return
             self._inform_no_images_and_exit()
             return
 
@@ -695,9 +5878,16 @@ class MainWindow(QMainWindow):
         else:
             ordered_choices = list(choices)
 
-        prev_selection = self._selected_image
-        if prev_selection in ordered_choices:
-            self._selected_image = prev_selection
+        workspace_image = (
+            self._workspace_match_image(
+                self._workspace_registry.active,
+                ordered_choices,
+            )
+            or self._workspace_image(self._workspace_registry.active)
+        )
+        preferred_image = workspace_image or self._selected_image
+        if preferred_image in ordered_choices:
+            self._selected_image = preferred_image
         else:
             self._selected_image = ordered_choices[0]
 
@@ -705,13 +5895,18 @@ class MainWindow(QMainWindow):
 
         self.image_combo.blockSignals(True)
         self.image_combo.clear()
-        for choice in ordered_choices:
-            self.image_combo.addItem(choice)
+        for index, choice in enumerate(ordered_choices):
+            self.image_combo.addItem(self._image_choice_label(choice), choice)
+            self._decorate_image_combo_item(index, choice)
         index = ordered_choices.index(self._selected_image)
         self.image_combo.setCurrentIndex(index)
         self.image_combo.setEnabled(True)
         self.image_combo.blockSignals(False)
-        self.image_combo.setToolTip(self._selected_image or 'No image selected')
+        self.image_combo.setToolTip(
+            self._image_choice_tooltip(self._selected_image)
+            if self._selected_image
+            else 'No image selected'
+        )
 
         if show_feedback and error_message:
             QMessageBox.warning(self, 'Images', error_message)
@@ -719,10 +5914,22 @@ class MainWindow(QMainWindow):
         if show_feedback:
             self._console_log(2, f'Available images: {", ".join(ordered_choices)}')
 
-        if default_image and not default_available:
-            self._show_missing_default_image_dialog(default_image)
+        if (
+            default_image
+            and not default_available
+        ):
+            if self._should_offer_setup_for_missing_default_image():
+                self._console_log(
+                    1,
+                    'configured default Docker image is missing; '
+                    'opening setup wizard',
+                )
+                QTimer.singleShot(0, self._open_setup_wizard)
+            elif os.environ.get('QT_QPA_PLATFORM', '').strip().lower() != 'offscreen':
+                self._show_missing_default_image_dialog(default_image)
 
         self._update_related_patterns()
+        self._populate_workspace_combo()
         self._apply_env_to_all_tabs()
 
     def _apply_env_to_all_tabs(self):
@@ -732,11 +5939,12 @@ class MainWindow(QMainWindow):
     def _inform_no_images_and_exit(self):
         filters = self._images_cfg.get('discovery_filters', [])
         filters_desc = ', '.join(str(item) for item in filters) if filters else '(no filters)'
-        config_path = str(CONFIG_FILE)
+        config_path = str(USER_CONFIG_FILE)
         message = (
             'No docker images matched the configured discovery filters.\n\n'
             f'Filters: {filters_desc}\n'
-            f'Update the "images.discovery_filters" setting in {config_path} '
+            f'Create or update the "images.discovery_filters" setting in '
+            f'{config_path} '
             'to change which images are considered.\n\n'
             'The application will now exit.'
         )
@@ -787,19 +5995,34 @@ class MainWindow(QMainWindow):
 
         dialog.exec_()
 
+    def _select_image(
+        self,
+        image_ref: str,
+        *,
+        log_selection: bool = True,
+    ) -> bool:
+        if image_ref not in self._image_choices:
+            return False
+        changed = image_ref != self._selected_image
+        self._selected_image = image_ref
+        self.image_combo.blockSignals(True)
+        self.image_combo.setCurrentIndex(self._image_choices.index(image_ref))
+        self.image_combo.blockSignals(False)
+        self.image_combo.setToolTip(self._image_choice_tooltip(image_ref))
+        if changed and log_selection:
+            self._console_log(2, f'Selected image: {image_ref}')
+        self._update_related_patterns()
+        self._apply_env_to_all_tabs()
+        self._populate_workspace_combo()
+        return True
+
     def _on_image_changed(self, index: int):
         if not self._image_choices:
             return
         if index < 0 or index >= len(self._image_choices):
             return
         new_image = self._image_choices[index]
-        if new_image == self._selected_image:
-            return
-        self._selected_image = new_image
-        self._console_log(2, f'Selected image: {new_image}')
-        self.image_combo.setToolTip(new_image)
-        self._update_related_patterns()
-        self._apply_env_to_all_tabs()
+        self._select_image(new_image)
 
     def _on_world_changed(self, index: int):
         if index < 0:
@@ -885,22 +6108,135 @@ class MainWindow(QMainWindow):
         self._append_log_html(f'<span style="color:#50fa7b">{html.escape(line)}</span>')
         self._console_log(2, line)
 
-    def _log_button_click(self, button: QPushButton, fallback: str | None = None):
-        label = button.text().strip()
+    def _log_button_click(self, button: QPushButton | None, fallback: str | None = None):
+        label = button.text().strip() if button else ''
         if not label:
             label = fallback or 'button'
         self._log_event(f'user clicked {label}')
 
     def _on_sim_toggle_clicked(self):
-        self._log_button_click(self.sim_toggle_button, 'Sim Toggle')
-        if not self._guard_toggle_action('sim', self.sim_toggle_button):
+        button = self._get_button_widget('sim')
+        self._log_button_click(button, 'Sim Toggle')
+        if not self._guard_toggle_action('sim', button):
             return
         self.toggle_sim()
 
     def _on_refresh_clicked(self):
-        self._log_button_click(self.refresh_sim_button)
+        self._log_button_click(None, 'Update Status')
         self._log_info('refreshing sim status view')
         self.update_sim_status_from_poll(force=True)
+
+    def _on_window_layout_clicked(self):
+        self._log_button_click(self.window_layout_button, 'Window Layout')
+        dialog = self._ensure_window_layout_dialog()
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
+    def _compute_window_layout_delay_ms(self) -> int:
+        raw = self._window_layout_cfg.get('apply_delay_ms', 'auto')
+        if isinstance(raw, str):
+            value = raw.strip().lower()
+            if value in {'', 'auto'}:
+                return self._window_layout_delay_from_timeline()
+            try:
+                return max(0, int(raw))
+            except (TypeError, ValueError):
+                return 0
+        try:
+            return max(0, int(raw))
+        except (TypeError, ValueError):
+            return 0
+
+    def _window_layout_delay_from_timeline(self) -> int:
+        try:
+            timeline = self._launch_plan.get('timeline', []) if isinstance(self._launch_plan, dict) else []
+            max_at = 0.0
+            for entry in timeline:
+                try:
+                    max_at = max(max_at, float(entry.get('at_seconds', 0) or 0))
+                except Exception:
+                    continue
+            if max_at <= 0:
+                return 0
+            return int(max_at * 1000) + 4000
+        except Exception:
+            return 0
+
+    def _workspace_window_layout_path(self) -> Path:
+        workspace_name = str(self._workspace_registry.active or '').strip()
+        workspace_slug = self._normalize_workspace_name(
+            workspace_name or 'docker_image_default'
+        )
+        template = str(self._window_layout_path_template or WINDOW_LAYOUT_FILE)
+        if '{workspace' in template:
+            formatted = template.format(
+                workspace=workspace_slug,
+                workspace_slug=workspace_slug,
+            )
+            return self._resolve_window_layout_path(formatted)
+
+        base_path = self._resolve_window_layout_path(template)
+        if base_path.suffix:
+            return base_path.with_suffix('') / f'{workspace_slug}{base_path.suffix}'
+        return base_path / f'{workspace_slug}.yaml'
+
+    def _resolve_window_layout_path(self, value: str) -> Path:
+        layout_path = Path(value).expanduser()
+        if not layout_path.is_absolute():
+            layout_path = PROJECT_ROOT / layout_path
+        return layout_path
+
+    def _reload_window_layout_for_workspace(self) -> None:
+        self._window_layout_path = self._workspace_window_layout_path()
+        self._window_layout_manager.state_file = self._window_layout_path
+        self._window_layout_manager.load_layout()
+        if self._window_layout_dialog is not None:
+            self._window_layout_dialog.deleteLater()
+            self._window_layout_dialog = None
+
+    def _ensure_window_layout_dialog(self) -> QDialog:
+        if self._window_layout_dialog is not None:
+            return self._window_layout_dialog
+        dialog = QDialog(None)  # top-level so minimizing the main GUI leaves it visible
+        dialog.setWindowTitle('Window Layout Helper')
+        dialog.setWindowFlag(Qt.WindowStaysOnTopHint, True)
+        dialog.setWindowModality(Qt.NonModal)
+        layout = QVBoxLayout(dialog)
+        label = QLabel('Capture and reuse window positions with wmctrl.')
+        label.setWordWrap(True)
+        layout.addWidget(label)
+        path_label = QLabel(str(self._window_layout_path))
+        path_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        layout.addWidget(path_label)
+        save_button = QPushButton('Save Window State')
+        save_button.clicked.connect(self._on_save_window_state_clicked)
+        layout.addWidget(save_button)
+        dialog.setLayout(layout)
+        dialog.setSizeGripEnabled(False)
+        dialog.setMinimumWidth(280)
+        dialog.setMaximumWidth(360)
+        self._window_layout_dialog = dialog
+        return dialog
+
+    def _on_save_window_state_clicked(self):
+        exclude_titles = {self.windowTitle()}
+        if self._window_layout_dialog:
+            exclude_titles.add(self._window_layout_dialog.windowTitle())
+        success = self._window_layout_manager.capture_and_save(exclude_titles=exclude_titles)
+        if success:
+            self._append_gui_html(
+                'log',
+                f'<i>Window layout saved to {html.escape(str(self._window_layout_path))}</i>',
+            )
+            if self._window_layout_dialog:
+                self._window_layout_dialog.close()
+            return
+        QMessageBox.warning(
+            self,
+            'Window Layout',
+            'Unable to capture window state. Ensure wmctrl/xprop are installed and windows are visible.',
+        )
 
     def _on_stop_custom_clicked(self):
         self._log_button_click(self.stop_custom_button, 'Stop Command')
@@ -908,20 +6244,23 @@ class MainWindow(QMainWindow):
         self.stop_custom_process()
 
     def _on_tables_toggle_clicked(self):
-        self._log_button_click(self.tables_button, 'Tables Demo')
-        if not self._guard_toggle_action('tables', self.tables_button):
+        button = self._get_button_widget('tables')
+        self._log_button_click(button, 'Tables Demo')
+        if not self._guard_toggle_action('tables', button):
             return
         self.toggle_tables_demo()
 
     def _on_rviz_toggle_clicked(self):
-        self._log_button_click(self.rviz_button, 'RViz')
-        if not self._guard_toggle_action('rviz', self.rviz_button):
+        button = self._get_button_widget('rviz')
+        self._log_button_click(button, 'RViz')
+        if not self._guard_toggle_action('rviz', button):
             return
         self.toggle_rviz()
 
     def _on_rqt_toggle_clicked(self):
-        self._log_button_click(self.rqt_button, 'RQt Tables Demo')
-        if not self._guard_toggle_action('rqt', self.rqt_button):
+        button = self._get_button_widget('rqt')
+        self._log_button_click(button, 'RQt Tables Demo')
+        if not self._guard_toggle_action('rqt', button):
             return
         self.toggle_rqt_tables_demo()
 
@@ -936,6 +6275,12 @@ class MainWindow(QMainWindow):
         if not self._guard_toggle_action('roscore', self.roscore_button):
             return
         self.toggle_roscore()
+
+    def _on_auto_launch_toggle_clicked(self):
+        self._log_button_click(self.auto_launch_button, self._auto_launch_label())
+        if not self._guard_toggle_action('auto_launch', self.auto_launch_button):
+            return
+        self._toggle_auto_launch_stack()
 
     def _on_refresh_scripts_clicked(self):
         self._log_button_click(self.refresh_scripts_button, 'Refresh Scripts')
@@ -975,6 +6320,8 @@ class MainWindow(QMainWindow):
             self._stop_script_tab()
             return
 
+        if not self._confirm_workspace_mismatch_warning(f'Script "{script}"'):
+            return
         self.set_script_visual('yellow', 'Starting Script...', False)
 
         def _run_script():
@@ -991,8 +6338,11 @@ class MainWindow(QMainWindow):
             args = [
                 'compose', 'run', '--rm', '--name', tab.container_name,
                 '--label', f'mobipick.exec={exec_id}', '--label', f'mobipick.tab={key_target}',
-                *self._compose_env_args(),
-                'mobipick_cmd', 'bash', '-lc', self._wrap_line_buffered(inner)
+                *self._compose_env_args(container_name=tab.container_name),
+                self._ros_tool_service(),
+                'bash',
+                '-lc',
+                self._wrap_line_buffered(inner),
             ]
             tab.start_program('docker', args)
             self._schedule_host_to_container_copy(tab)
@@ -1038,6 +6388,1119 @@ class MainWindow(QMainWindow):
             tab.is_running() for key, tab in self.tasks.items() if key.startswith('custom')
         )
         self.stop_custom_button.setEnabled(running_custom)
+
+    # ---------- Recording ----------
+
+    def _resolve_recording_output_root(self) -> Path:
+        raw = str(self._recording_cfg.get('output_dir') or '')
+        path = Path(raw).expanduser()
+        if not path.is_absolute():
+            path = PROJECT_ROOT / path
+        return path
+
+    def _update_recording_location_tooltip(self) -> None:
+        text = (
+            'Auto Launch recordings are saved under:\n'
+            f'{self._recording_output_root}\n\n'
+            'A timestamped folder is created for each recording with the '
+            'screen video and saved logs. Recording starts after Auto Launch '
+            'finishes its timeline and window layout delay. It stops when '
+            'Record Auto Launch is unchecked, Stop Recording '
+            'is pressed in the optional pop-out window, Auto Launch is stopped, '
+            'Roscore stops, or the GUI exits.'
+        )
+        if getattr(self, 'record_checkbox', None):
+            self.record_checkbox.setToolTip(text)
+        if getattr(self, 'recording_options_button', None):
+            self.recording_options_button.setToolTip(
+                text + '\n\nClick to choose a different recording folder.'
+            )
+        if getattr(self, 'recording_indicator', None):
+            self.recording_indicator.setToolTip(
+                'Red flashing means Auto Launch recording is actively running. '
+                'REC armed means recording is waiting for you to press Auto Launch.'
+            )
+
+    def _on_recording_popup_toggled(self, checked: bool) -> None:
+        self._recording_show_control_window = checked
+        self._recording_cfg['show_control_window'] = checked
+        try:
+            save_user_config_update({
+                'recording': {'show_control_window': checked},
+            })
+        except Exception as exc:
+            self._append_gui_html(
+                'log',
+                '<i>Failed to save recording control window preference: '
+                f'{html.escape(str(exc))}</i>',
+            )
+        if checked and self._recording_session:
+            video_path = self._recording_session.get('video_path')
+            if video_path:
+                self._show_recording_window(Path(video_path))
+        elif not checked and self._recording_window:
+            self._recording_window.hide()
+
+    def _open_recording_options(self) -> None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle('Recording Options')
+        layout = QVBoxLayout(dialog)
+
+        summary = QLabel(
+            'Recording captures the Auto Launch run: screen video plus saved '
+            'GUI logs. It starts after you press Auto Launch and the launch '
+            'timeline/window-layout delay finishes.'
+        )
+        summary.setWordWrap(True)
+        layout.addWidget(summary)
+
+        form = QFormLayout()
+        path_row = QHBoxLayout()
+        path_edit = QLineEdit(str(self._recording_output_root))
+        path_row.addWidget(path_edit)
+        browse = QPushButton('Browse')
+        path_row.addWidget(browse)
+        form.addRow('Save under:', path_row)
+
+        remember = QCheckBox('Remember this folder')
+        remember.setChecked(self._recording_remember_output_dir)
+        form.addRow('', remember)
+
+        resolution = QComboBox()
+        resolution.setInsertPolicy(QComboBox.NoInsert)
+        resolution.addItems(self._recording_resolutions)
+        current = self._current_recording_resolution()
+        index = resolution.findText(current)
+        if index >= 0:
+            resolution.setCurrentIndex(index)
+        form.addRow('Screen resolution:', resolution)
+
+        stop_window = QCheckBox('Show always-on-top Stop Recording window')
+        stop_window.setChecked(self._recording_show_control_window)
+        form.addRow('', stop_window)
+        layout.addLayout(form)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.Save | QDialogButtonBox.Cancel
+        )
+        layout.addWidget(buttons)
+
+        def _browse() -> None:
+            selected = QFileDialog.getExistingDirectory(
+                dialog,
+                'Choose recording folder',
+                path_edit.text().strip() or str(self._recording_output_root),
+            )
+            if selected:
+                path_edit.setText(selected)
+
+        def _save() -> None:
+            raw = path_edit.text().strip()
+            if not raw:
+                QMessageBox.warning(
+                    dialog,
+                    'Recording Options',
+                    'Choose a folder for recordings.',
+                )
+                return
+            output_dir = Path(raw).expanduser()
+            if not output_dir.is_absolute():
+                output_dir = PROJECT_ROOT / output_dir
+            selected_resolution = self._normalize_resolution_string(
+                resolution.currentText()
+            ) or self._select_default_resolution()
+            self._recording_output_root = output_dir
+            self._recording_counter = self._load_recording_counter()
+            self._recording_remember_output_dir = remember.isChecked()
+            self._recording_show_control_window = stop_window.isChecked()
+            self._recording_cfg['output_dir'] = str(output_dir)
+            self._recording_cfg['remember_output_dir'] = (
+                self._recording_remember_output_dir
+            )
+            self._recording_cfg['show_control_window'] = (
+                self._recording_show_control_window
+            )
+            self._recording_cfg['resolution'] = selected_resolution
+            combo_index = self.record_resolution_combo.findText(
+                selected_resolution
+            )
+            if combo_index >= 0:
+                self.record_resolution_combo.setCurrentIndex(combo_index)
+            try:
+                save_user_config_update({
+                    'recording': {
+                        'output_dir': str(output_dir),
+                        'remember_output_dir': (
+                            self._recording_remember_output_dir
+                        ),
+                        'show_control_window': (
+                            self._recording_show_control_window
+                        ),
+                        'resolution': selected_resolution,
+                    },
+                })
+            except Exception as exc:
+                self._append_gui_html(
+                    'log',
+                    '<i>Failed to save recording options: '
+                    f'{html.escape(str(exc))}</i>',
+                )
+            self._update_recording_location_tooltip()
+            self._log_info(f'recording options saved; output folder: {output_dir}')
+            if self._recording_window and not self._recording_show_control_window:
+                self._recording_window.hide()
+            if self._recording_show_control_window and self._recording_session:
+                video_path = self._recording_session.get('video_path')
+                if video_path:
+                    self._show_recording_window(Path(video_path))
+            dialog.accept()
+
+        browse.clicked.connect(_browse)
+        buttons.accepted.connect(_save)
+        buttons.rejected.connect(dialog.reject)
+        dialog.exec_()
+
+    def _set_recording_indicator(self, state: str) -> None:
+        if not getattr(self, 'recording_indicator', None):
+            return
+        if state != 'active':
+            self._stop_recording_indicator_flash()
+        if state == 'active':
+            self.recording_indicator.setText('● REC')
+            self.recording_indicator.setToolTip(
+                'Auto Launch recording is running. Uncheck Record Auto Launch, stop '
+                'Auto Launch, or use the stop window to end it.'
+            )
+            self._set_auto_launch_recording_hint('active')
+            self._start_recording_indicator_flash()
+        elif state == 'armed':
+            self.recording_indicator.setText('REC armed: press Auto Launch')
+            self.recording_indicator.setToolTip(
+                'Recording is armed but has not started. Press Auto Launch '
+                'to trigger the launch timeline; recording starts after that '
+                'timeline and the window-layout delay finish.'
+            )
+            self._set_auto_launch_recording_hint('armed')
+            self.recording_indicator.setStyleSheet(
+                'QLabel { color: #6c3b00; background: #fff3cd; '
+                'border: 1px solid #f0c36d; border-radius: 4px; '
+                'padding: 2px 6px; font-weight: bold; }'
+            )
+        else:
+            self.recording_indicator.setText('REC off')
+            self.recording_indicator.setToolTip(
+                'Check Record Auto Launch to arm a recording for the next Auto Launch.'
+            )
+            self._set_auto_launch_recording_hint('off')
+            self.recording_indicator.setStyleSheet(
+                'QLabel { color: #666666; background: transparent; '
+                'border: 1px solid transparent; padding: 2px 6px; }'
+            )
+
+    def _set_auto_launch_recording_hint(self, state: str) -> None:
+        if not getattr(self, 'auto_launch_button', None):
+            return
+        base = getattr(self, '_auto_launch_base_tooltip', '') or ''
+        if state == 'armed':
+            hint = (
+                'Recording is armed: click Auto Launch to trigger recording. '
+                'Capture starts after the launch timeline and window-layout delay.'
+            )
+        elif state == 'active':
+            hint = 'Recording is active: click Auto Launch to stop the launch stack and recording.'
+        else:
+            hint = ''
+        tooltip = '\n\n'.join(part for part in (base, hint) if part)
+        self.auto_launch_button.setToolTip(tooltip)
+
+    def _start_recording_indicator_flash(self) -> None:
+        if self._recording_indicator_timer is None:
+            timer = QTimer(self)
+            timer.timeout.connect(self._flash_recording_indicator)
+            self._recording_indicator_timer = timer
+        self._recording_indicator_on = True
+        self._flash_recording_indicator()
+        if not self._recording_indicator_timer.isActive():
+            self._recording_indicator_timer.start(500)
+
+    def _stop_recording_indicator_flash(self) -> None:
+        timer = self._recording_indicator_timer
+        if timer is not None and timer.isActive():
+            timer.stop()
+        self._recording_indicator_on = False
+
+    def _flash_recording_indicator(self) -> None:
+        if not getattr(self, 'recording_indicator', None):
+            return
+        if self._recording_indicator_on:
+            self.recording_indicator.setStyleSheet(
+                'QLabel { color: white; background: #d00000; '
+                'border: 1px solid #7a0000; border-radius: 4px; '
+                'padding: 2px 6px; font-weight: bold; }'
+            )
+        else:
+            self.recording_indicator.setStyleSheet(
+                'QLabel { color: #d00000; background: #ffe1e1; '
+                'border: 1px solid #d00000; border-radius: 4px; '
+                'padding: 2px 6px; font-weight: bold; }'
+            )
+        self._recording_indicator_on = not self._recording_indicator_on
+
+    def _on_record_checkbox_toggled(self, checked: bool) -> None:
+        if not checked:
+            self._cancel_recording_schedule()
+            if self._recording_is_active():
+                self._stop_screen_recording(
+                    save_logs=True,
+                    reason='Record Auto Launch unchecked; stopping recording',
+                )
+            else:
+                self._set_recording_indicator('off')
+                self._log_info('Auto Launch recording disabled')
+            return
+        if self._recording_remember_output_dir:
+            self._set_recording_indicator('armed')
+            self._log_recording_armed()
+            return
+        if self._choose_recording_output_root(
+            title='Choose Recording Folder',
+            remember_default=False,
+        ):
+            self._set_recording_indicator('armed')
+            self._log_recording_armed()
+            return
+        self.record_checkbox.blockSignals(True)
+        self.record_checkbox.setChecked(False)
+        self.record_checkbox.blockSignals(False)
+        self._set_recording_indicator('off')
+        self._log_info('Auto Launch recording was not enabled because no folder was selected')
+
+    def _choose_recording_output_root(
+        self,
+        *,
+        title: str,
+        remember_default: bool,
+    ) -> bool:
+        selection = self._recording_output_dialog(title, remember_default)
+        if selection is None:
+            return False
+        output_dir, remember = selection
+        if not output_dir.is_absolute():
+            output_dir = PROJECT_ROOT / output_dir
+        self._recording_output_root = output_dir
+        self._recording_counter = self._load_recording_counter()
+        self._recording_remember_output_dir = remember
+        self._recording_cfg['output_dir'] = str(output_dir)
+        self._recording_cfg['remember_output_dir'] = remember
+        if remember or remember_default:
+            try:
+                save_user_config_update({
+                    'recording': {
+                        'output_dir': str(output_dir),
+                        'remember_output_dir': remember,
+                    },
+                })
+            except Exception as exc:
+                self._append_gui_html(
+                    'log',
+                    '<i>Failed to save recording folder preference: '
+                    f'{html.escape(str(exc))}</i>',
+                )
+        self._update_recording_location_tooltip()
+        self._log_info(f'Auto Launch recordings will be saved under {output_dir}')
+        return True
+
+    def _log_recording_armed(self) -> None:
+        self._log_info(
+            'Auto Launch recording armed; press Auto Launch to trigger it. '
+            'Recording starts after Auto Launch finishes its timeline and '
+            f'window layout delay. Output folder: '
+            f'{self._recording_output_root}'
+        )
+
+    def _recording_output_dialog(
+        self,
+        title: str,
+        remember_default: bool,
+    ) -> tuple[Path, bool] | None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle(title)
+        layout = QVBoxLayout(dialog)
+
+        label = QLabel(
+            'Choose the folder that will contain Auto Launch recording '
+            'sessions. Each recording saves screen video and logs in a '
+            'timestamped subfolder. Recording is triggered by pressing Auto '
+            'Launch, then starts after Auto Launch finishes its timeline and '
+            'window layout delay. It stops when Record Auto Launch is '
+            'unchecked, Stop Recording is pressed in the optional pop-out '
+            'window, Auto Launch is stopped, Roscore stops, or the GUI exits.'
+        )
+        label.setWordWrap(True)
+        layout.addWidget(label)
+
+        path_row = QHBoxLayout()
+        path_edit = QLineEdit(str(self._recording_output_root))
+        path_edit.setMinimumWidth(420)
+        path_row.addWidget(path_edit)
+        browse = QPushButton('Browse')
+        path_row.addWidget(browse)
+        layout.addLayout(path_row)
+
+        remember = QCheckBox('Remember this folder')
+        remember.setChecked(remember_default)
+        layout.addWidget(remember)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.Ok | QDialogButtonBox.Cancel
+        )
+        layout.addWidget(buttons)
+
+        def _browse() -> None:
+            selected = QFileDialog.getExistingDirectory(
+                dialog,
+                'Choose recording folder',
+                path_edit.text().strip() or str(self._recording_output_root),
+            )
+            if selected:
+                path_edit.setText(selected)
+
+        def _accept() -> None:
+            raw = path_edit.text().strip()
+            if not raw:
+                QMessageBox.warning(
+                    dialog,
+                    'Recording Folder',
+                    'Choose a folder for Auto Launch recordings.',
+                )
+                return
+            dialog.accept()
+
+        browse.clicked.connect(_browse)
+        buttons.accepted.connect(_accept)
+        buttons.rejected.connect(dialog.reject)
+        if dialog.exec_() != QDialog.Accepted:
+            return None
+        return Path(path_edit.text().strip()).expanduser(), remember.isChecked()
+
+    def _load_recording_counter(self) -> int:
+        try:
+            root = self._recording_output_root
+            if not root.exists():
+                return 0
+            max_idx = 0
+            for entry in root.iterdir():
+                if not entry.is_dir():
+                    continue
+                match = re.match(r'^(\d+)_', entry.name)
+                if match:
+                    try:
+                        max_idx = max(max_idx, int(match.group(1)))
+                    except ValueError:
+                        continue
+            return max_idx
+        except Exception:
+            return 0
+
+    def _normalize_resolution_string(self, value) -> str:
+        if not value:
+            return ''
+        text = str(value).lower().strip()
+        match = re.match(r'^(\d{3,5})[xX](\d{3,5})$', text)
+        if not match:
+            return ''
+        width, height = match.groups()
+        return f'{int(width)}x{int(height)}'
+
+    def _detect_screen_resolution(self) -> str:
+        # Prefer actual monitor resolution via xrandr, then Qt, then configured fallback.
+        try:
+            cp = subprocess.run(
+                ['bash', '-lc', "xrandr | awk '/\\*/ {print $1; exit}'"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                check=False,
+            )
+            out = (cp.stdout or '').strip()
+            normalized = self._normalize_resolution_string(out)
+            if normalized:
+                self._screen_resolution = normalized
+                return normalized
+        except Exception:
+            pass
+
+        try:
+            screen = QGuiApplication.primaryScreen()
+            if screen is not None:
+                geometry = screen.geometry()
+                size = geometry.size()
+                if size and size.width() > 0 and size.height() > 0:
+                    detected = f'{int(size.width())}x{int(size.height())}'
+                    normalized = self._normalize_resolution_string(detected)
+                    if normalized:
+                        self._screen_resolution = normalized
+                        return normalized
+        except Exception:
+            pass
+
+        configured = self._normalize_resolution_string(self._recording_cfg.get('resolution') or '3440x1440')
+        self._screen_resolution = configured
+        return configured
+
+    def _load_recording_resolutions(self) -> list[str]:
+        options: list[str] = []
+        detected = self._normalize_resolution_string(self._detect_screen_resolution())
+        if detected:
+            options.append(detected)
+        configured = self._normalize_resolution_string(self._recording_cfg.get('resolution'))
+        if configured:
+            options.append(configured)
+        presets = self._recording_cfg.get('presets') or []
+        for entry in presets:
+            normalized = self._normalize_resolution_string(entry)
+            if normalized:
+                options.append(normalized)
+        options.extend(['3440x1440', '3840x2160', '2560x1440', '1920x1080', '1600x900', '1280x720'])
+        return list(dict.fromkeys([opt for opt in options if opt]))
+
+    def _select_default_resolution(self) -> str:
+        detected = self._normalize_resolution_string(self._screen_resolution)
+        if detected and detected in self._recording_resolutions:
+            return detected
+        preferred = self._normalize_resolution_string(self._recording_cfg.get('resolution'))
+        if preferred and preferred in self._recording_resolutions:
+            return preferred
+        return self._recording_resolutions[0] if self._recording_resolutions else '3440x1440'
+
+    def _current_recording_resolution(self) -> str:
+        combo = getattr(self, 'record_resolution_combo', None)
+        if combo is not None:
+            value = self._normalize_resolution_string(combo.currentText())
+            if value:
+                return self._clamp_resolution_to_screen(value)
+        return self._clamp_resolution_to_screen(self._select_default_resolution())
+
+    def _recording_display(self) -> str:
+        configured = str(self._recording_cfg.get('display') or '').strip()
+        return configured or os.environ.get('DISPLAY') or ':1'
+
+    def _clamp_resolution_to_screen(self, resolution: str) -> str:
+        parts = resolution.split('x')
+        if len(parts) != 2:
+            return resolution
+        try:
+            width = int(parts[0])
+            height = int(parts[1])
+        except ValueError:
+            return resolution
+        screen_res = self._normalize_resolution_string(self._screen_resolution or self._detect_screen_resolution())
+        if not screen_res:
+            return resolution
+        sw, sh = (int(x) for x in screen_res.split('x'))
+        clamped_w = min(width, sw)
+        clamped_h = min(height, sh)
+        clamped = f'{clamped_w}x{clamped_h}'
+        if clamped != resolution:
+            self._log_info(f'Adjusting recording resolution from {resolution} to {clamped} to fit screen ({screen_res})')
+        return clamped
+
+    @staticmethod
+    def _normalize_workspace_name(value) -> str:
+        raw = str(value or 'workspace')
+        slug = re.sub(r'[^a-zA-Z0-9_-]+', '_', raw).strip('_')
+        return slug or 'workspace'
+
+    def _recording_start_delay_ms(self) -> int:
+        timeline = self._launch_plan.get('timeline') if isinstance(self._launch_plan, dict) else []
+        max_at_ms = 0
+        for entry in timeline:
+            try:
+                at_seconds = float(entry.get('at_seconds', 0) or 0)
+            except Exception:
+                continue
+            max_at_ms = max(max_at_ms, int(max(0.0, at_seconds) * 1000))
+        layout_delay = max(0, int(self._window_layout_delay_ms))
+        try:
+            extra_delay_ms = int(
+                max(
+                    0.0,
+                    float(
+                        self._launch_plan.get(
+                            'recording_start_delay_seconds',
+                            0,
+                        )
+                        or 0
+                    ),
+                )
+                * 1000
+            )
+        except (TypeError, ValueError):
+            extra_delay_ms = 0
+        return max(max_at_ms, layout_delay) + extra_delay_ms
+
+    def _schedule_recording_after_launch(self):
+        self._cancel_recording_schedule()
+        if not getattr(self, 'record_checkbox', None):
+            return
+        if not self.record_checkbox.isChecked():
+            self._console_log(2, 'Auto Launch recording skipped (checkbox unchecked)')
+            return
+        if self._recording_is_active():
+            return
+        delay_ms = self._recording_start_delay_ms()
+        if delay_ms <= 0:
+            self._start_screen_recording()
+            return
+
+        timer = QTimer(self)
+        timer.setSingleShot(True)
+
+        def _fire():
+            try:
+                self._start_screen_recording()
+            finally:
+                if self._recording_start_timer is timer:
+                    self._recording_start_timer = None
+                timer.deleteLater()
+
+        timer.timeout.connect(_fire)
+        self._recording_start_timer = timer
+        timer.start(delay_ms)
+        self._log_info(f'scheduling Auto Launch recording in {delay_ms / 1000:.1f}s')
+
+    def _cancel_recording_schedule(self):
+        timer = self._recording_start_timer
+        if timer is not None:
+            try:
+                timer.stop()
+            except Exception:
+                pass
+            timer.deleteLater()
+        self._recording_start_timer = None
+
+    def _recording_is_active(self) -> bool:
+        if self._recording_proc and self._recording_proc.state() != QProcess.NotRunning:
+            return True
+        return bool(self._recording_session)
+
+    def _ensure_recording_window(self) -> QDialog:
+        # recreate if previously closed/deleted
+        try:
+            if self._recording_window is not None:
+                _ = self._recording_window.windowTitle()
+                return self._recording_window
+        except RuntimeError:
+            self._recording_window = None
+
+        dialog = QDialog(None)  # top-level so wmctrl can move it independently
+        dialog.setWindowTitle('Recording Control')
+        dialog.setWindowFlag(Qt.WindowStaysOnTopHint, True)
+        dialog.setWindowFlag(Qt.Tool, True)
+        dialog.setWindowModality(Qt.NonModal)
+        dialog.setAttribute(Qt.WA_DeleteOnClose, False)
+        layout = QVBoxLayout(dialog)
+        label = QLabel('Screen recording is active.')
+        label.setWordWrap(True)
+        layout.addWidget(label)
+        self._recording_path_label = QLabel('')
+        self._recording_path_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        layout.addWidget(self._recording_path_label)
+        button = QPushButton('Stop Recording')
+        button.clicked.connect(self._on_recording_stop_clicked)
+        layout.addWidget(button)
+        self._recording_stop_button = button
+        dialog.setLayout(layout)
+        dialog.setMinimumWidth(260)
+        dialog.setMaximumWidth(360)
+
+        def _mark_closed():
+            self._recording_window = None
+
+        dialog.destroyed.connect(lambda *_: _mark_closed())
+        self._recording_window = dialog
+        return dialog
+
+    def _show_recording_window(self, video_path: Path):
+        dialog = self._ensure_recording_window()
+        if self._recording_path_label:
+            self._recording_path_label.setText(str(video_path))
+        if self._recording_stop_button:
+            self._recording_stop_button.setEnabled(True)
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
+    def _on_recording_stop_clicked(self):
+        self._log_event('user requested recording stop')
+        if self._recording_stop_button:
+            self._recording_stop_button.setEnabled(False)
+        if self._auto_launch_running:
+            self._stop_auto_launch_stack()
+            return
+        self._stop_screen_recording(save_logs=True, reason='Stopping recording')
+
+    def _start_screen_recording(self):
+        if self._recording_is_active():
+            return
+        try:
+            self._recording_output_root.mkdir(parents=True, exist_ok=True)
+        except Exception as exc:
+            self._append_gui_html('log', f'<i>Failed to prepare recording directory: {html.escape(str(exc))}</i>')
+            return
+        self._log_info(f'preparing Auto Launch recording under {self._recording_output_root}')
+        now = datetime.now()
+        next_idx = max(self._recording_counter, self._load_recording_counter()) + 1
+        self._recording_counter = next_idx
+        base_name = f'{next_idx}_{self._recording_workspace_name}_{now:%d_%m_%H%M%S}'
+        base_dir = self._recording_output_root / base_name
+        try:
+            base_dir.mkdir(parents=True, exist_ok=True)
+        except Exception as exc:
+            self._append_gui_html('log', f'<i>Failed to create recording folder: {html.escape(str(exc))}</i>')
+            return
+        video_path = base_dir / f'{base_name}.mp4'
+        ffmpeg_log = base_dir / 'ffmpeg.log'
+        self._log_info(f'Auto Launch recording session folder: {base_dir}')
+        self._recording_session = {
+            'base_dir': base_dir,
+            'video_path': video_path,
+            'logs_dir': base_dir / 'logs',
+            'save_logs': False,
+        }
+        proc = QProcess(self)
+        proc.setProgram('ffmpeg')
+        proc.setProcessChannelMode(QProcess.SeparateChannels)
+        try:
+            proc.setStandardOutputFile(str(ffmpeg_log))
+            proc.setStandardErrorFile(str(ffmpeg_log), mode=QIODevice.Append)
+        except Exception:
+            # fallback: let ffmpeg print to stdout/stderr
+            pass
+        requested_res = self._current_recording_resolution()
+        display = self._recording_display()
+        args = [
+            '-f', 'x11grab',
+            '-s', requested_res,
+            '-r', '30',
+            '-i', display,
+            '-vcodec', 'libx264',
+            '-pix_fmt', 'yuv420p',
+            '-preset', 'veryfast',
+            '-threads', '8',
+            str(video_path),
+        ]
+        proc.finished.connect(self._on_recording_finished)
+        proc.errorOccurred.connect(lambda _err: self._append_gui_html(
+            'log',
+            f'<i>Recording error: {html.escape(proc.errorString())}</i>',
+        ))
+        self._recording_proc = proc
+        self._log_info(f'starting Auto Launch recording at {requested_res} to {video_path}')
+        self._log_info(f'recording command: {shlex.join(["ffmpeg", *args])}')
+        self._log_info(f'ffmpeg output log: {ffmpeg_log}')
+        proc.start('ffmpeg', args)
+        if not proc.waitForStarted(3000):
+            self._append_gui_html(
+                'log',
+                '<i>Unable to start ffmpeg; recording cancelled. '
+                f'Check {html.escape(str(ffmpeg_log))}.</i>',
+            )
+            self._recording_proc = None
+            self._recording_session = None
+            if getattr(self, 'record_checkbox', None):
+                self.record_checkbox.blockSignals(True)
+                self.record_checkbox.setChecked(False)
+                self.record_checkbox.blockSignals(False)
+            self._set_recording_indicator('off')
+            return
+        self._set_recording_indicator('active')
+        if self._recording_show_control_window:
+            self._show_recording_window(video_path)
+
+    def _stop_screen_recording(self, *, save_logs: bool, reason: str | None = None):
+        self._cancel_recording_schedule()
+        session = self._recording_session
+        if session is None and not self._recording_proc:
+            return
+        if session is not None:
+            session['save_logs'] = session.get('save_logs', False) or save_logs
+        if reason:
+            self._log_info(reason)
+        proc = self._recording_proc
+        try:
+            state = proc.state() if proc else None
+        except RuntimeError:
+            return
+        if proc and state != QProcess.NotRunning:
+            if not session.get('stop_requested'):
+                session['stop_requested'] = True
+                self._request_ffmpeg_stop(proc)
+                QTimer.singleShot(
+                    5000,
+                    lambda: self._terminate_recording_if_running(proc),
+                )
+            return
+        self._finalize_recording_session()
+
+    def _request_ffmpeg_stop(self, proc: QProcess) -> None:
+        self._log_info('requesting ffmpeg to finish recording cleanly')
+        try:
+            proc.write(b'q\n')
+            proc.closeWriteChannel()
+        except Exception as exc:
+            self._append_gui_html(
+                'log',
+                '<i>Failed to send clean stop to ffmpeg; terminating: '
+                f'{html.escape(str(exc))}</i>',
+            )
+            try:
+                proc.terminate()
+            except Exception:
+                pass
+
+    def _terminate_recording_if_running(self, proc: QProcess | None):
+        if proc is None:
+            return
+        try:
+            state = proc.state()
+        except RuntimeError:
+            return
+        if state != QProcess.NotRunning:
+            self._append_gui_html(
+                'log',
+                '<i>ffmpeg did not stop after clean quit request; terminating.</i>',
+            )
+            try:
+                proc.terminate()
+            except Exception:
+                pass
+            QTimer.singleShot(2000, lambda: self._force_kill_recording(proc))
+
+    def _force_kill_recording(self, proc: QProcess | None):
+        if proc is None:
+            return
+        try:
+            state = proc.state()
+        except RuntimeError:
+            return
+        if state != QProcess.NotRunning:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+
+    def _on_recording_finished(self, code: int, _status):
+        if self._recording_session is not None:
+            self._recording_session['exit_code'] = code
+        self._finalize_recording_session()
+
+    def _finalize_recording_session(self):
+        session = self._recording_session
+        proc = self._recording_proc
+        self._recording_proc = None
+        self._recording_session = None
+        if self._recording_window:
+            self._recording_window.hide()
+        if getattr(self, 'record_checkbox', None) and self.record_checkbox.isChecked():
+            self._set_recording_indicator('armed')
+        else:
+            self._set_recording_indicator('off')
+        if session is None:
+            return
+        base_dir = session.get('base_dir')
+        video_path = session.get('video_path')
+        exit_code = session.get('exit_code')
+        video_file = Path(video_path) if video_path else None
+        video_exists = bool(video_file and video_file.is_file())
+        if video_exists:
+            size_kb = video_file.stat().st_size / 1024.0 if video_file else 0.0
+            size_text = f' ({size_kb:.0f} KB)' if size_kb > 0 else ''
+            self._append_gui_html('log', f'<i>Recording saved to {html.escape(str(video_file))}{html.escape(size_text)}</i>')
+        if session.get('save_logs') and base_dir:
+            logs_dir = session.get('logs_dir') or base_dir
+            saved = self._save_logs_to_directory(Path(logs_dir))
+            if saved:
+                self._append_gui_html(
+                    'log',
+                    f'<i>Saved {saved} log file(s) to {html.escape(str(logs_dir))}</i>',
+                )
+        if not video_exists:
+            self._append_gui_html(
+                'log',
+                '<i>No recording video was produced. Check '
+                f'{html.escape(str(base_dir / "ffmpeg.log"))}.</i>',
+            )
+            QMessageBox.warning(
+                self,
+                'Recording',
+                f'No video file was produced. Check ffmpeg.log in {base_dir}.',
+            )
+        elif exit_code not in (None, 0):
+            # ffmpeg exits non-zero when we terminate it; suppress dialog if video is present.
+            self._console_log(2, f'Recording finished with exit code {exit_code} (video saved).')
+        if proc:
+            try:
+                proc.deleteLater()
+            except Exception:
+                pass
+
+    def _toggle_auto_launch_stack(self):
+        if self._auto_launch_running:
+            self._stop_auto_launch_stack()
+        else:
+            self._start_auto_launch_stack()
+
+    def _start_auto_launch_stack(self):
+        self._auto_launch_stopping = False
+        timeline = self._launch_plan.get('timeline') if isinstance(self._launch_plan, dict) else []
+        if not timeline:
+            message = QMessageBox(self)
+            message.setIcon(QMessageBox.Information)
+            message.setWindowTitle('Auto Launch')
+            text = (
+                'No launch sequence is configured. Configure automation to '
+                'create one from the available buttons.'
+            )
+            if getattr(self, 'record_checkbox', None) and self.record_checkbox.isChecked():
+                text += (
+                    '\n\nRecord Auto Launch is armed, but recording starts only '
+                    'from an Auto Launch run. Configure an Auto Launch '
+                    'sequence first, then press Auto Launch again.'
+                )
+                self._log_info(
+                    'Auto Launch recording is armed but cannot start because no '
+                    'Auto Launch sequence is configured'
+                )
+            message.setText(text)
+            configure_button = message.addButton('Configure', QMessageBox.ActionRole)
+            message.addButton(QMessageBox.Ok)
+            message.exec_()
+            if message.clickedButton() == configure_button:
+                self._open_auto_launch_wizard()
+            self._auto_launch_running = False
+            self.set_auto_launch_visual('red', self._auto_launch_start_text(), True)
+            return
+
+        if not self._confirm_workspace_mismatch_warning(self._auto_launch_label()):
+            self._auto_launch_running = False
+            self.set_auto_launch_visual('red', self._auto_launch_start_text(), True)
+            return
+
+        if self._auto_launch_run_count > 0:
+            self.clear_all_tabs()
+            self._append_gui_html('log', '<i>Cleared tabs before starting a new auto launch run.</i>')
+        self._auto_launch_run_count += 1
+
+        if self._window_layout_auto_apply and self._window_layout_manager:
+            self._window_layout_manager.reset_auto_apply()
+
+        self._cancel_auto_launch_timers()
+        self._auto_launch_running = True
+        self._auto_launch_active_keys = [
+            entry.get('button') for entry in timeline if isinstance(entry, dict) and entry.get('button')
+        ]
+        source = self._launch_plan.get('source', 'configuration')
+        self._log_info(f'starting auto launch timeline from {source}')
+        self.set_auto_launch_visual('green', self._auto_launch_stop_text(), True)
+        for entry in timeline:
+            key = entry.get('button') if isinstance(entry, dict) else None
+            if not key:
+                continue
+            try:
+                at_seconds = max(0.0, float(entry.get('at_seconds', 0)))
+            except (TypeError, ValueError):
+                at_seconds = 0.0
+            delay_ms = int(at_seconds * 1000)
+            if delay_ms <= 0:
+                self._trigger_auto_launch_step(key, target_running=True)
+            else:
+                self._schedule_auto_launch_step(key, delay_ms)
+        self._schedule_recording_after_launch()
+
+    def _auto_launch_wizard_buttons(self) -> list[tuple[str, str]]:
+        buttons: list[tuple[str, str]] = [('roscore', 'Roscore')]
+        for key in self._config_button_order:
+            cfg = self._config_buttons.get(key, {})
+            label = str(cfg.get('label') or key)
+            buttons.append((key, label))
+        buttons.append(('terminal', 'Terminal'))
+        return list(dict.fromkeys(buttons))
+
+    def _open_auto_launch_wizard(self):
+        source = self._launch_plan.get('source') if isinstance(self._launch_plan, dict) else None
+        save_path = writable_launch_sequence_path(source)
+        recording_start_delay_seconds = (
+            self._launch_plan.get('recording_start_delay_seconds', 0.0)
+            if isinstance(self._launch_plan, dict)
+            else 0.0
+        )
+        dialog = AutoLaunchWizard(
+            self._auto_launch_wizard_buttons(),
+            self._launch_plan.get('timeline', []) if isinstance(self._launch_plan, dict) else [],
+            save_path,
+            recording_start_delay_seconds,
+            self,
+        )
+        if dialog.exec_() != QDialog.Accepted:
+            return
+
+        timeline = dialog.timeline()
+        shutdown_order = [entry['button'] for entry in reversed(timeline)]
+        recording_delay = dialog.recording_start_delay_seconds()
+        try:
+            saved_path = save_launch_sequence_plan(
+                save_path,
+                timeline,
+                shutdown_order,
+                self._auto_launch_button_cfg(),
+                recording_delay,
+            )
+        except OSError as exc:
+            QMessageBox.warning(
+                self,
+                'Auto Launch',
+                f'Failed to save auto launch configuration:\n{exc}',
+            )
+            return
+
+        self._launch_plan = load_launch_sequence_plan(
+            self._workspace_button_config_path(),
+            saved_path,
+        )
+        self._refresh_launch_plan_settings()
+        self.set_auto_launch_visual('red', self._auto_launch_start_text(), True)
+        self._log_info(f'saved auto launch configuration to {saved_path}')
+
+    def _stop_auto_launch_stack(self):
+        if self._auto_launch_stopping:
+            return
+        self._auto_launch_stopping = True
+        self._cancel_auto_launch_timers()
+        self._cancel_recording_schedule()
+        order = self._auto_launch_shutdown_order()
+        self._auto_launch_running = False
+        if order:
+            self.set_auto_launch_visual('yellow', 'Stopping Auto Launch...', False)
+            self._flush_ui_events()
+            for key in order:
+                self._trigger_auto_launch_step(key, target_running=False)
+        if self._recording_is_active():
+            self._stop_screen_recording(save_logs=True, reason='Stopping recording after auto launch toggle')
+        if self._roscore_stopping:
+            return
+        self._finalize_auto_launch_stop()
+
+    def _finalize_auto_launch_stop(self):
+        self._auto_launch_running = False
+        self._auto_launch_stopping = False
+        self._auto_launch_active_keys.clear()
+        self.set_auto_launch_visual('red', self._auto_launch_start_text(), True)
+
+    def _flush_ui_events(self):
+        app = QApplication.instance()
+        if app:
+            app.processEvents()
+
+    def _auto_launch_shutdown_order(self) -> list[str]:
+        plan_order = []
+        if isinstance(self._launch_plan, dict):
+            raw = self._launch_plan.get('shutdown_order') or []
+            if isinstance(raw, list):
+                plan_order = [str(item).strip() for item in raw if str(item).strip()]
+            if not plan_order:
+                plan_order = [
+                    entry.get('button')
+                    for entry in self._launch_plan.get('timeline', [])
+                    if isinstance(entry, dict) and entry.get('button')
+                ]
+        skip = set(self._launch_plan.get('shutdown_skip', [])) if isinstance(self._launch_plan, dict) else set()
+        plan_order = [entry for entry in plan_order if entry and entry not in skip]
+        if not self._auto_launch_active_keys:
+            return plan_order
+        ordered = [key for key in plan_order if key in self._auto_launch_active_keys and key not in skip]
+        remaining = [
+            key for key in self._auto_launch_active_keys
+            if key and key not in ordered and key not in skip
+        ]
+        return list(dict.fromkeys(ordered + remaining))
+
+    def _schedule_auto_launch_step(self, key: str, delay_ms: int):
+        timer = QTimer(self)
+        timer.setSingleShot(True)
+
+        def _fire():
+            try:
+                self._trigger_auto_launch_step(key, target_running=True)
+            finally:
+                if timer in self._auto_launch_timers:
+                    self._auto_launch_timers.remove(timer)
+                timer.deleteLater()
+
+        timer.timeout.connect(_fire)
+        self._auto_launch_timers.append(timer)
+        timer.start(max(0, int(delay_ms)))
+
+    def _trigger_auto_launch_step(self, key: str, *, target_running: bool, attempt: int = 0):
+        if not key:
+            return
+        if target_running and not self._auto_launch_running:
+            return
+
+        if self._toggle_states.get(key) == 'yellow':
+            if attempt >= self._launch_max_retry:
+                self._log_info(f'auto launch: skipping {key} (busy state)')
+                return
+            delay = self._launch_retry_ms or 500
+            QTimer.singleShot(
+                delay,
+                lambda k=key, a=attempt + 1: self._trigger_auto_launch_step(k, target_running=target_running, attempt=a),
+            )
+            return
+
+        self._ensure_button_state(key, target_running)
+
+    def _ensure_button_state(self, key: str, target_running: bool):
+        running = self._is_button_running(key)
+        if target_running and running:
+            return
+        if not target_running and not running:
+            return
+        verb = 'starting' if target_running else 'stopping'
+        self._log_info(f'auto launch: {verb} {key}')
+        self._dispatch_auto_launch_toggle(key)
+
+    def _dispatch_auto_launch_toggle(self, key: str) -> bool:
+        if key == 'roscore':
+            self.toggle_roscore()
+            return True
+        if key == 'terminal':
+            self.toggle_terminal()
+            return True
+        if key in self._config_buttons:
+            self._on_config_button_clicked(key)
+            return True
+        self._log_info(f'auto launch: no action found for "{key}"')
+        return False
+
+    def _cancel_auto_launch_timers(self):
+        for timer in list(self._auto_launch_timers):
+            try:
+                timer.stop()
+            except Exception:
+                pass
+            timer.deleteLater()
+        self._auto_launch_timers.clear()
+
+    def _is_button_running(self, key: str) -> bool:
+        if key == 'roscore':
+            return self.is_roscore_running()
+        if key == 'sim':
+            return self.is_sim_running()
+        tab = self.tasks.get(key)
+        if tab:
+            return tab.is_running()
+        return False
 
     def _docker_ps_ids(self, filters: list[str]) -> list[str]:
         if not filters:
@@ -1414,7 +7877,12 @@ class MainWindow(QMainWindow):
         tab = self.tasks[key]
         if key == self._terminal_stream_tab_key:
             self._terminal_stream_tab_key = None
-        if not (key.startswith('custom') or key.startswith('loadedlog') or key.startswith('terminal')):
+        if not (
+            key.startswith('custom')
+            or key.startswith('loadedlog')
+            or key.startswith('terminal')
+            or key.startswith('build-')
+        ):
             QMessageBox.information(self, 'Info', 'Only custom, terminal, and loaded log tabs can be closed.')
             return
         if tab.is_running():
@@ -1527,6 +7995,8 @@ class MainWindow(QMainWindow):
         if self.is_roscore_running():
             self.shutdown_roscore()
         else:
+            if not self._confirm_workspace_mismatch_warning('Roscore'):
+                return
             self.bring_up_roscore()
 
     def toggle_sim(self):
@@ -1550,6 +8020,10 @@ class MainWindow(QMainWindow):
         attempt: int = 0,
         allow_autostart: bool = True,
     ):
+        if self._remote_master_enabled():
+            callback()
+            return
+
         delay_ms = self._roscore_delay_ms()
         last_start = self._roscore_last_start_ts
 
@@ -1619,6 +8093,12 @@ class MainWindow(QMainWindow):
         )
 
     def bring_up_roscore(self):
+        if self._remote_master_enabled():
+            self._log_info(
+                'remote ROS master mode is active; local roscore was not '
+                'started'
+            )
+            return
         if self._roscore_stopping:
             return
         self._log_info('starting roscore master')
@@ -1636,7 +8116,7 @@ class MainWindow(QMainWindow):
         args = [
             'compose', 'run', '--rm', '--name', self._roscore_container_name,
             '--label', f'mobipick.exec={exec_id}', '--label', f'mobipick.tab={tab.key}',
-            *self._compose_env_args(),
+            *self._compose_env_args(container_name=self._roscore_container_name),
             'mobipick_cmd', 'bash', '-lc', self._wrap_line_buffered(inner)
         ]
         tab.start_program('docker', args)
@@ -1646,9 +8126,10 @@ class MainWindow(QMainWindow):
     def shutdown_roscore(self):
         if self._roscore_stopping:
             return
+        self._roscore_stopping = True
+        self._stop_auto_launch_stack()
         self._log_info('stopping roscore master')
         self.set_roscore_visual('yellow', 'Shutting down...', enabled=False)
-        self._roscore_stopping = True
 
         sim_tab = self.tasks.get('sim')
         sim_running = bool(sim_tab and sim_tab.is_running())
@@ -1660,7 +8141,7 @@ class MainWindow(QMainWindow):
             self.set_toggle_visual('yellow', 'Shutting down...', False)
         else:
             self._killing = False
-            self._disable_toggle_preserving_visual('sim', self.sim_toggle_button)
+            self._disable_toggle_preserving_visual('sim', self._get_button_widget('sim'))
         tables_running = 'tables' in self.tasks and self.tasks['tables'].is_running()
         rviz_running = 'rviz' in self.tasks and self.tasks['rviz'].is_running()
         rqt_running = 'rqt' in self.tasks and self.tasks['rqt'].is_running()
@@ -1671,22 +8152,32 @@ class MainWindow(QMainWindow):
         if tables_running:
             self.set_tables_visual('yellow', 'Shutting down...', False)
         else:
-            self._disable_toggle_preserving_visual('tables', self.tables_button)
+            self._disable_toggle_preserving_visual('tables', self._get_button_widget('tables'))
 
         if rviz_running:
             self.set_rviz_visual('yellow', 'Shutting down...', False)
         else:
-            self._disable_toggle_preserving_visual('rviz', self.rviz_button)
+            self._disable_toggle_preserving_visual('rviz', self._get_button_widget('rviz'))
 
         if rqt_running:
             self.set_rqt_visual('yellow', 'Shutting down...', False)
         else:
-            self._disable_toggle_preserving_visual('rqt', self.rqt_button)
+            self._disable_toggle_preserving_visual('rqt', self._get_button_widget('rqt'))
 
         if script_running:
             self.set_script_visual('yellow', 'Shutting down...', False)
         else:
             self._disable_toggle_preserving_visual('script', self.run_script_button)
+
+        for cfg_key in self._config_button_order:
+            cfg = self._config_buttons.get(cfg_key, {})
+            tab_obj = self.tasks.get(cfg_key)
+            running = bool(tab_obj and tab_obj.is_running())
+            button = self._get_button_widget(cfg_key)
+            if running:
+                self._set_config_visual(cfg, 'yellow', 'Shutting down...', False)
+            else:
+                self._disable_toggle_preserving_visual(cfg_key, button)
 
         if self._terminal_is_active():
             self.stop_terminal()
@@ -1730,6 +8221,7 @@ class MainWindow(QMainWindow):
                 self.set_tables_visual('red', 'Run Tables Demo', True)
                 self.set_rviz_visual('red', 'Start RViz', True)
                 self.set_rqt_visual('red', 'Start RQt Tables', True)
+                self._reset_config_button_visuals()
                 self._script_active_tab_key = None
                 self.set_script_visual('red', 'Run Script', bool(self._script_choices))
                 self._terminal_stopping = False
@@ -1739,6 +8231,7 @@ class MainWindow(QMainWindow):
                     self._terminal_stream_tab_key = None
                 self.set_terminal_visual('red', 'Open Terminal', True)
                 self._update_stop_custom_enabled()
+                self._finalize_auto_launch_stop()
 
             if commands:
                 self._run_command_sequence(commands, on_finished=_finalize, log_key=tab.key)
@@ -1750,7 +8243,14 @@ class MainWindow(QMainWindow):
 
     # event driven bring up
     def bring_up_sim(self):
+        if self._remote_master_enabled():
+            self._log_info(
+                'simulation is disabled while remote ROS master mode is active'
+            )
+            return
         if self._killing:
+            return
+        if not self._confirm_workspace_mismatch_warning('Simulation'):
             return
         self.set_toggle_visual('yellow', 'Starting Sim...', False)
 
@@ -1768,7 +8268,10 @@ class MainWindow(QMainWindow):
                 'compose', 'run', '--rm', '--name', self._sim_container_name,
                 '--label', f'mobipick.exec={exec_id}', '--label', f'mobipick.tab={tab.key}',
                 *self._compose_env_args(),
-                'mobipick'
+                'mobipick',
+                'bash',
+                '-lc',
+                self._wrap_line_buffered(self._workspace_sim_command()),
             ]
             tab.start_program('docker', args)
             self._schedule_host_to_container_copy(tab)
@@ -2024,7 +8527,11 @@ class MainWindow(QMainWindow):
         else:
             self.set_terminal_visual('red', 'Open Terminal', True)
 
-    def _set_toggle_state(self, key: str, button: QPushButton, state: str, text: str, enabled: bool):
+    def _set_toggle_state(self, key: str, button: QPushButton | None, state: str, text: str, enabled: bool):
+        button = button or self._get_button_widget(key)
+        if not button:
+            self._toggle_states[key] = state
+            return
         button.setText(text)
         toggle_cfg = CONFIG['buttons']['sim_toggle']
         states = toggle_cfg['states']
@@ -2041,25 +8548,43 @@ class MainWindow(QMainWindow):
         button.setEnabled(enabled)
         self._toggle_states[key] = state
 
-    def _disable_toggle_preserving_visual(self, key: str, button: QPushButton):
+    def _disable_toggle_preserving_visual(self, key: str, button: QPushButton | None):
         current_state = self._toggle_states.get(key, 'red')
-        current_text = button.text()
+        current_text = button.text() if button else ''
         self._set_toggle_state(key, button, current_state, current_text, False)
 
     def set_toggle_visual(self, state: str, text: str, enabled: bool):
-        self._set_toggle_state('sim', self.sim_toggle_button, state, text, enabled)
+        if self._remote_master_enabled():
+            self._set_toggle_state(
+                'sim',
+                self._get_button_widget('sim'),
+                'grey',
+                'Sim unavailable with remote ROS',
+                False,
+            )
+            return
+        self._set_toggle_state('sim', self._get_button_widget('sim'), state, text, enabled)
 
     def set_roscore_visual(self, state: str, text: str, enabled: bool):
+        if self._remote_master_enabled():
+            self._set_toggle_state(
+                'roscore',
+                self.roscore_button,
+                'grey',
+                'Using Remote Roscore',
+                False,
+            )
+            return
         self._set_toggle_state('roscore', self.roscore_button, state, text, enabled)
 
     def set_tables_visual(self, state: str, text: str, enabled: bool):
-        self._set_toggle_state('tables', self.tables_button, state, text, enabled)
+        self._set_toggle_state('tables', self._get_button_widget('tables'), state, text, enabled)
 
     def set_rviz_visual(self, state: str, text: str, enabled: bool):
-        self._set_toggle_state('rviz', self.rviz_button, state, text, enabled)
+        self._set_toggle_state('rviz', self._get_button_widget('rviz'), state, text, enabled)
 
     def set_rqt_visual(self, state: str, text: str, enabled: bool):
-        self._set_toggle_state('rqt', self.rqt_button, state, text, enabled)
+        self._set_toggle_state('rqt', self._get_button_widget('rqt'), state, text, enabled)
 
     def set_script_visual(self, state: str, text: str, enabled: bool):
         self._set_toggle_state('script', self.run_script_button, state, text, enabled)
@@ -2067,10 +8592,13 @@ class MainWindow(QMainWindow):
     def set_terminal_visual(self, state: str, text: str, enabled: bool):
         self._set_toggle_state('terminal', self.terminal_button, state, text, enabled)
 
-    def _guard_toggle_action(self, key: str, button: QPushButton) -> bool:
+    def set_auto_launch_visual(self, state: str, text: str, enabled: bool):
+        self._set_toggle_state('auto_launch', self.auto_launch_button, state, text, enabled)
+
+    def _guard_toggle_action(self, key: str, button: QPushButton | None = None) -> bool:
         if self._toggle_states.get(key) != 'yellow':
             return True
-        text = button.text().strip().lower()
+        text = button.text().strip().lower() if button else ''
         if 'shutting' in text or 'stop' in text:
             msg = 'Process is shutting down, please wait.'
         elif 'starting' in text or 'start' in text:
@@ -2082,16 +8610,37 @@ class MainWindow(QMainWindow):
 
     # ---------- Buffering control helper ----------
     def _wrap_line_buffered(self, inner: str) -> str:
-        # ensure unbuffered python, utf8, and force line buffered stdout and stderr when available
-        # no TTY required
+        # Keep stdout/stderr moving in GUI tabs; color is also forced for
+        # non-interactive tools, and PTY-sensitive tools get a wrapper above.
+        color_env = (
+            'export TERM="${TERM:-xterm-256color}" '
+            'FORCE_COLOR=1 CLICOLOR_FORCE=1; '
+        )
         return (
             'export PYTHONUNBUFFERED=1 PYTHONIOENCODING=UTF-8; '
+            f'{color_env}'
             'if command -v stdbuf >/dev/null 2>&1; then '
             f'stdbuf -oL -eL {inner}; '
             'else '
             f'{inner}; '
             'fi'
         )
+
+    def _start_program_with_pseudo_terminal(
+        self,
+        tab: ProcessTab,
+        program: str,
+        args: list[str],
+    ) -> None:
+        command = self._fmt_args([program] + args)
+        wrapped = (
+            'if command -v script >/dev/null 2>&1; then '
+            f'script -qefc {self._sh_quote(command)} /dev/null; '
+            'else '
+            f'{command}; '
+            'fi'
+        )
+        tab.start_shell(wrapped)
 
     # ---------- Actions ----------
 
@@ -2109,6 +8658,8 @@ class MainWindow(QMainWindow):
             self._focus_tab('tables')
             return
 
+        if not self._confirm_workspace_mismatch_warning('Tables Demo'):
+            return
         self.set_tables_visual('yellow', 'Starting Tables Demo...', False)
 
         def _start_tables():
@@ -2118,12 +8669,15 @@ class MainWindow(QMainWindow):
             tab.exec_id = exec_id
             tab.container_name = f'mpcmd-{exec_id[:10]}'
             self._claim_xhost(tab, 'tables', log_key=tab.key)
-            inner = 'rosrun tables_demo_planning tables_demo_node.py'
+            inner = self._tables_demo_command()
             args = [
                 'compose', 'run', '--rm', '--name', tab.container_name,
                 '--label', f'mobipick.exec={exec_id}', '--label', f'mobipick.tab={tab.key}',
-                *self._compose_env_args(),
-                'mobipick_cmd', 'bash', '-lc', self._wrap_line_buffered(inner)
+                *self._compose_env_args(container_name=tab.container_name),
+                self._ros_tool_service(),
+                'bash',
+                '-lc',
+                self._wrap_line_buffered(inner),
             ]
             tab.start_program('docker', args)
             self._schedule_host_to_container_copy(tab)
@@ -2158,6 +8712,8 @@ class MainWindow(QMainWindow):
             self._focus_tab('rviz')
             return
 
+        if not self._confirm_workspace_mismatch_warning('RViz'):
+            return
         self.set_rviz_visual('yellow', 'Starting RViz...', False)
 
         def _start_rviz():
@@ -2167,12 +8723,15 @@ class MainWindow(QMainWindow):
             tab.exec_id = exec_id
             tab.container_name = f'mpcmd-{exec_id[:10]}'
             self._claim_xhost(tab, 'rviz', log_key=tab.key)
-            rviz_cmd = 'rosrun rviz rviz -d $(rospack find tables_demo_bringup)/config/pick_n_place.rviz __ns:=mobipick'
+            rviz_cmd = self._rviz_command()
             args = [
                 'compose', 'run', '--rm', '--name', tab.container_name,
                 '--label', f'mobipick.exec={exec_id}', '--label', f'mobipick.tab={tab.key}',
-                *self._compose_env_args(),
-                'mobipick_cmd', 'bash', '-lc', self._wrap_line_buffered(rviz_cmd)
+                *self._compose_env_args(container_name=tab.container_name),
+                self._ros_tool_service(),
+                'bash',
+                '-lc',
+                self._wrap_line_buffered(rviz_cmd),
             ]
             tab.start_program('docker', args)
             self._schedule_host_to_container_copy(tab)
@@ -2207,6 +8766,8 @@ class MainWindow(QMainWindow):
             self._focus_tab('rqt')
             return
 
+        if not self._confirm_workspace_mismatch_warning('RQt Tables'):
+            return
         self.set_rqt_visual('yellow', 'Starting RQt Tables...', False)
 
         def _start_rqt():
@@ -2217,12 +8778,15 @@ class MainWindow(QMainWindow):
             tab.exec_id = exec_id
             tab.container_name = f'mpcmd-{exec_id[:10]}'
             self._claim_xhost(tab, 'rqt', log_key=tab.key)
-            cmd = f'roslaunch rqt_tables_demo rqt_tables_demo.launch namespace:=mobipick world_config:={self._sh_quote(world)}'
+            cmd = self._rqt_tables_command()
             args = [
                 'compose', 'run', '--rm', '--name', tab.container_name,
                 '--label', f'mobipick.exec={exec_id}', '--label', f'mobipick.tab={tab.key}',
-                *self._compose_env_args(),
-                'mobipick_cmd', 'bash', '-lc', self._wrap_line_buffered(cmd)
+                *self._compose_env_args(container_name=tab.container_name),
+                self._ros_tool_service(),
+                'bash',
+                '-lc',
+                self._wrap_line_buffered(cmd),
             ]
             tab.start_program('docker', args)
             self._schedule_host_to_container_copy(tab)
@@ -2254,6 +8818,8 @@ class MainWindow(QMainWindow):
     def open_terminal(self):
         if self._terminal_stopping or self._terminal_is_active():
             return
+        if not self._confirm_workspace_mismatch_warning('Terminal'):
+            return
         self.set_terminal_visual('yellow', 'Starting Terminal...', False)
 
         def _start_terminal():
@@ -2270,9 +8836,21 @@ class MainWindow(QMainWindow):
                 '--label', f'mobipick.exec={exec_id}',
                 '--label', 'mobipick.role=terminal',
                 '--label', 'mobipick.tab=terminal',
-                *self._compose_env_args(env_overrides),
-                'mobipick_cmd', 'python3', f'{CONTAINER_SCRIPTS_DIR}/enter_host_shell.py', 'bash'
+                '--user', 'root',
             ]
+            env_overrides = dict(env_overrides)
+            command_parts.extend(self._compose_env_args(env_overrides, container_name=container_name))
+            command_parts.extend(
+                [
+                    self._ros_tool_service(),
+                    'python3',
+                    f'{CONTAINER_SCRIPTS_DIR}/enter_host_shell.py',
+                    'bash',
+                    '--rcfile',
+                    f'{CONTAINER_SCRIPTS_DIR}/terminal.bashrc',
+                    '-i',
+                ]
+            )
             command_str = self._fmt_args(command_parts)
             launcher = self._build_terminal_launcher(command_str)
             if not launcher:
@@ -2430,6 +9008,8 @@ class MainWindow(QMainWindow):
         text = self.command_input.text().strip()
         if not text:
             return
+        if not self._confirm_workspace_mismatch_warning('Custom command'):
+            return
 
         def _run_command():
             self._log_info(f'running custom command: {text}')
@@ -2445,8 +9025,8 @@ class MainWindow(QMainWindow):
             args = [
                 'compose', 'run', '--rm', '--name', tab.container_name,
                 '--label', f'mobipick.exec={exec_id}', '--label', f'mobipick.tab={key_target}',
-                *self._compose_env_args(),
-                'mobipick_cmd', 'bash', '-lc', wrapped
+                *self._compose_env_args(container_name=tab.container_name),
+                self._ros_tool_service(), 'bash', '-lc', wrapped
             ]
             tab.start_program('docker', args)
             self._schedule_host_to_container_copy(tab)
@@ -2483,6 +9063,7 @@ class MainWindow(QMainWindow):
         tab: ProcessTab,
         *,
         on_stopped: Callable[[], None] | None = None,
+        stop_command: str | None = None,
     ):
         pid = tab.pid()
         if pid:
@@ -2507,6 +9088,12 @@ class MainWindow(QMainWindow):
             self._update_stop_custom_enabled()
 
         def _container_sigint_then_stop():
+            if stop_command:
+                try:
+                    self._sp_run(['bash', '-lc', stop_command], log_key=tab.key, check=False)
+                except Exception as exc:
+                    self._append_gui_html(tab.key, f'<i>Failed to run stop command: {html.escape(str(exc))}</i>')
+
             if container_name or exec_id:
                 self._graceful_stop_container(
                     container_name,
@@ -2975,6 +9562,42 @@ class MainWindow(QMainWindow):
         self._append_gui_html(key, '<i>Copying configured container paths to the host...</i>')
         self._run_command_sequence(commands, log_key=key)
 
+    def _open_docker_cp_config_dialog(self):
+        save_path = self._workspace_docker_cp_config_path()
+        dialog = DockerCpConfigDialog(
+            self._docker_cp_config,
+            load_docker_cp_user_config(save_path),
+            self._workspace_registry.active,
+            self._docker_cp_workspace_names(),
+            save_path,
+            self._docker_cp_setup_container_options,
+            self._docker_cp_container_path_from_setup,
+            self._docker_cp_host_start_path,
+            self,
+        )
+        if dialog.exec_() != QDialog.Accepted:
+            return
+        try:
+            saved_path = save_docker_cp_config(
+                dialog.docker_cp_config(),
+                save_path,
+            )
+        except Exception as exc:
+            QMessageBox.warning(
+                self,
+                'Docker cp Paths',
+                f'Failed to save docker cp paths:\n{exc}',
+            )
+            return
+        self._docker_cp_config = load_docker_cp_config(save_path)
+        self._synced_container_refs.clear()
+        self._log_info(f'docker cp paths saved to {saved_path}')
+        QMessageBox.information(
+            self,
+            'Docker cp Paths',
+            f'Docker cp paths saved to:\n{saved_path}',
+        )
+
     def save_current_log(self):
         index = self.tabs.currentIndex()
         if index < 0:
@@ -3029,30 +9652,50 @@ class MainWindow(QMainWindow):
             self.tabs.setTabText(index, label)
         self._focus_tab(key)
 
-    def save_all_logs(self):
+    def _collect_log_entries(self) -> list[tuple[str, str]]:
         entries: list[tuple[str, str]] = []
         for i in range(self.tabs.count()):
             widget = self.tabs.widget(i)
             if not isinstance(widget, QTextEdit):
                 continue
-            html = self._extract_widget_html(widget)
-            if html is None:
+            html_content = self._extract_widget_html(widget)
+            if html_content is None:
                 continue
             label = self.tabs.tabText(i).strip() or f'tab{i + 1}'
-            entries.append((label, html))
+            entries.append((label, html_content))
+        return entries
+
+    def _save_logs_to_directory(self, directory: Path, entries: list[tuple[str, str]] | None = None) -> int:
+        entries = entries if entries is not None else self._collect_log_entries()
+        if not entries:
+            return 0
+        try:
+            directory.mkdir(parents=True, exist_ok=True)
+        except Exception as exc:
+            self._append_gui_html(
+                'log',
+                f'<i>Failed to prepare log directory {html.escape(str(directory))}: {html.escape(str(exc))}</i>',
+            )
+            return 0
+        count = 0
+        for label, html_content in entries:
+            filename = self._suggest_log_filename(label)
+            path = self._resolve_unique_path(str(directory), filename)
+            if self._write_html_file(path, html_content):
+                count += 1
+        return count
+
+    def save_all_logs(self):
+        entries = self._collect_log_entries()
         if not entries:
             QMessageBox.information(self, 'Save Logs', 'There are no logs to save.')
             return
         directory = QFileDialog.getExistingDirectory(self, 'Select folder to save logs')
         if not directory:
             return
-        os.makedirs(directory, exist_ok=True)
-        for label, html in entries:
-            filename = self._suggest_log_filename(label)
-            path = self._resolve_unique_path(directory, filename)
-            if not self._write_html_file(path, html):
-                return
-        QMessageBox.information(self, 'Save Logs', f'Saved {len(entries)} log file(s).')
+        saved = self._save_logs_to_directory(Path(directory), entries=entries)
+        if saved:
+            QMessageBox.information(self, 'Save Logs', f'Saved {saved} log file(s).')
 
     def _prepare_tab_for_origin(self, key: str, origin: str) -> ProcessTab:
         tab = self._ensure_tab(key, key.title(), closable=(key.startswith('custom')))
@@ -3181,6 +9824,11 @@ class MainWindow(QMainWindow):
         if key == 'roscore':
             self._roscore_running_cached = False
             if self._roscore_stopping:
+                self._cancel_auto_launch_timers()
+                self._cancel_recording_schedule()
+                if self._recording_is_active():
+                    self._stop_screen_recording(save_logs=True, reason='Roscore stopped; ending recording')
+                self._finalize_auto_launch_stop()
                 return
             self._roscore_last_start_ts = None
             self.set_roscore_visual('red', 'Start Roscore', enabled=True)
@@ -3190,6 +9838,9 @@ class MainWindow(QMainWindow):
             self.set_rviz_visual('red', 'Start RViz', True)
             self.set_rqt_visual('red', 'Start RQt Tables', True)
             self.stop_terminal()
+            self._cancel_recording_schedule()
+            if self._recording_is_active():
+                self._stop_screen_recording(save_logs=True, reason='Roscore exited; stopping recording')
             self._script_active_tab_key = None
             self.set_script_visual('red', 'Run Script', bool(self._script_choices))
             self._update_stop_custom_enabled()
@@ -3199,6 +9850,11 @@ class MainWindow(QMainWindow):
             if self._killing:
                 return
             self.set_toggle_visual('red', 'Start Sim', enabled=True)
+            return
+        if key in self._config_buttons:
+            cfg = self._config_buttons[key]
+            label = self._config_label(cfg)
+            self._set_config_visual(cfg, 'red', f'Start {label}', True)
             return
         if key == 'tables':
             if self._roscore_stopping or self._toggle_states.get('tables') == 'yellow':
@@ -3233,6 +9889,8 @@ class MainWindow(QMainWindow):
 
     def _poll(self):
         self._update_stop_custom_enabled()
+        if self._window_layout_auto_apply and self._window_layout_manager:
+            self._window_layout_manager.maybe_apply_saved_layout()
 
     def _check_sigint(self):
         global _SIGINT_TRIGGERED
@@ -3245,6 +9903,7 @@ class MainWindow(QMainWindow):
         if self._exit_in_progress:
             return
         self._exit_in_progress = True
+        self._save_window_state()
         exit_cfg = CONFIG['exit']
         self._console_log(1, exit_cfg['log_start_message'])
         self.hide()
@@ -3259,6 +9918,10 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(0, self._perform_exit_cleanup)
 
     def _perform_exit_cleanup(self):
+        self._cancel_auto_launch_timers()
+        self._cancel_recording_schedule()
+        self._stop_screen_recording(save_logs=False, reason='Exit requested; stopping recording')
+        self._auto_launch_running = False
         self.stop_terminal()
 
         for proc in list(self._bg_procs):
@@ -3306,10 +9969,45 @@ class MainWindow(QMainWindow):
         self.set_rqt_visual('red', 'Start RQt Tables', True)
         self.set_script_visual('red', 'Run Script', bool(self._script_choices))
         self.set_terminal_visual('red', 'Open Terminal', True)
+        self.set_auto_launch_visual('red', self._auto_launch_start_text(), True)
+        for key in self._config_button_order:
+            cfg = self._config_buttons.get(key, {})
+            label = self._config_label(cfg)
+            self._set_config_visual(cfg, 'red', f'Start {label}', True)
         self.stop_custom_button.setEnabled(False)
         self._update_stop_custom_enabled()
 
     # ---------- Close ----------
+
+    def _restore_window_state(self, window_cfg: dict) -> None:
+        geometry = window_cfg.get('geometry', [])
+        if len(geometry) == 4:
+            try:
+                self.setGeometry(*[int(value) for value in geometry])
+            except (TypeError, ValueError):
+                pass
+        if window_cfg.get('maximized'):
+            self.setWindowState(self.windowState() | Qt.WindowMaximized)
+
+    def _save_window_state(self) -> None:
+        geometry = self.normalGeometry()
+        if geometry.isNull():
+            geometry = self.geometry()
+        updates = {
+            'window': {
+                'geometry': [
+                    geometry.x(),
+                    geometry.y(),
+                    geometry.width(),
+                    geometry.height(),
+                ],
+                'maximized': self.isMaximized(),
+            },
+        }
+        try:
+            save_user_config_update(updates)
+        except Exception as exc:
+            self._console_log(1, f'Warning: failed to save window state: {exc}')
 
     def closeEvent(self, event):
         if self._exit_in_progress:

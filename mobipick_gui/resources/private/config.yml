@@ -1,0 +1,8 @@
+# commands that will be run when bringup sim button is pressed
+commands:
+  default: ["roslaunch", "tables_demo_bringup", "demo_sim.launch", "world_config:=${MOBIPICK_WORLD:-moelk_tables}"]
+  catkin_ws: ["roslaunch", "tables_demo_bringup", "demo_sim.launch", "world_config:=${MOBIPICK_WORLD:-moelk_tables}"]
+  mobipick_labs_ws: ["roslaunch", "tables_demo_bringup", "demo_sim.launch", "world_config:=${MOBIPICK_WORLD:-moelk_tables}"]
+  rae_upom_mobipick_ws: ["roslaunch", "rqt_simple_launcher_config", "collect_objs_moelk.launch"]
+  common_tools_ws: ["roslaunch", "tables_demo_bringup", "demo_sim.launch", "world_config:=${MOBIPICK_WORLD:-moelk_tables}"]
+  gpt_ws: ["roslaunch", "tables_demo_bringup", "demo_sim.launch", "world_config:=${MOBIPICK_WORLD:-moelk_tables}"]

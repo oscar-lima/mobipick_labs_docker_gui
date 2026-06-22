@@ -240,13 +240,41 @@ def _enable_passwordless_sudo(user_name: str) -> None:
             pass
 
 
+def _log_warning(message: str) -> None:
+    """Emit a best-effort warning to stderr."""
+
+    try:
+        print(f"[mobipick enter_host_shell] {message}", file=sys.stderr)
+    except OSError:
+        pass
+
+
 def main(argv: list[str]) -> "None":
     uid = _parse_int(os.environ.get("MOBIPICK_UID"), 0)
     gid = _parse_int(os.environ.get("MOBIPICK_GID"), uid)
 
     command = argv[1:] or ["bash"]
 
+    current_uid = os.getuid()
+    current_gid = os.getgid()
+
     if uid == 0:
+        os.execvp(command[0], command)
+        raise RuntimeError("execvp returned")
+
+    matching_uid = uid == current_uid
+    matching_gid = gid == current_gid or gid == 0
+
+    if matching_uid and matching_gid:
+        os.execvp(command[0], command)
+        raise RuntimeError("execvp returned")
+
+    if current_uid != 0:
+        if not matching_uid or not matching_gid:
+            _log_warning(
+                f"insufficient privileges to switch to UID {uid} GID {gid}; "
+                f"running as UID {current_uid} GID {current_gid}"
+            )
         os.execvp(command[0], command)
         raise RuntimeError("execvp returned")
 
