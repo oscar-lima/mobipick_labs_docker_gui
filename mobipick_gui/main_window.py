@@ -34,6 +34,7 @@ from PyQt5.QtWidgets import (
     QFormLayout,
     QHBoxLayout,
     QHeaderView,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QMainWindow,
@@ -691,17 +692,19 @@ class DockerCpConfigDialog(QDialog):
         '/root/catkin_ws/src/mobipick_labs/tables_demo_bringup/config/'
         'pick_n_place.rviz'
     )
-    PREFERRED_CONTAINER_PATH = (
-        'clean_mobipick_labs_ws/src/mobipick_labs/'
-        'tables_demo_bringup/config/pick_n_place.rviz'
+    CONTAINER_CONFIG_SUFFIX = (
+        'src/mobipick_labs/tables_demo_bringup/config/pick_n_place.rviz'
     )
 
     def __init__(
         self,
         effective_config: dict[str, dict[str, list[dict]]],
         user_config: dict[str, dict[str, list[dict]]],
-        selected_image: str,
+        selected_workspace: str,
+        workspace_names: list[str],
         save_path: Path,
+        container_options_provider: Callable[[], list[tuple[str, str]]] | None = None,
+        container_path_provider: Callable[[str, str], str] | None = None,
         parent: QWidget | None = None,
     ):
         super().__init__(parent)
@@ -709,23 +712,24 @@ class DockerCpConfigDialog(QDialog):
         self.resize(900, 620)
         self._effective_config = copy.deepcopy(effective_config or {})
         self._user_config = copy.deepcopy(user_config or {})
-        self._selected_image = (selected_image or '').strip()
+        self._selected_workspace = (selected_workspace or '').strip()
+        self._workspace_names = [
+            str(name).strip()
+            for name in (workspace_names or [])
+            if str(name).strip()
+        ]
+        self._container_options_provider = container_options_provider
+        self._container_path_provider = container_path_provider
 
         root = QVBoxLayout(self)
 
         profile_row = QHBoxLayout()
-        profile_row.addWidget(QLabel('Profile:'))
+        profile_row.addWidget(QLabel('Workspace:'))
         self.profile_combo = QComboBox()
-        self.profile_combo.addItems(self._profile_keys())
+        for label, key in self._profile_items():
+            self.profile_combo.addItem(label, key)
         self.profile_combo.currentIndexChanged.connect(self._load_selected_profile)
         profile_row.addWidget(self.profile_combo, 1)
-        profile_row.addWidget(QLabel('Save as:'))
-        self.profile_key_input = QLineEdit()
-        self.profile_key_input.setPlaceholderText('default or image reference')
-        self.profile_key_input.textChanged.connect(
-            lambda _text: self._update_preview()
-        )
-        profile_row.addWidget(self.profile_key_input, 1)
         root.addLayout(profile_row)
 
         self.tabs = QTabWidget()
@@ -765,14 +769,23 @@ class DockerCpConfigDialog(QDialog):
 
         self._load_selected_profile()
 
-    def _profile_keys(self) -> list[str]:
-        keys = ['default']
-        if self._selected_image:
-            repo, tag = MainWindow._split_image_ref(self._selected_image)
-            keys.extend(key for key in (self._selected_image, repo, tag) if key)
-        keys.extend(self._effective_config.keys())
-        keys.extend(self._user_config.keys())
-        return list(dict.fromkeys(str(key) for key in keys if str(key).strip()))
+    def _profile_items(self) -> list[tuple[str, str]]:
+        items = [('Docker image default', 'default')]
+        items.extend((name, name) for name in self._workspace_names)
+        seen: set[str] = set()
+        result: list[tuple[str, str]] = []
+        for label, key in items:
+            if key in seen:
+                continue
+            result.append((label, key))
+            seen.add(key)
+        selected = self._selected_workspace or 'default'
+        if selected in seen:
+            for index, (_label, key) in enumerate(result):
+                if key == selected:
+                    result.insert(0, result.pop(index))
+                    break
+        return result
 
     def _make_table(self, first_header: str, second_header: str) -> QTableWidget:
         table = QTableWidget(0, 2)
@@ -812,7 +825,11 @@ class DockerCpConfigDialog(QDialog):
         host_first = table is self.host_to_container_table
         dialog = DockerCpPathDialog(
             host_first=host_first,
-            container_path=self._default_container_path(),
+            container_path=self._default_container_path(
+                self._selected_workspace_key()
+            ),
+            container_options_provider=self._container_options_provider,
+            container_path_provider=self._container_path_provider,
             parent=self,
         )
         if dialog.exec_() != QDialog.Accepted:
@@ -821,15 +838,21 @@ class DockerCpConfigDialog(QDialog):
         self._add_row(table, first, second)
 
     @classmethod
-    def _default_container_path(cls) -> str:
-        preferred = Path(cls.PREFERRED_CONTAINER_PATH)
+    def _default_container_path(cls, workspace_name: str = '') -> str:
+        workspace = str(workspace_name or '').strip() or 'clean_mobipick_labs_ws'
+        preferred_text = f'{workspace}/{cls.CONTAINER_CONFIG_SUFFIX}'
+        preferred = Path(preferred_text)
         candidates = [
             preferred,
             Path.home() / 'ros_ws' / preferred,
         ]
         if any(candidate.exists() for candidate in candidates):
-            return cls.PREFERRED_CONTAINER_PATH
+            return preferred_text
         return cls.DEFAULT_CONTAINER_PATH
+
+    def _selected_workspace_key(self) -> str:
+        data = self.profile_combo.currentData()
+        return str(data or 'default').strip() or 'default'
 
     def _profile_section(self, key: str) -> dict[str, list[dict]]:
         if key in self._user_config:
@@ -837,9 +860,10 @@ class DockerCpConfigDialog(QDialog):
         return copy.deepcopy(self._effective_config.get(key) or {})
 
     def _load_selected_profile(self) -> None:
-        key = self.profile_combo.currentText().strip() or 'default'
-        self.profile_key_input.setText(key)
+        key = self._selected_workspace_key()
         section = self._profile_section(key)
+        if not section and key != 'default':
+            section = self._profile_section('default')
         self._set_table_entries(
             self.host_to_container_table,
             section.get('host_to_container', []),
@@ -925,10 +949,7 @@ class DockerCpConfigDialog(QDialog):
         }
 
     def _update_preview(self) -> None:
-        key = (
-            self.profile_key_input.text().strip()
-            or self.profile_combo.currentText().strip()
-        )
+        key = self._selected_workspace_key()
         try:
             section = self._current_section()
         except ValueError:
@@ -936,7 +957,7 @@ class DockerCpConfigDialog(QDialog):
                 'Complete both paths in each row to preview commands.'
             )
             return
-        lines = [f'Profile: {key or "default"}']
+        lines = [f'Workspace: {key or "default"}']
         for entry in section['host_to_container']:
             lines.append(
                 f'docker cp {entry["host"]} <container>:{entry["container"]}'
@@ -953,12 +974,12 @@ class DockerCpConfigDialog(QDialog):
         return copy.deepcopy(self._user_config)
 
     def accept(self):
-        key = self.profile_key_input.text().strip()
+        key = self._selected_workspace_key()
         if not key:
             QMessageBox.warning(
                 self,
                 'Docker cp Paths',
-                'Enter a profile key before saving.',
+                'Select a workspace before saving.',
             )
             return
         try:
@@ -978,10 +999,14 @@ class DockerCpPathDialog(QDialog):
         *,
         host_first: bool,
         container_path: str,
+        container_options_provider: Callable[[], list[tuple[str, str]]] | None = None,
+        container_path_provider: Callable[[str, str], str] | None = None,
         parent: QWidget | None = None,
     ):
         super().__init__(parent)
         self._host_first = host_first
+        self._container_options_provider = container_options_provider
+        self._container_path_provider = container_path_provider
         self.setWindowTitle(
             'Add Host to Container Path'
             if host_first
@@ -1039,6 +1064,23 @@ class DockerCpPathDialog(QDialog):
             self.host_path_edit.setText(selected)
 
     def _browse_container_path(self) -> None:
+        if self._container_options_provider and self._container_path_provider:
+            dialog = DockerCpContainerSelectDialog(
+                self._container_options_provider(),
+                self,
+            )
+            if dialog.exec_() != QDialog.Accepted:
+                return
+            container_ref = dialog.container_ref()
+            if container_ref:
+                selected = self._container_path_provider(
+                    container_ref,
+                    self.container_path_edit.text().strip(),
+                )
+                if selected:
+                    self.container_path_edit.setText(selected)
+                return
+
         selected, _filter = QFileDialog.getOpenFileName(
             self,
             'Select Container File',
@@ -1050,8 +1092,8 @@ class DockerCpPathDialog(QDialog):
             )
 
     @staticmethod
-    def _container_browse_start() -> str:
-        preferred = Path(DockerCpConfigDialog.PREFERRED_CONTAINER_PATH)
+    def _container_browse_start(workspace_name: str = '') -> str:
+        preferred = Path(DockerCpConfigDialog._default_container_path(workspace_name))
         candidates = [
             preferred,
             Path.home() / 'ros_ws' / preferred,
@@ -1065,12 +1107,13 @@ class DockerCpPathDialog(QDialog):
 
     @staticmethod
     def _container_path_from_selection(path: Path) -> str:
-        preferred = Path(DockerCpConfigDialog.PREFERRED_CONTAINER_PATH)
+        suffix = Path(DockerCpConfigDialog.CONTAINER_CONFIG_SUFFIX)
         parts = path.parts
-        preferred_parts = preferred.parts
-        for index in range(0, len(parts) - len(preferred_parts) + 1):
-            if parts[index:index + len(preferred_parts)] == preferred_parts:
-                return DockerCpConfigDialog.PREFERRED_CONTAINER_PATH
+        suffix_parts = suffix.parts
+        for index in range(0, len(parts) - len(suffix_parts)):
+            if parts[index + 1:index + 1 + len(suffix_parts)] == suffix_parts:
+                workspace = parts[index]
+                return f'{workspace}/{DockerCpConfigDialog.CONTAINER_CONFIG_SUFFIX}'
         return str(path)
 
     def paths(self) -> tuple[str, str]:
@@ -1094,6 +1137,46 @@ class DockerCpPathDialog(QDialog):
                 self,
                 'Docker cp Paths',
                 'Choose an existing host file.',
+            )
+            return
+        super().accept()
+
+
+class DockerCpContainerSelectDialog(QDialog):
+    """Choose a running container for container-side path setup."""
+
+    def __init__(
+        self,
+        options: list[tuple[str, str]],
+        parent: QWidget | None = None,
+    ):
+        super().__init__(parent)
+        self.setWindowTitle('Select Setup Container')
+        self.resize(520, 140)
+
+        root = QVBoxLayout(self)
+        root.addWidget(QLabel('Container used to browse or verify paths:'))
+        self.container_combo = QComboBox()
+        for label, ref in options or []:
+            clean_ref = str(ref or '').strip()
+            if clean_ref:
+                self.container_combo.addItem(str(label or clean_ref), clean_ref)
+        root.addWidget(self.container_combo)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        root.addWidget(buttons)
+
+    def container_ref(self) -> str:
+        return str(self.container_combo.currentData() or '').strip()
+
+    def accept(self) -> None:
+        if not self.container_ref():
+            QMessageBox.warning(
+                self,
+                'Docker cp Paths',
+                'Select a running container or type the path manually.',
             )
             return
         super().accept()
@@ -4735,27 +4818,94 @@ CMD ["bash"]
             return []
         if not config:
             return []
+        workspace = self._workspace_registry.active_workspace()
+        key = workspace.name if workspace else 'default'
+        section = config.get(key)
+        if section is None and key != 'default':
+            section = config.get('default')
+        if not isinstance(section, dict):
+            return []
+        values = section.get(direction)
+        if not isinstance(values, list):
+            return []
+        return [value for value in values if isinstance(value, dict)]
 
-        image_ref = (self._selected_image or '').strip()
-        repo, tag = self._split_image_ref(image_ref)
+    def _docker_cp_workspace_names(self) -> list[str]:
+        return [workspace.name for workspace in self._workspace_registry.workspaces]
 
-        candidates: list[str] = []
-        for candidate in ('default', '*', 'all'):
-            if candidate in config and candidate not in candidates:
-                candidates.append(candidate)
-        if '' in config and '' not in candidates and not image_ref:
-            candidates.append('')
-        for candidate in (image_ref, repo, tag):
-            if candidate and candidate in config and candidate not in candidates:
-                candidates.append(candidate)
+    def _docker_cp_setup_container_options(self) -> list[tuple[str, str]]:
+        options: list[tuple[str, str]] = []
+        seen: set[str] = set()
 
-        entries: list[dict[str, str]] = []
-        for key in candidates:
-            section = config.get(key) or {}
-            values = section.get(direction)
-            if isinstance(values, list):
-                entries.extend(v for v in values if isinstance(v, dict))
-        return entries
+        def add(label: str, tab: ProcessTab | None) -> None:
+            if not isinstance(tab, ProcessTab):
+                return
+            if not getattr(tab, 'container_name', None):
+                return
+            container_ref = self._container_reference_for_tab(tab)
+            if not container_ref or container_ref in seen:
+                return
+            options.append((label, container_ref))
+            seen.add(container_ref)
+
+        current = self.tasks.get(self._current_tab_key() or '')
+        if current:
+            add('Workspace match container (current tab)', current)
+        for key in ('sim', 'roscore', 'rviz', 'tables', 'rqt'):
+            add(f'Workspace match container ({key})', self.tasks.get(key))
+        for key, tab in self.tasks.items():
+            add(f'{key}: {getattr(tab, "container_name", "")}', tab)
+        return options
+
+    def _docker_cp_container_path_from_setup(
+        self,
+        container_ref: str,
+        default_path: str,
+    ) -> str:
+        default_path = str(default_path or '').strip()
+        if not container_ref:
+            return default_path
+        script = (
+            'set -e; '
+            f'default={shlex.quote(default_path)}; '
+            'dir=$(dirname -- "$default"); '
+            'if [ -e "$default" ]; then printf "%s\\n" "$default"; fi; '
+            'if [ -d "$dir" ]; then find "$dir" -maxdepth 1 -type f | sort; fi'
+        )
+        choices: list[str] = []
+        try:
+            cp = subprocess.run(
+                ['docker', 'exec', container_ref, 'bash', '-lc', script],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                check=False,
+                text=True,
+                timeout=8,
+            )
+            choices = [
+                line.strip()
+                for line in (cp.stdout or '').splitlines()
+                if line.strip()
+            ]
+        except Exception as exc:
+            self._console_log(
+                1,
+                f'Failed to inspect container paths in {container_ref}: {exc}',
+            )
+        choices = list(dict.fromkeys(choices))
+        if not choices and default_path:
+            choices = [default_path]
+        if not choices:
+            return default_path
+        selected, accepted = QInputDialog.getItem(
+            self,
+            'Select Container File',
+            f'Container: {container_ref}',
+            choices,
+            0,
+            True,
+        )
+        return selected.strip() if accepted and selected.strip() else default_path
 
     @staticmethod
     def _expand_host_path(path: str) -> str:
@@ -8669,8 +8819,11 @@ CMD ["bash"]
         dialog = DockerCpConfigDialog(
             self._docker_cp_config,
             load_docker_cp_user_config(save_path),
-            self._selected_image,
+            self._workspace_registry.active,
+            self._docker_cp_workspace_names(),
             save_path,
+            self._docker_cp_setup_container_options,
+            self._docker_cp_container_path_from_setup,
             self,
         )
         if dialog.exec_() != QDialog.Accepted:

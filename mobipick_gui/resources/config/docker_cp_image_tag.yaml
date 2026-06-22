@@ -1,8 +1,7 @@
-# Optional docker cp mappings keyed by image reference.
+# Optional docker cp mappings keyed by workspace name.
 #
-# Use the "default" section to define entries that apply to all images.
-# Additional sections can be keyed by the full image reference
-# (e.g. "ozkrelo/mobipick_labs:noetic") or just the repository name.
+# Use the "default" section for Docker image default mode and fallback entries.
+# Additional sections can be keyed by ROS workspace name.
 #
 # Each mapping requires a host path and a container path. Host paths may
 # include "~" or environment variables, which will be expanded.

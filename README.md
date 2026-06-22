@@ -398,8 +398,8 @@ running.
 
 ## Docker cp profiles
 
-`docker_cp_image_tag.yaml` defines optional copy rules keyed by `default`,
-`*`, `all`, exact image ref, repository, or tag.
+`docker_cp_image_tag.yaml` defines optional copy rules keyed by `default` or
+by ROS workspace name.
 
 - `host_to_container` entries run automatically after eligible containers
   appear.
@@ -410,9 +410,10 @@ When the Docker image default workspace is active, user edits are saved to
 `~/.config/mobipick-labs-docker-gui/docker_cp_image_tag.yaml`. When a ROS
 workspace is active, edits are saved to
 `~/.config/mobipick-labs-docker-gui/docker_cp_profiles/{workspace}_docker_cp_image_tag.yaml`.
-This lets each workspace keep separate runtime copy paths while still using
-the bundled image-keyed defaults as fallback entries. Empty profiles in the
-active writable file override bundled entries.
+The editor shows workspaces rather than Docker image tags. Add Row opens a
+path setup dialog; the host side uses a local file picker, and the container
+side can use a selected running setup container or manual path entry. Empty
+profiles in the active writable file override bundled entries.
 
 ## Logging and reports
 

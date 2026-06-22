@@ -9,6 +9,7 @@ from mobipick_gui.config import save_button_layout
 import mobipick_gui.main_window as main_window_module
 from mobipick_gui.main_window import (
     ButtonProfileDialog,
+    DockerCpContainerSelectDialog,
     DockerCpConfigDialog,
     DockerCpPathDialog,
 )
@@ -95,7 +96,8 @@ def test_docker_cp_dialog_path_columns_stretch_with_window(tmp_path):
             }
         },
         {},
-        'example/image:tag',
+        'clean_mobipick_labs_ws',
+        ['clean_mobipick_labs_ws'],
         Path(tmp_path / 'docker_cp_image_tag.yaml'),
     )
 
@@ -113,22 +115,32 @@ def test_docker_cp_dialog_prefers_clean_workspace_default_if_present(
     monkeypatch,
     tmp_path,
 ):
-    preferred = tmp_path / DockerCpConfigDialog.PREFERRED_CONTAINER_PATH
+    preferred_text = (
+        'clean_mobipick_labs_ws/'
+        + DockerCpConfigDialog.CONTAINER_CONFIG_SUFFIX
+    )
+    preferred = tmp_path / preferred_text
     preferred.parent.mkdir(parents=True)
     preferred.write_text('rviz config', encoding='utf-8')
     monkeypatch.chdir(tmp_path)
 
-    assert DockerCpConfigDialog._default_container_path() == (
-        DockerCpConfigDialog.PREFERRED_CONTAINER_PATH
-    )
+    assert DockerCpConfigDialog._default_container_path(
+        'clean_mobipick_labs_ws'
+    ) == preferred_text
 
 
 def test_docker_cp_add_row_opens_path_dialog(monkeypatch, tmp_path):
     app = QApplication.instance() or QApplication([])
-    dialog = DockerCpConfigDialog({}, {}, '', tmp_path / 'docker_cp.yaml')
+    dialog = DockerCpConfigDialog(
+        {},
+        {},
+        'demo_ws',
+        ['demo_ws'],
+        tmp_path / 'docker_cp.yaml',
+    )
 
     class FakePathDialog:
-        def __init__(self, *, host_first, container_path, parent):
+        def __init__(self, *, host_first, container_path, parent, **kwargs):
             self.host_first = host_first
             self.container_path = container_path
             self.parent = parent
@@ -186,12 +198,76 @@ def test_docker_cp_container_browse_uses_clean_workspace_file(
     monkeypatch,
     tmp_path,
 ):
-    preferred = tmp_path / DockerCpConfigDialog.PREFERRED_CONTAINER_PATH
+    preferred_text = (
+        'clean_mobipick_labs_ws/'
+        + DockerCpConfigDialog.CONTAINER_CONFIG_SUFFIX
+    )
+    preferred = tmp_path / preferred_text
     preferred.parent.mkdir(parents=True)
     preferred.write_text('rviz config', encoding='utf-8')
     monkeypatch.chdir(tmp_path)
 
-    assert DockerCpPathDialog._container_browse_start() == str(preferred)
+    assert DockerCpPathDialog._container_browse_start(
+        'clean_mobipick_labs_ws'
+    ) == str(preferred)
     assert DockerCpPathDialog._container_path_from_selection(preferred) == (
-        DockerCpConfigDialog.PREFERRED_CONTAINER_PATH
+        preferred_text
     )
+
+
+def test_docker_cp_dialog_lists_workspaces_not_images(tmp_path):
+    app = QApplication.instance() or QApplication([])
+    dialog = DockerCpConfigDialog(
+        {'example/image:tag': {'host_to_container': [], 'container_to_host': []}},
+        {},
+        'demo_ws',
+        ['demo_ws', 'other_ws'],
+        tmp_path / 'docker_cp.yaml',
+    )
+
+    keys = [
+        dialog.profile_combo.itemData(index)
+        for index in range(dialog.profile_combo.count())
+    ]
+
+    assert keys == ['demo_ws', 'default', 'other_ws']
+    assert 'example/image:tag' not in keys
+    assert not hasattr(dialog, 'profile_key_input')
+
+    dialog.deleteLater()
+    app.processEvents()
+
+
+def test_docker_cp_path_dialog_can_use_container_provider(monkeypatch):
+    app = QApplication.instance() or QApplication([])
+    calls = []
+    dialog = DockerCpPathDialog(
+        host_first=True,
+        container_path='demo_ws/src/mobipick_labs/config.rviz',
+        container_options_provider=lambda: [
+            ('Workspace match container', 'container-id'),
+        ],
+        container_path_provider=lambda container, default: calls.append(
+            (container, default)
+        ) or '/container/selected.rviz',
+    )
+    monkeypatch.setattr(
+        DockerCpContainerSelectDialog,
+        'exec_',
+        lambda self: QDialog.Accepted,
+    )
+    monkeypatch.setattr(
+        DockerCpContainerSelectDialog,
+        'container_ref',
+        lambda self: 'container-id',
+    )
+
+    dialog._browse_container_path()
+
+    assert calls == [
+        ('container-id', 'demo_ws/src/mobipick_labs/config.rviz')
+    ]
+    assert dialog.container_path_edit.text() == '/container/selected.rviz'
+
+    dialog.deleteLater()
+    app.processEvents()

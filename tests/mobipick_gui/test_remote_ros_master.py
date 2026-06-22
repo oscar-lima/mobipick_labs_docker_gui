@@ -113,6 +113,15 @@ def test_docker_cp_entries_use_active_workspace_profile(tmp_path):
         'default': {
             'host_to_container': [
                 {
+                    'host': '~/Downloads/default.rviz',
+                    'container': '/container/default.rviz',
+                }
+            ],
+            'container_to_host': [],
+        },
+        'gpt_ws': {
+            'host_to_container': [
+                {
                     'host': '~/Downloads/workspace.rviz',
                     'container': '/container/workspace.rviz',
                 }
@@ -137,10 +146,6 @@ def test_docker_cp_entries_use_active_workspace_profile(tmp_path):
         {
             'host': '~/Downloads/workspace.rviz',
             'container': '/container/workspace.rviz',
-        },
-        {
-            'host': '~/Downloads/image.rviz',
-            'container': '/container/image.rviz',
         },
     ]
 
