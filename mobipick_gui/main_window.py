@@ -1812,6 +1812,7 @@ class MainWindow(QMainWindow):
             self._empty_workspace_dir = PROJECT_ROOT / 'empty_workspace'
         self._workspace_dialog: WorkspaceManagerDialog | None = None
         self._setup_wizard_dialog: ImageSetupWizard | None = None
+        self._setup_wizard_process_tabs: list[ProcessTab] = []
         self._setup_wizard_auto_scheduled = False
         self._docker_cp_config = load_docker_cp_config(
             self._workspace_docker_cp_config_path()
@@ -4103,7 +4104,12 @@ class MainWindow(QMainWindow):
             image_blacklist=self._image_blacklist_patterns(),
             parent=self,
         )
-        wizard.accepted.connect(lambda: self._apply_setup_wizard(wizard.selection()))
+        wizard.set_setup_start_handler(
+            lambda selection: self._apply_setup_wizard(
+                selection,
+                wizard=wizard,
+            )
+        )
         wizard.finished.connect(self._on_setup_wizard_closed)
         self._setup_wizard_dialog = wizard
         wizard.show()
@@ -4122,6 +4128,13 @@ class MainWindow(QMainWindow):
         return str(Path.home() / 'ros_ws')
 
     def _on_setup_wizard_closed(self, _result: int) -> None:
+        for tab in list(self._setup_wizard_process_tabs):
+            if tab.is_running():
+                try:
+                    tab.kill()
+                except Exception:
+                    pass
+        self._setup_wizard_process_tabs.clear()
         self._setup_wizard_dialog = None
 
     def _default_custom_image_ref(self, host_user: str, cfg: dict) -> str:
@@ -4243,7 +4256,12 @@ class MainWindow(QMainWindow):
         self._load_available_images(show_feedback=False)
         self._log_info('docker image filters updated')
 
-    def _apply_setup_wizard(self, selection: SetupWizardSelection) -> None:
+    def _apply_setup_wizard(
+        self,
+        selection: SetupWizardSelection,
+        *,
+        wizard: ImageSetupWizard | None = None,
+    ) -> bool:
         if selection.default_image:
             self._images_cfg['default'] = selection.default_image
         profile = None
@@ -4251,7 +4269,7 @@ class MainWindow(QMainWindow):
             validation_error = self._validate_custom_image_selection(selection)
             if validation_error:
                 QMessageBox.warning(self, 'Build Custom Image', validation_error)
-                return
+                return False
             profile = self._custom_image_profile(selection)
             self._upsert_runtime_image_profile(profile)
         if selection.install_source_workspace:
@@ -4264,7 +4282,7 @@ class MainWindow(QMainWindow):
                     'Install mobipick_labs Source',
                     validation_error,
                 )
-                return
+                return False
         pull_public_images_automatically = (
             selection.pull_public_images
             and selection.public_images
@@ -4272,10 +4290,10 @@ class MainWindow(QMainWindow):
         )
         if pull_public_images_automatically:
             if not self._confirm_host_image_pull(selection.public_images):
-                return
+                return False
         elif selection.pull_public_images and selection.public_images:
             if not self._confirm_manual_image_pull(selection.public_images):
-                return
+                return False
 
         updates = {
             'setup_wizard': {
@@ -4317,12 +4335,20 @@ class MainWindow(QMainWindow):
                 'Setup Wizard',
                 f'Failed to save setup settings:\n{exc}',
             )
-            return
+            return False
 
         self._images_cfg = CONFIG['images']
         self._image_profiles = self._normalize_image_profiles(
             self._images_cfg.get('profiles', [])
         )
+
+        if wizard is not None:
+            self._run_setup_wizard_sequence(
+                wizard,
+                selection,
+                pull_public_images_automatically=pull_public_images_automatically,
+            )
+            return True
 
         source_started = False
 
@@ -4369,6 +4395,137 @@ class MainWindow(QMainWindow):
         if self._image_choices:
             self._load_available_images(show_feedback=False)
         self._log_info('setup wizard settings saved')
+        return True
+
+    def _run_setup_wizard_sequence(
+        self,
+        wizard: ImageSetupWizard,
+        selection: SetupWizardSelection,
+        *,
+        pull_public_images_automatically: bool,
+    ) -> None:
+        wizard.begin_setup()
+        self._setup_wizard_process_tabs.clear()
+        summary: list[str] = [
+            'Saved setup wizard configuration.',
+            f'Default Docker image: {selection.default_image or "(not set)"}',
+        ]
+        if selection.image_blacklist:
+            summary.append(
+                'Image blacklist: ' + ', '.join(selection.image_blacklist)
+            )
+        else:
+            summary.append('Image blacklist: no patterns configured.')
+        steps: deque[tuple[str, Callable[[Callable[[int], None]], bool]]] = deque()
+
+        if pull_public_images_automatically:
+            images_text = ', '.join(selection.public_images)
+            steps.append((
+                f'Pulled public image(s): {images_text}',
+                lambda done: self._start_image_pulls(
+                    selection.public_images,
+                    tab=self._setup_wizard_process_tab(
+                        wizard,
+                        'setup-wizard-pull-images',
+                        'Pull Images',
+                    ),
+                    on_finished=done,
+                ),
+            ))
+        elif selection.pull_public_images and selection.public_images:
+            summary.append(
+                'Manual pull confirmed for: '
+                + ', '.join(selection.public_images)
+            )
+
+        if selection.build_custom_image:
+            steps.append((
+                f'Built custom development image: {selection.target_image}',
+                lambda done: self._start_custom_image_build(
+                    selection,
+                    tab=self._setup_wizard_process_tab(
+                        wizard,
+                        'setup-wizard-build-image',
+                        'Build Image',
+                    ),
+                    on_finished=done,
+                ),
+            ))
+
+        if selection.install_source_workspace:
+            workspace_path = (
+                Path(selection.source_master_folder).expanduser()
+                / selection.source_workspace_name
+            )
+            steps.append((
+                'Installed source workspace: '
+                f'{workspace_path.resolve()}',
+                lambda done: self._start_source_workspace_install(
+                    selection,
+                    tab=self._setup_wizard_process_tab(
+                        wizard,
+                        'setup-wizard-source-workspace',
+                        'Install Source',
+                    ),
+                    on_finished=done,
+                ),
+            ))
+
+        summary.append(
+            'Docker cp paths were left unchanged. Configure them later from '
+            'Tools > Docker > Configure Docker cp Paths if needed.'
+        )
+
+        def finish(success: bool) -> None:
+            self._load_available_images(show_feedback=False)
+            self._log_info('setup wizard settings saved')
+            wizard.complete_setup(
+                success=success,
+                summary_lines=summary,
+            )
+
+        def start_next() -> None:
+            if not steps:
+                finish(True)
+                return
+            label, starter = steps.popleft()
+            wizard.append_progress_html(
+                f'<b>{html.escape(label)}</b>'
+            )
+
+            def on_finished(code: int) -> None:
+                wizard.append_progress_html(
+                    f'<i>Step finished with code {code}</i>'
+                )
+                if code == 0:
+                    summary.append(label)
+                    QTimer.singleShot(0, start_next)
+                    return
+                summary.append(f'Failed: {label}')
+                finish(False)
+
+            if not starter(on_finished):
+                summary.append(f'Failed to start: {label}')
+                finish(False)
+
+        QTimer.singleShot(0, start_next)
+
+    def _setup_wizard_process_tab(
+        self,
+        wizard: ImageSetupWizard,
+        key: str,
+        label: str,
+    ) -> ProcessTab:
+        tab = ProcessTab(
+            key,
+            label,
+            self,
+            closable=False,
+            output=wizard.progress_log,
+            notify_parent_finished=False,
+        )
+        self._setup_wizard_process_tabs.append(tab)
+        return tab
 
     def _confirm_host_image_pull(self, images: list[str]) -> bool:
         commands = '\n'.join(f'docker pull {image}' for image in images)
@@ -4507,49 +4664,63 @@ class MainWindow(QMainWindow):
         images: list[str],
         *,
         on_success: Callable[[], None] | None = None,
-    ) -> None:
+        on_finished: Callable[[int], None] | None = None,
+        tab: ProcessTab | None = None,
+    ) -> bool:
         key = 'setup-pull-images'
-        tab = self._ensure_tab(key, 'Pull Images', closable=True)
+        focus_tab = tab is None
+        if tab is None:
+            tab = self._ensure_tab(key, 'Pull Images', closable=True)
         if tab.is_running():
-            self._focus_tab(key)
+            if focus_tab:
+                self._focus_tab(key)
             QMessageBox.information(
                 self,
                 'Pull Images',
                 'An image pull is already running.',
             )
-            return
+            return False
         command = ' && '.join(
             shlex.join(['docker', 'pull', image])
             for image in images
         )
         if not command:
-            return
+            return False
 
         def _after_pull(code: int, _status) -> None:
             self._load_available_images(show_feedback=False)
             if code == 0 and on_success:
                 on_success()
+            if on_finished:
+                on_finished(code)
 
         tab.proc.finished.connect(_after_pull)
         tab.start_program('bash', ['-lc', command])
-        self._focus_tab(key)
+        if focus_tab:
+            self._focus_tab(key)
+        return True
 
     def _start_custom_image_build(
         self,
         selection: SetupWizardSelection,
         *,
         on_success: Callable[[], None] | None = None,
-    ) -> None:
+        on_finished: Callable[[int], None] | None = None,
+        tab: ProcessTab | None = None,
+    ) -> bool:
         key = 'setup-build-image'
-        tab = self._ensure_tab(key, 'Build Image', closable=True)
+        focus_tab = tab is None
+        if tab is None:
+            tab = self._ensure_tab(key, 'Build Image', closable=True)
         if tab.is_running():
-            self._focus_tab(key)
+            if focus_tab:
+                self._focus_tab(key)
             QMessageBox.information(
                 self,
                 'Build Custom Image',
                 'A custom image build is already running.',
             )
-            return
+            return False
         try:
             context_dir = self._write_custom_image_build_context(selection)
         except OSError as exc:
@@ -4558,7 +4729,7 @@ class MainWindow(QMainWindow):
                 'Build Custom Image',
                 f'Failed to prepare Docker build context:\n{exc}',
             )
-            return
+            return False
         args = [
             'build',
             '--build-arg',
@@ -4576,25 +4747,35 @@ class MainWindow(QMainWindow):
             self._load_available_images(show_feedback=False)
             if code == 0 and on_success:
                 on_success()
+            if on_finished:
+                on_finished(code)
 
         tab.proc.finished.connect(_after_build)
         self._start_program_with_pseudo_terminal(tab, 'docker', args)
-        self._focus_tab(key)
+        if focus_tab:
+            self._focus_tab(key)
+        return True
 
     def _start_source_workspace_install(
         self,
         selection: SetupWizardSelection,
-    ) -> None:
+        *,
+        on_finished: Callable[[int], None] | None = None,
+        tab: ProcessTab | None = None,
+    ) -> bool:
         key = 'setup-source-workspace'
-        tab = self._ensure_tab(key, 'Install Source', closable=True)
+        focus_tab = tab is None
+        if tab is None:
+            tab = self._ensure_tab(key, 'Install Source', closable=True)
         if tab.is_running():
-            self._focus_tab(key)
+            if focus_tab:
+                self._focus_tab(key)
             QMessageBox.information(
                 self,
                 'Install mobipick_labs Source',
                 'A source workspace install is already running.',
             )
-            return
+            return False
         try:
             workspace = self._prepare_source_workspace(selection)
         except (OSError, ValueError) as exc:
@@ -4603,7 +4784,7 @@ class MainWindow(QMainWindow):
                 'Install mobipick_labs Source',
                 f'Failed to prepare the source workspace:\n{exc}',
             )
-            return
+            return False
         self._ensure_network(log_key='log')
         workspace_env = self._workspace_runtime_env(
             workspace.name,
@@ -4651,14 +4832,18 @@ class MainWindow(QMainWindow):
                 workspace,
                 selection,
             )
+            if on_finished:
+                on_finished(code)
 
         tab.proc.finished.connect(_after_source_install)
         self._start_program_with_pseudo_terminal(tab, 'docker', args)
-        self._focus_tab(key)
+        if focus_tab:
+            self._focus_tab(key)
         self._log_info(
             f'installing mobipick_labs source workspace at '
             f'{workspace.directory}'
         )
+        return True
 
     def _prepare_source_workspace(
         self,

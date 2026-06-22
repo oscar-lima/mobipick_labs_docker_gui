@@ -16,13 +16,23 @@ if TYPE_CHECKING:  # pragma: no cover
 class ProcessTab:
     """Wraps a QProcess and associated log widget for a tab."""
 
-    def __init__(self, key: str, label: str, parent: 'MainWindow', closable: bool):
+    def __init__(
+        self,
+        key: str,
+        label: str,
+        parent: 'MainWindow',
+        closable: bool,
+        *,
+        output: LogTextEdit | None = None,
+        notify_parent_finished: bool = True,
+    ):
         self.key = key
         self.label = label
         self.parent = parent
         self.closable = closable
+        self.notify_parent_finished = notify_parent_finished
 
-        self.output = LogTextEdit()
+        self.output = output or LogTextEdit()
 
         self.environment_overrides: dict[str, str] = {}
         self.proc = QProcess(parent)
@@ -33,29 +43,24 @@ class ProcessTab:
         self.proc.readyReadStandardError.connect(self._on_stderr_buf)
         self.proc.finished.connect(self._drain_remaining)
 
-        self.proc.finished.connect(lambda code, st: parent.on_task_finished(self.key, code, st))
+        if notify_parent_finished:
+            self.proc.finished.connect(
+                lambda code, st: parent.on_task_finished(self.key, code, st)
+            )
 
         self.container_name: str | None = None
         self.exec_id: str | None = None
         self.xhost_token: str | None = None
 
     def start_shell(self, bash_cmd: str):
-        self.parent._append_gui_html(
-            self.key,
-            f'<i>&gt; {html.escape(bash_cmd)}</i>',
-            color=self.parent._command_log_color,
-        )
+        self._append_command_line(bash_cmd)
         self.parent._log_cmd(bash_cmd)
         self._apply_env()
         self.proc.start('bash', ['-lc', bash_cmd])
 
     def start_program(self, program: str, args: list[str]):
         cmdline = program + ' ' + ' '.join(args)
-        self.parent._append_gui_html(
-            self.key,
-            f'<i>&gt; {html.escape(cmdline)}</i>',
-            color=self.parent._command_log_color,
-        )
+        self._append_command_line(cmdline)
         self.parent._log_cmd([program] + args)
         self._apply_env()
         self.proc.start(program, args)
@@ -102,11 +107,24 @@ class ProcessTab:
             return
         data = self.parent._filter_terminal_escapes(data)
         data = self.parent._collapse_carriage_returns(data)
-        self.parent._prepare_tab_for_origin(self.key, 'container')
+        if self.notify_parent_finished:
+            self.parent._prepare_tab_for_origin(self.key, 'container')
         if '\x1b[' in data:
             self.output.enqueue(True, ansi_to_html(data))
         else:
             self.output.enqueue(False, data)
+
+    def _append_command_line(self, command: str) -> None:
+        line = f'<i>&gt; {html.escape(command)}</i>'
+        if self.notify_parent_finished:
+            self.parent._append_gui_html(
+                self.key,
+                line,
+                color=self.parent._command_log_color,
+            )
+            return
+        color = html.escape(self.parent._command_log_color)
+        self.append_line_html(f'<span style="color:{color}">{line}</span>')
 
     def _apply_env(self):
         env = self.parent._build_process_environment(self.environment_overrides)

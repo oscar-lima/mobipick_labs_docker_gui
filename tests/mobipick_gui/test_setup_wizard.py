@@ -4,7 +4,7 @@ import os
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
 import pytest
-from PyQt5.QtWidgets import QApplication, QDialog
+from PyQt5.QtWidgets import QApplication, QDialog, QWizard
 
 from mobipick_gui.config import CONFIG
 import mobipick_gui.main_window as main_window_module
@@ -67,6 +67,57 @@ def test_wizard_collects_source_workspace_selection(tmp_path):
     wizard._skip_step(wizard.install_source_workspace)
 
     assert wizard.selection().install_source_workspace is False
+
+    wizard.deleteLater()
+    app.processEvents()
+
+
+def test_wizard_start_setup_shows_progress_then_summary(tmp_path):
+    app = QApplication.instance() or QApplication([])
+    wizard = ImageSetupWizard(
+        public_images=['ozkrelo/x_mobipick_labs:noetic-v1.2'],
+        default_image='ozkrelo/x_mobipick_labs:noetic-v1.2',
+        host_user='testuser',
+        host_uid='1001',
+        host_gid='1001',
+        base_image='ozkrelo/x_mobipick_labs:noetic-v1.2',
+        target_image='ozkrelo/x_mobipick_labs:host_user_from_1.2',
+        workspace_names=[],
+        configuration_paths=[],
+        source_master_folder=str(tmp_path / 'master'),
+        source_workspace_name='clean_mobipick_labs_ws',
+        source_repository='https://github.com/DFKI-NI/mobipick_labs.git',
+        source_branch='noetic',
+        source_image='ozkrelo/x_mobipick_labs:host_user_from_1.2',
+    )
+
+    def start_setup(_selection):
+        wizard.begin_setup()
+        wizard.append_progress_html('<b>Running install</b>')
+        wizard.complete_setup(
+            success=True,
+            summary_lines=['Installed source workspace.'],
+        )
+        return True
+
+    wizard.set_setup_start_handler(start_setup)
+    wizard.show()
+    app.processEvents()
+    while wizard.currentId() != wizard._source_page_id:
+        wizard.next()
+        app.processEvents()
+    wizard.accept()
+    wizard.progress_log._flush()
+
+    assert wizard.currentId() == wizard._progress_page_id
+    assert wizard.button(QWizard.NextButton).isEnabled()
+    assert 'Running install' in wizard.progress_log.toHtml()
+
+    wizard.next()
+
+    assert wizard.currentId() == wizard._summary_page_id
+    assert wizard.buttonText(QWizard.FinishButton) == 'Finish Setup'
+    assert wizard.summary_edit.toPlainText() == 'Installed source workspace.'
 
     wizard.deleteLater()
     app.processEvents()
