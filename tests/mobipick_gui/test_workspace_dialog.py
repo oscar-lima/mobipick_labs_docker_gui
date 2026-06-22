@@ -2,7 +2,7 @@ import os
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
-from PyQt5.QtWidgets import QApplication
+from PyQt5.QtWidgets import QApplication, QHeaderView
 
 from mobipick_gui.workspace_dialog import WorkspaceManagerDialog
 from mobipick_gui.workspaces import (
@@ -41,6 +41,18 @@ def test_workspace_dialog_offers_known_combo_values(tmp_path):
     assert dialog.image_edit.currentText() == 'example/existing:image'
     assert dialog.button_config_edit.findData(str(tmp_path / 'buttons.yaml')) >= 0
     assert dialog.launch_config_edit.findData(str(tmp_path / 'launch.yaml')) >= 0
+
+    dialog.deleteLater()
+    app.processEvents()
+
+
+def test_workspace_dialog_path_column_stretches_with_window(tmp_path):
+    app, dialog, _registry = _dialog_with_workspace(tmp_path)
+    header = dialog.tree.header()
+
+    assert header.sectionResizeMode(0) == QHeaderView.ResizeToContents
+    assert header.sectionResizeMode(1) == QHeaderView.Stretch
+    assert header.sectionResizeMode(4) == QHeaderView.ResizeToContents
 
     dialog.deleteLater()
     app.processEvents()

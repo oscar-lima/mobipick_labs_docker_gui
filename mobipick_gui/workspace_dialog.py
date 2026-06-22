@@ -17,6 +17,7 @@ from PyQt5.QtWidgets import (
     QFileDialog,
     QFormLayout,
     QGroupBox,
+    QHeaderView,
     QHBoxLayout,
     QInputDialog,
     QLabel,
@@ -96,6 +97,12 @@ class WorkspaceManagerDialog(QDialog):
         )
         self.tree.setRootIsDecorated(False)
         self.tree.setAlternatingRowColors(True)
+        header = self.tree.header()
+        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.Stretch)
+        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(4, QHeaderView.ResizeToContents)
         self.tree.itemSelectionChanged.connect(self._load_selected)
         root.addWidget(self.tree, 2)
 
@@ -375,7 +382,7 @@ class WorkspaceManagerDialog(QDialog):
             self.tree.addTopLevelItem(item)
             if workspace.name == current:
                 selected_item = item
-        for column in range(5):
+        for column in (0, 2, 3, 4):
             self.tree.resizeColumnToContents(column)
         if selected_item:
             self.tree.setCurrentItem(selected_item)

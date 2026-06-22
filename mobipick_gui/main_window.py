@@ -768,7 +768,12 @@ class DockerCpConfigDialog(QDialog):
     def _make_table(self, first_header: str, second_header: str) -> QTableWidget:
         table = QTableWidget(0, 2)
         table.setHorizontalHeaderLabels([first_header, second_header])
-        table.horizontalHeader().setStretchLastSection(True)
+        table.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
+        header = table.horizontalHeader()
+        header.setStretchLastSection(False)
+        header.setMinimumSectionSize(180)
+        header.setSectionResizeMode(0, QHeaderView.Stretch)
+        header.setSectionResizeMode(1, QHeaderView.Stretch)
         table.itemChanged.connect(lambda _item: self._update_preview())
         return table
 

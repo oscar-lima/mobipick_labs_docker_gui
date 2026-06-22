@@ -12,6 +12,9 @@ Cache Docker images locally (`docker pull ozkrelo/x_mobipick_labs:noetic-v1.1`) 
 ## Coding Style & Naming Conventions
 Follow PEP 8 with four-space indents and keep functions under 80 columns where practical. Qt derived classes stay in CamelCase, while helpers, signals, and module-level constants use snake_case and UPPER_SNAKE. Continue annotating public APIs with type hints and short docstrings explaining side effects. Prefer logging to the GUI log tab instead of raw `print` to retain colour formatting.
 
+## GUI Layout Guidelines
+Dialogs and tool windows must use responsive horizontal sizing for long user-editable values such as file paths, commands, Docker image tags, and workspace paths. For `QTableWidget` and `QTreeWidget` views, assign at least one content-heavy column a `QHeaderView.Stretch` resize mode instead of leaving important fields at fixed widths; resize-to-contents columns should be limited to compact labels, buttons, status, and short identifiers. When adding or adjusting a window, verify that widening the window makes the relevant path or command fields wider without requiring the user to drag column separators manually.
+
 ## Testing Guidelines
 Add regression tests under a top-level `tests/` package (create it if missing) and mirror the package path (e.g., `tests/mobipick_gui/test_process_tab.py`). Use `pytest` plus `pytest-qt` for widget exercises, and stub Docker subprocesses with `unittest.mock` so tests run without containers. Name tests after the scenario (`test_roscore_button_disables_when_process_stops`) and include a smoke test that launches the application headless to verify resource loading.
 
