@@ -19,7 +19,7 @@ ros:
   remote_enabled_by_default: false                      # keep local roscore/simulation mode selected on startup
 
 window_layout:
-  state_file: "~/.config/mobipick-labs-docker-gui/window_layout.yaml"  # writable per-user window positions
+  state_file: "~/.config/mobipick-labs-docker-gui/window_layouts/{workspace}.yaml"  # writable per-workspace window positions
   auto_apply: true                                      # when true, apply saved sizes/positions to matching windows after they appear
   apply_delay_ms: "auto"                                # wait this long before applying layout; "auto" waits until the last auto-launch timeline entry finishes
 

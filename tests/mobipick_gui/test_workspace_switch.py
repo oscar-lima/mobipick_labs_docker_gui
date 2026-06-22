@@ -123,6 +123,70 @@ buttons:
     app.processEvents()
 
 
+def test_workspace_switch_reloads_workspace_window_layout(tmp_path, monkeypatch):
+    registry_path = tmp_path / 'workspaces.yaml'
+    registry = WorkspaceRegistry(registry_path)
+    registry.upsert(
+        RosWorkspace(name='gpt_ws', path=str(tmp_path / 'gpt_ws'))
+    )
+    registry.upsert(
+        RosWorkspace(
+            name='rae_upom_mobipick_ws',
+            path=str(tmp_path / 'rae_upom_mobipick_ws'),
+        )
+    )
+    registry.active = 'gpt_ws'
+    registry.save()
+
+    layout_dir = tmp_path / 'window_layouts'
+    layout_dir.mkdir()
+    (layout_dir / 'gpt_ws.yaml').write_text(
+        'windows:\n  - title: GPT\n',
+        encoding='utf-8',
+    )
+    (layout_dir / 'rae_upom_mobipick_ws.yaml').write_text(
+        'windows:\n  - title: RAE\n',
+        encoding='utf-8',
+    )
+
+    window_layout_cfg = copy.deepcopy(CONFIG['window_layout'])
+    window_layout_cfg['state_file'] = str(layout_dir / '{workspace}.yaml')
+    monkeypatch.setitem(CONFIG, 'window_layout', window_layout_cfg)
+    monkeypatch.setenv('MOBIPICK_WORKSPACE_CONFIG', str(registry_path))
+    monkeypatch.setattr(
+        MainWindow,
+        '_discover_filtered_image_records',
+        lambda self: ([{'ref': 'ozkrelo/x_mobipick_labs:noetic-v1.1'}], None),
+    )
+    monkeypatch.setattr(
+        MainWindow,
+        'update_sim_status_from_poll',
+        lambda self, force=False: None,
+    )
+    monkeypatch.setattr(
+        QMessageBox,
+        'question',
+        lambda *args, **kwargs: QMessageBox.Yes,
+    )
+
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow(verbosity=1)
+    window.poll_timer.stop()
+    window._sigint_timer.stop()
+
+    assert window._window_layout_path == layout_dir / 'gpt_ws.yaml'
+    assert window._window_layout_manager._layout['windows'][0]['title'] == 'GPT'
+
+    assert window._activate_workspace('rae_upom_mobipick_ws')
+
+    assert window._window_layout_path == layout_dir / 'rae_upom_mobipick_ws.yaml'
+    assert window._window_layout_manager.state_file == window._window_layout_path
+    assert window._window_layout_manager._layout['windows'][0]['title'] == 'RAE'
+
+    window.deleteLater()
+    app.processEvents()
+
+
 def test_workspace_switch_selects_first_matching_image(tmp_path, monkeypatch):
     images_cfg = copy.deepcopy(CONFIG['images'])
     images_cfg['default'] = 'example/mobipick:default'

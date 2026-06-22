@@ -205,7 +205,7 @@ Default per-user state locations:
 ```text
 ~/.config/mobipick-labs-docker-gui/gui_settings.yaml
 ~/.config/mobipick-labs-docker-gui/workspaces.yaml
-~/.config/mobipick-labs-docker-gui/window_layout.yaml
+~/.config/mobipick-labs-docker-gui/window_layouts/{workspace}.yaml
 ~/.config/mobipick-labs-docker-gui/docker_cp_image_tag.yaml
 ~/.config/mobipick-labs-docker-gui/launch_sequences/
 ~/.config/mobipick-labs-docker-gui/profiles/
@@ -361,8 +361,11 @@ MP4, `ffmpeg.log`, and saved HTML logs when requested.
 
 Window layout capture uses `WindowLayoutManager` plus `wmctrl` and `xprop`.
 The manager records the baseline windows present when the GUI starts, excludes
-the GUI/helper windows during capture, and applies saved positions to matching
-new windows after the configured delay.
+the GUI/helper windows during capture, stores a separate layout for each active
+workspace, and applies saved positions to matching new windows after the
+configured delay. The `window_layout.state_file` setting may include
+`{workspace}` or `{workspace_slug}`; paths without a placeholder are treated as
+a base location and expanded into one YAML file per workspace.
 
 ## Remote ROS master mode
 

@@ -190,7 +190,9 @@ CONFIG_DEFAULTS: Dict[str, Dict] = {
         'remote_enabled_by_default': False,
     },
     'window_layout': {
-        'state_file': str(WINDOW_LAYOUT_FILE),
+        'state_file': str(
+            default_user_config_dir() / 'window_layouts' / '{workspace}.yaml'
+        ),
         'auto_apply': True,
         'apply_delay_ms': 'auto',
     },

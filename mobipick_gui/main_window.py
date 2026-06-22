@@ -1170,11 +1170,10 @@ class MainWindow(QMainWindow):
             self._window_layout_auto_apply = raw_auto_apply.strip().lower() not in {'0', 'false', 'no', 'off'}
         else:
             self._window_layout_auto_apply = bool(raw_auto_apply)
-        raw_layout_path = self._window_layout_cfg.get('state_file') or str(WINDOW_LAYOUT_FILE)
-        layout_path = Path(raw_layout_path).expanduser()
-        if not layout_path.is_absolute():
-            layout_path = PROJECT_ROOT / layout_path
-        self._window_layout_path = layout_path
+        self._window_layout_path_template = (
+            self._window_layout_cfg.get('state_file') or str(WINDOW_LAYOUT_FILE)
+        )
+        self._window_layout_path = self._workspace_window_layout_path()
         self._window_layout_delay_ms = self._compute_window_layout_delay_ms()
         self._window_layout_manager = WindowLayoutManager(
             state_file=self._window_layout_path,
@@ -2739,6 +2738,7 @@ class MainWindow(QMainWindow):
 
         self._reset_workspace_tabs()
         self._reload_workspace_profile()
+        self._reload_window_layout_for_workspace()
         if target_image:
             self._select_image(target_image, log_selection=False)
         self._create_workspace_tabs()
@@ -4408,6 +4408,38 @@ CMD ["bash"]
             return int(max_at * 1000) + 4000
         except Exception:
             return 0
+
+    def _workspace_window_layout_path(self) -> Path:
+        workspace_name = str(self._workspace_registry.active or '').strip()
+        workspace_slug = self._normalize_workspace_name(
+            workspace_name or 'docker_image_default'
+        )
+        template = str(self._window_layout_path_template or WINDOW_LAYOUT_FILE)
+        if '{workspace' in template:
+            formatted = template.format(
+                workspace=workspace_slug,
+                workspace_slug=workspace_slug,
+            )
+            return self._resolve_window_layout_path(formatted)
+
+        base_path = self._resolve_window_layout_path(template)
+        if base_path.suffix:
+            return base_path.with_suffix('') / f'{workspace_slug}{base_path.suffix}'
+        return base_path / f'{workspace_slug}.yaml'
+
+    def _resolve_window_layout_path(self, value: str) -> Path:
+        layout_path = Path(value).expanduser()
+        if not layout_path.is_absolute():
+            layout_path = PROJECT_ROOT / layout_path
+        return layout_path
+
+    def _reload_window_layout_for_workspace(self) -> None:
+        self._window_layout_path = self._workspace_window_layout_path()
+        self._window_layout_manager.state_file = self._window_layout_path
+        self._window_layout_manager.load_layout()
+        if self._window_layout_dialog is not None:
+            self._window_layout_dialog.deleteLater()
+            self._window_layout_dialog = None
 
     def _ensure_window_layout_dialog(self) -> QDialog:
         if self._window_layout_dialog is not None:
