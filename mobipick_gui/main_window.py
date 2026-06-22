@@ -1810,7 +1810,6 @@ class MainWindow(QMainWindow):
             return
         dialog = QDialog(self)
         dialog.setWindowTitle('Configuration Paths')
-        dialog.resize(760, 420)
         layout = QVBoxLayout(dialog)
         legend = QLabel(
             'These paths are affected by the GUI. Manual editing is not '
@@ -1854,6 +1853,7 @@ class MainWindow(QMainWindow):
             )
             paths.setCellWidget(row, 2, copy_button)
             paths.setCellWidget(row, 3, show_button)
+        paths.resizeColumnsToContents()
         layout.addWidget(paths)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Close)
@@ -1872,7 +1872,30 @@ class MainWindow(QMainWindow):
 
         dialog.finished.connect(self._on_configuration_paths_closed)
         self._config_paths_dialog = dialog
+        self._resize_configuration_paths_dialog(dialog, paths)
         dialog.show()
+
+    def _resize_configuration_paths_dialog(
+        self,
+        dialog: QDialog,
+        paths: QTableWidget,
+    ) -> None:
+        desired_width = (
+            paths.verticalHeader().width()
+            + sum(
+                max(paths.columnWidth(column), paths.sizeHintForColumn(column))
+                for column in range(paths.columnCount())
+            )
+            + paths.frameWidth() * 2
+            + 56
+        )
+        screen = QGuiApplication.screenAt(self.frameGeometry().center())
+        if screen is None:
+            screen = QGuiApplication.primaryScreen()
+        if screen is not None:
+            available = screen.availableGeometry()
+            desired_width = min(desired_width, max(760, available.width() - 80))
+        dialog.resize(max(760, desired_width), 420)
 
     def _configuration_path_rows(self) -> list[tuple[str, Path]]:
         rows = user_configuration_paths(
