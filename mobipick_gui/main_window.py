@@ -2603,6 +2603,21 @@ class MainWindow(QMainWindow):
             str(self._images_cfg.get('default', '') or ''),
         )
 
+    def _workspace_match_image(
+        self,
+        name: str | None,
+        choices: list[str] | None = None,
+    ) -> str:
+        workspace_name = str(name or '').strip()
+        image_choices = choices if choices is not None else self._image_choices
+        for image_ref in image_choices:
+            if self._image_compatible_with_workspace(
+                image_ref,
+                workspace_name,
+            ) is True:
+                return image_ref
+        return ''
+
     def _populate_workspace_combo(self) -> None:
         selected = self._workspace_registry.active
         self.workspace_combo.blockSignals(True)
@@ -2677,7 +2692,10 @@ class MainWindow(QMainWindow):
             self._populate_workspace_combo()
             return False
 
-        target_image = self._workspace_image(name)
+        target_image = (
+            self._workspace_match_image(name)
+            or self._workspace_image(name)
+        )
         if target_image and target_image not in self._image_choices:
             QMessageBox.warning(
                 self,
@@ -2854,8 +2872,9 @@ class MainWindow(QMainWindow):
     def _apply_imported_workspace_settings(self) -> None:
         self._reset_workspace_tabs()
         self._reload_workspace_profile()
-        target_image = self._workspace_image(
-            self._workspace_registry.active
+        target_image = (
+            self._workspace_match_image(self._workspace_registry.active)
+            or self._workspace_image(self._workspace_registry.active)
         )
         if target_image and target_image in self._image_choices:
             self._select_image(target_image, log_selection=False)
@@ -4105,8 +4124,12 @@ CMD ["bash"]
         else:
             ordered_choices = list(choices)
 
-        workspace_image = self._workspace_image(
-            self._workspace_registry.active
+        workspace_image = (
+            self._workspace_match_image(
+                self._workspace_registry.active,
+                ordered_choices,
+            )
+            or self._workspace_image(self._workspace_registry.active)
         )
         preferred_image = workspace_image or self._selected_image
         if preferred_image in ordered_choices:

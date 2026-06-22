@@ -199,6 +199,10 @@ may include:
 The image tooltip shows the container user and whether host workspace mounting
 is enabled.
 
+When switching ROS 1 workspaces, the GUI selects the first available Docker
+image marked as a **workspace match** for that workspace. If no match is
+available, it falls back to the workspace's saved image or the GUI default.
+
 Use **View > Refresh Images** after pulling, building, or removing Docker
 images.
 

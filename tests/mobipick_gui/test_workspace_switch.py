@@ -1,9 +1,11 @@
+import copy
 import os
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
 from PyQt5.QtWidgets import QApplication, QMessageBox
 
+from mobipick_gui.config import CONFIG
 from mobipick_gui.main_window import MainWindow
 from mobipick_gui.workspaces import RosWorkspace, WorkspaceRegistry
 
@@ -116,6 +118,95 @@ buttons:
         'MOBIPICK_WORKSPACE_MOUNT_TARGET=' in argument
         for argument in env_args
     )
+
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_workspace_switch_selects_first_matching_image(tmp_path, monkeypatch):
+    images_cfg = copy.deepcopy(CONFIG['images'])
+    images_cfg['default'] = 'example/mobipick:default'
+    images_cfg['profiles'] = [
+        {
+            'ref': 'example/mobipick:default',
+            'user': 'root',
+            'supports_host_workspaces': False,
+            'compatible_workspaces': ['Docker image default'],
+        },
+        {
+            'ref': 'example/mobipick:gpt',
+            'user': 'host',
+            'supports_host_workspaces': True,
+            'compatible_workspaces': ['gpt_ws'],
+        },
+        {
+            'ref': 'example/mobipick:rae-first',
+            'user': 'host',
+            'supports_host_workspaces': True,
+            'compatible_workspaces': ['rae_upom_mobipick_ws'],
+        },
+        {
+            'ref': 'example/mobipick:rae-second',
+            'user': 'host',
+            'supports_host_workspaces': True,
+            'compatible_workspaces': ['rae_upom_mobipick_ws'],
+        },
+    ]
+    monkeypatch.setitem(CONFIG, 'images', images_cfg)
+
+    registry_path = tmp_path / 'workspaces.yaml'
+    registry = WorkspaceRegistry(registry_path)
+    registry.upsert(
+        RosWorkspace(
+            name='gpt_ws',
+            path=str(tmp_path / 'gpt_ws'),
+        )
+    )
+    registry.upsert(
+        RosWorkspace(
+            name='rae_upom_mobipick_ws',
+            path=str(tmp_path / 'rae_upom_mobipick_ws'),
+            image='example/mobipick:legacy-registered',
+        )
+    )
+    registry.active = 'gpt_ws'
+    registry.save()
+
+    images = [
+        {'ref': 'example/mobipick:default'},
+        {'ref': 'example/mobipick:gpt'},
+        {'ref': 'example/mobipick:rae-first'},
+        {'ref': 'example/mobipick:rae-second'},
+        {'ref': 'example/mobipick:legacy-registered'},
+    ]
+    monkeypatch.setenv('MOBIPICK_WORKSPACE_CONFIG', str(registry_path))
+    monkeypatch.setattr(
+        MainWindow,
+        '_discover_filtered_image_records',
+        lambda self: (images, None),
+    )
+    monkeypatch.setattr(
+        MainWindow,
+        'update_sim_status_from_poll',
+        lambda self, force=False: None,
+    )
+    monkeypatch.setattr(
+        QMessageBox,
+        'question',
+        lambda *args, **kwargs: QMessageBox.Yes,
+    )
+
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow(verbosity=1)
+    window.poll_timer.stop()
+    window._sigint_timer.stop()
+
+    assert window._selected_image == 'example/mobipick:gpt'
+
+    assert window._activate_workspace('rae_upom_mobipick_ws')
+
+    assert window._workspace_registry.active == 'rae_upom_mobipick_ws'
+    assert window._selected_image == 'example/mobipick:rae-first'
 
     window.deleteLater()
     app.processEvents()
