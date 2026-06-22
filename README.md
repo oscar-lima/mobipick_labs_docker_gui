@@ -107,8 +107,9 @@ sudo usermod -aG docker "$USER"
 Log out and back in after changing Docker group membership, or start a shell
 with `newgrp docker`.
 
-Pull at least one Mobipick image before launching the GUI, or use the setup
-wizard on first launch:
+Use the setup wizard on first launch to pull at least one Mobipick image on
+the host PC with streamed output. If you choose the manual wizard option, run
+one of these commands and confirm in the wizard when it finishes:
 
 ```bash
 docker pull ozkrelo/x_mobipick_labs:noetic-v1.1
@@ -339,9 +340,10 @@ Image behavior is controlled by `images` in `gui_settings.yaml`.
   workspace support, compatible workspaces, working directory, entrypoint, and
   tooltip description.
 
-The setup wizard can pull public images, choose a default image, build a
-host-user development image, and clone/build `DFKI-NI/mobipick_labs` from
-source in a host-mounted workspace. Each optional wizard page has a skip button.
+The setup wizard can pull public images on the host PC with streamed output,
+pause for a manual pull confirmation, choose a default image, build a host-user
+development image, and clone/build `DFKI-NI/mobipick_labs` from source in a
+host-mounted workspace. Each optional wizard page has a skip button.
 It does not enable `docker cp` paths by default; configure any copy rules later
 from **Tools > Docker > Configure Docker cp Paths**.
 The custom image builder writes a Docker build context under the per-user data

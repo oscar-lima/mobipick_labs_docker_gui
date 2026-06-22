@@ -4265,6 +4265,17 @@ class MainWindow(QMainWindow):
                     validation_error,
                 )
                 return
+        pull_public_images_automatically = (
+            selection.pull_public_images
+            and selection.public_images
+            and selection.public_image_pull_mode != 'manual'
+        )
+        if pull_public_images_automatically:
+            if not self._confirm_host_image_pull(selection.public_images):
+                return
+        elif selection.pull_public_images and selection.public_images:
+            if not self._confirm_manual_image_pull(selection.public_images):
+                return
 
         updates = {
             'setup_wizard': {
@@ -4330,11 +4341,11 @@ class MainWindow(QMainWindow):
         wait_for_public_pull = (
             selection.install_source_workspace
             and not wait_for_custom_image
-            and selection.pull_public_images
+            and pull_public_images_automatically
             and selection.source_image in selection.public_images
         )
 
-        if selection.pull_public_images and selection.public_images:
+        if pull_public_images_automatically:
             if wait_for_public_pull:
                 self._start_image_pulls(
                     selection.public_images,
@@ -4358,6 +4369,69 @@ class MainWindow(QMainWindow):
         if self._image_choices:
             self._load_available_images(show_feedback=False)
         self._log_info('setup wizard settings saved')
+
+    def _confirm_host_image_pull(self, images: list[str]) -> bool:
+        commands = '\n'.join(f'docker pull {image}' for image in images)
+        message = QMessageBox(self)
+        message.setIcon(QMessageBox.Question)
+        message.setWindowTitle('Pull Docker Images')
+        message.setText(
+            'Pull the selected Docker image(s) on this PC now?'
+        )
+        message.setInformativeText(
+            'The terminal output will stream into the Pull Images tab.\n\n'
+            f'{commands}'
+        )
+        pull_button = message.addButton(
+            'Pull on This PC',
+            QMessageBox.AcceptRole,
+        )
+        message.addButton(QMessageBox.Cancel)
+        message.setDefaultButton(pull_button)
+        message.exec_()
+        return message.clickedButton() is pull_button
+
+    def _confirm_manual_image_pull(self, images: list[str]) -> bool:
+        commands = '\n'.join(f'docker pull {image}' for image in images)
+        dialog = QDialog(self)
+        dialog.setWindowTitle('Manual Docker Pull')
+
+        layout = QVBoxLayout(dialog)
+        message = QLabel(
+            'Pull the selected Docker image(s) in a host terminal, then '
+            'confirm when they are available locally.'
+        )
+        message.setWordWrap(True)
+        layout.addWidget(message)
+
+        command_edit = QTextEdit()
+        command_edit.setAcceptRichText(False)
+        command_edit.setReadOnly(True)
+        command_edit.setPlainText(commands)
+        command_edit.setMinimumHeight(90)
+        command_edit.setMinimumWidth(560)
+        command_edit.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        layout.addWidget(command_edit)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Cancel)
+        done_button = buttons.addButton(
+            'I Pulled These Images',
+            QDialogButtonBox.AcceptRole,
+        )
+
+        def _copy_commands() -> None:
+            QApplication.clipboard().setText(commands)
+
+        copy_button = buttons.addButton(
+            'Copy Command',
+            QDialogButtonBox.ActionRole,
+        )
+        copy_button.clicked.connect(_copy_commands)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        done_button.setDefault(True)
+        return dialog.exec_() == QDialog.Accepted
 
     def _validate_custom_image_selection(
         self,
@@ -6018,7 +6092,8 @@ CMD ["bash"]
         layout = QVBoxLayout(dialog)
         message = QLabel(
             'The configured default docker image is not available locally.\n'
-            f'Run the following command in a terminal to install "{image_ref}":'
+            f'Pull "{image_ref}" on this PC now, or pull it manually and '
+            'confirm when it is available locally.'
         )
         message.setWordWrap(True)
         layout.addWidget(message)
@@ -6027,6 +6102,8 @@ CMD ["bash"]
         command_edit = QLineEdit(command)
         command_edit.setReadOnly(True)
         command_edit.setFocusPolicy(Qt.StrongFocus)
+        command_edit.setMinimumWidth(520)
+        command_edit.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         command_edit.selectAll()
         command_row.addWidget(command_edit)
 
@@ -6041,8 +6118,27 @@ CMD ["bash"]
         command_row.addWidget(copy_button)
         layout.addLayout(command_row)
 
-        button_box = QDialogButtonBox(QDialogButtonBox.Ok)
-        button_box.accepted.connect(dialog.accept)
+        button_box = QDialogButtonBox(QDialogButtonBox.Cancel)
+        pull_button = button_box.addButton(
+            'Pull on This PC',
+            QDialogButtonBox.AcceptRole,
+        )
+        manual_done_button = button_box.addButton(
+            'I Pulled It',
+            QDialogButtonBox.ActionRole,
+        )
+
+        def _pull_image():
+            self._start_image_pulls([image_ref])
+            dialog.accept()
+
+        def _manual_done():
+            self._load_available_images(show_feedback=False)
+            dialog.accept()
+
+        pull_button.clicked.connect(_pull_image)
+        manual_done_button.clicked.connect(_manual_done)
+        button_box.rejected.connect(dialog.reject)
         layout.addWidget(button_box)
 
         dialog.exec_()

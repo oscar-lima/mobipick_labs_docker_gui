@@ -42,6 +42,7 @@ class SetupWizardSelection:
     source_branch: str = ''
     source_image: str = ''
     activate_source_workspace: bool = False
+    public_image_pull_mode: str = 'gui'
 
 
 class ImageSetupWizard(QWizard):
@@ -140,6 +141,16 @@ class ImageSetupWizard(QWizard):
         image_layout.addRow('Images to pull:', self.public_images_edit)
         self.default_image_edit = QLineEdit(default_image)
         image_layout.addRow('Default image:', self.default_image_edit)
+        self.public_image_pull_mode = QComboBox()
+        self.public_image_pull_mode.addItem(
+            'Pull on this PC and stream output',
+            'gui',
+        )
+        self.public_image_pull_mode.addItem(
+            'I will pull manually and confirm when done',
+            'manual',
+        )
+        image_layout.addRow('Pull method:', self.public_image_pull_mode)
         self.image_blacklist_edit = QTextEdit()
         self.image_blacklist_edit.setAcceptRichText(False)
         self.image_blacklist_edit.setPlainText('\n'.join(image_blacklist))
@@ -235,6 +246,9 @@ class ImageSetupWizard(QWizard):
             source_branch=self.source_branch_edit.text().strip(),
             source_image=self.source_image_edit.text().strip(),
             activate_source_workspace=self.activate_source_workspace.isChecked(),
+            public_image_pull_mode=str(
+                self.public_image_pull_mode.currentData() or 'gui'
+            ),
         )
 
     @staticmethod

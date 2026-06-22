@@ -56,6 +56,13 @@ def test_wizard_collects_source_workspace_selection(tmp_path):
     assert selection.source_branch == 'noetic'
     assert selection.source_image == 'ozkrelo/x_mobipick_labs:host_user_from_1.2'
     assert selection.image_blacklist == ['*n8n*']
+    assert selection.public_image_pull_mode == 'gui'
+
+    wizard.public_image_pull_mode.setCurrentIndex(
+        wizard.public_image_pull_mode.findData('manual')
+    )
+
+    assert wizard.selection().public_image_pull_mode == 'manual'
 
     wizard._skip_step(wizard.install_source_workspace)
 
@@ -124,6 +131,11 @@ def test_setup_wizard_persists_custom_image_profile(
         '_start_custom_image_build',
         lambda self, selection: started.setdefault('build', selection),
     )
+    monkeypatch.setattr(
+        MainWindow,
+        '_confirm_host_image_pull',
+        lambda self, images: True,
+    )
     saved = {}
     monkeypatch.setattr(
         main_window_module,
@@ -163,6 +175,84 @@ def test_setup_wizard_persists_custom_image_profile(
     )
     assert started['pulls'] == ['ozkrelo/x_mobipick_labs:noetic-v1.1']
     assert started['build'] is selection
+
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_setup_wizard_manual_pull_pauses_before_saving(
+    tmp_path,
+    monkeypatch,
+):
+    registry_path = tmp_path / 'workspaces.yaml'
+    monkeypatch.setenv('MOBIPICK_WORKSPACE_CONFIG', str(registry_path))
+    monkeypatch.setitem(CONFIG, 'images', copy.deepcopy(CONFIG['images']))
+    monkeypatch.setattr(
+        MainWindow,
+        '_discover_filtered_image_records',
+        lambda self: (
+            [{'ref': 'ozkrelo/x_mobipick_labs:noetic-v1.1'}],
+            None,
+        ),
+    )
+    monkeypatch.setattr(
+        MainWindow,
+        'update_sim_status_from_poll',
+        lambda self, force=False: None,
+    )
+
+    calls = {'saved': False, 'pulls': False, 'source': False}
+    monkeypatch.setattr(
+        main_window_module,
+        'save_user_config_update',
+        lambda updates: calls.__setitem__('saved', True),
+    )
+    monkeypatch.setattr(
+        MainWindow,
+        '_start_image_pulls',
+        lambda self, images, **kwargs: calls.__setitem__('pulls', True),
+    )
+    monkeypatch.setattr(
+        MainWindow,
+        '_start_source_workspace_install',
+        lambda self, selection: calls.__setitem__('source', True),
+    )
+    monkeypatch.setattr(
+        MainWindow,
+        '_confirm_manual_image_pull',
+        lambda self, images: False,
+    )
+
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow(verbosity=1)
+    window.poll_timer.stop()
+    window._sigint_timer.stop()
+
+    selection = SetupWizardSelection(
+        pull_public_images=True,
+        public_images=['ozkrelo/x_mobipick_labs:noetic-v1.1'],
+        default_image='ozkrelo/x_mobipick_labs:noetic-v1.1',
+        build_custom_image=False,
+        host_user='testuser',
+        host_uid='1001',
+        host_gid='1001',
+        base_image='ozkrelo/x_mobipick_labs:noetic-v1.1',
+        target_image='ozkrelo/x_mobipick_labs:host_user_from_1.2',
+        compatible_workspace='',
+        remember_completion=True,
+        install_source_workspace=True,
+        source_master_folder=str(tmp_path / 'master'),
+        source_workspace_name='clean_mobipick_labs_ws',
+        source_repository='https://github.com/DFKI-NI/mobipick_labs.git',
+        source_branch='noetic',
+        source_image='ozkrelo/x_mobipick_labs:noetic-v1.1',
+        activate_source_workspace=False,
+        public_image_pull_mode='manual',
+    )
+
+    window._apply_setup_wizard(selection)
+
+    assert calls == {'saved': False, 'pulls': False, 'source': False}
 
     window.deleteLater()
     app.processEvents()
