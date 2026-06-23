@@ -126,6 +126,9 @@ def test_roscore_launch_uses_resolved_compose_frontend(tmp_path, monkeypatch):
     assert key == 'roscore'
     assert program == 'docker-compose'
     assert args[:4] == ['run', '--rm', '--name', 'mobipick-roscore']
+    assert '-e' in args
+    assert '--env' not in args
+    assert 'MOBIPICK_WORKSPACE_ENABLED=0' in args
 
     window.deleteLater()
     app.processEvents()

@@ -5484,7 +5484,7 @@ CMD ["bash"]
                 'MOBIPICK_WORKSPACE_MOUNT_SOURCE',
             }:
                 continue
-            env_args.extend(['--env', f'{key}={value}'])
+            env_args.extend(['-e', f'{key}={value}'])
         return env_args
 
     @staticmethod
