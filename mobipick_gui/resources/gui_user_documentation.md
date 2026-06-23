@@ -281,6 +281,14 @@ The tab search is separate from the documentation window search.
   recommended. Use the row **Copy** and **Show** buttons for one path, or
   **Copy All Paths** and **Show All Contents** for the complete list. **Show**
   opens another window with readable file contents or directory listings.
+- **Copy Full Reset Command...** is a development-only nuclear option. It
+  displays a destructive warning, lists the per-user GUI config/data roots that
+  would be deleted, and copies a terminal command to the clipboard. Nothing is
+  deleted by the GUI. The command only deletes files after you paste it into a
+  terminal and type `DELETE_MOBIPICK_GUI_CONFIG`. It removes GUI settings,
+  workspace registry data, profiles, layouts, recordings, and custom image
+  build contexts, but not Docker images, containers, ROS workspaces, the source
+  checkout, or bundled defaults.
 
 ## Tools menu
 
@@ -296,10 +304,17 @@ The tab search is separate from the documentation window search.
 
 - **Manage Images** lists Docker images matching the GUI filters and lets you
   remove selected images.
-- **Setup Wizard** opens the setup flow for pulling public images, selecting
-  defaults, building host-user images, and optionally cloning and building
-  `mobipick_labs` from source in a host-mounted workspace. Each optional wizard
-  page has **Skip This Step**.
+- **Setup Wizard** opens the setup flow. The first page checks common Ubuntu
+  host dependencies and lets you choose packages, copy an install command to
+  the clipboard, install them in a terminal, and click **Done Installing**.
+  Later pages pull public images on the host PC with streamed output, select
+  defaults, build host-user images, and optionally clone and build
+  `mobipick_labs` from source in a host-mounted workspace. The manual pull
+  option pauses setup until you confirm that the command has finished. Each
+  optional wizard page has **Skip This Step**.
+  Docker cp paths are not configured by default; add them later from
+  **Tools > Docker > Configure Docker cp Paths** when a workflow needs file
+  copies.
 - **Configure Image Filters** edits the local-image discovery filters and image
   refs or patterns that should be ignored by setup, image discovery, and Docker
   cp path setup.

@@ -1,16 +1,20 @@
 import copy
 import os
 
-os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
+os.environ['QT_QPA_PLATFORM'] = 'offscreen'
 
 import pytest
-from PyQt5.QtWidgets import QApplication, QDialog
+from PyQt5.QtWidgets import QApplication, QDialog, QWizard
 
 from mobipick_gui.config import CONFIG
 import mobipick_gui.main_window as main_window_module
 from mobipick_gui.main_window import ImageBlacklistDialog, MainWindow
 from mobipick_gui.process_tab import ProcessTab
-from mobipick_gui.setup_wizard import ImageSetupWizard, SetupWizardSelection
+from mobipick_gui.setup_wizard import (
+    HostDependency,
+    ImageSetupWizard,
+    SetupWizardSelection,
+)
 from mobipick_gui.workspaces import RosWorkspace, WorkspaceRegistry
 
 
@@ -56,10 +60,162 @@ def test_wizard_collects_source_workspace_selection(tmp_path):
     assert selection.source_branch == 'noetic'
     assert selection.source_image == 'ozkrelo/x_mobipick_labs:host_user_from_1.2'
     assert selection.image_blacklist == ['*n8n*']
+    assert selection.public_image_pull_mode == 'gui'
+
+    wizard.public_image_pull_mode.setCurrentIndex(
+        wizard.public_image_pull_mode.findData('manual')
+    )
+
+    assert wizard.selection().public_image_pull_mode == 'manual'
 
     wizard._skip_step(wizard.install_source_workspace)
 
     assert wizard.selection().install_source_workspace is False
+
+    wizard.deleteLater()
+    app.processEvents()
+
+
+def test_wizard_dependency_page_builds_copyable_install_command(tmp_path):
+    app = QApplication.instance() or QApplication([])
+    refreshed = []
+
+    def refresh_dependencies():
+        refreshed.append(True)
+        return [
+            HostDependency(
+                key='docker',
+                label='Docker Engine',
+                package='docker.io',
+                installed=True,
+                reason='Required to run containers.',
+                required=True,
+            ),
+            HostDependency(
+                key='wmctrl',
+                label='wmctrl',
+                package='wmctrl',
+                installed=False,
+                reason='Optional window layout support.',
+            ),
+            HostDependency(
+                key='ffmpeg',
+                label='FFmpeg',
+                package='ffmpeg',
+                installed=True,
+                reason='Optional recording support.',
+            ),
+        ]
+
+    wizard = ImageSetupWizard(
+        public_images=['ozkrelo/x_mobipick_labs:noetic-v1.2'],
+        default_image='ozkrelo/x_mobipick_labs:noetic-v1.2',
+        host_user='testuser',
+        host_uid='1001',
+        host_gid='1001',
+        base_image='ozkrelo/x_mobipick_labs:noetic-v1.2',
+        target_image='ozkrelo/x_mobipick_labs:host_user_from_1.2',
+        workspace_names=[],
+        configuration_paths=[],
+        source_master_folder=str(tmp_path / 'master'),
+        source_workspace_name='clean_mobipick_labs_ws',
+        source_repository='https://github.com/DFKI-NI/mobipick_labs.git',
+        source_branch='noetic',
+        source_image='ozkrelo/x_mobipick_labs:host_user_from_1.2',
+        host_dependencies=[
+            HostDependency(
+                key='docker',
+                label='Docker Engine',
+                package='docker.io',
+                installed=False,
+                reason='Required to run containers.',
+                required=True,
+            ),
+            HostDependency(
+                key='wmctrl',
+                label='wmctrl',
+                package='wmctrl',
+                installed=False,
+                reason='Optional window layout support.',
+            ),
+            HostDependency(
+                key='ffmpeg',
+                label='FFmpeg',
+                package='ffmpeg',
+                installed=True,
+                reason='Optional recording support.',
+            ),
+        ],
+        host_dependency_refresher=refresh_dependencies,
+    )
+    command = wizard.dependency_command_edit.toPlainText()
+    assert 'sudo apt install -y docker.io wmctrl' in command
+    assert 'ffmpeg' not in command
+    assert 'sudo systemctl enable --now docker' in command
+
+    wizard._dependency_checkboxes['wmctrl'].setChecked(False)
+    command = wizard.dependency_command_edit.toPlainText()
+    assert 'sudo apt install -y docker.io' in command
+    assert 'wmctrl' not in command
+
+    wizard._mark_selected_dependencies_done()
+
+    assert refreshed == [True]
+    assert not wizard._dependency_checkboxes['docker'].isChecked()
+    assert wizard._dependency_checkboxes['wmctrl'].isChecked()
+    assert 'sudo apt install -y wmctrl' in wizard.dependency_command_edit.toPlainText()
+
+    wizard.close()
+    wizard.deleteLater()
+    app.processEvents()
+
+
+def test_wizard_start_setup_shows_progress_then_summary(tmp_path):
+    app = QApplication.instance() or QApplication([])
+    wizard = ImageSetupWizard(
+        public_images=['ozkrelo/x_mobipick_labs:noetic-v1.2'],
+        default_image='ozkrelo/x_mobipick_labs:noetic-v1.2',
+        host_user='testuser',
+        host_uid='1001',
+        host_gid='1001',
+        base_image='ozkrelo/x_mobipick_labs:noetic-v1.2',
+        target_image='ozkrelo/x_mobipick_labs:host_user_from_1.2',
+        workspace_names=[],
+        configuration_paths=[],
+        source_master_folder=str(tmp_path / 'master'),
+        source_workspace_name='clean_mobipick_labs_ws',
+        source_repository='https://github.com/DFKI-NI/mobipick_labs.git',
+        source_branch='noetic',
+        source_image='ozkrelo/x_mobipick_labs:host_user_from_1.2',
+    )
+
+    def start_setup(_selection):
+        wizard.begin_setup()
+        wizard.append_progress_html('<b>Running install</b>')
+        wizard.complete_setup(
+            success=True,
+            summary_lines=['Installed source workspace.'],
+        )
+        return True
+
+    wizard.set_setup_start_handler(start_setup)
+    wizard.show()
+    app.processEvents()
+    while wizard.currentId() != wizard._source_page_id:
+        wizard.next()
+        app.processEvents()
+    wizard.accept()
+    wizard.progress_log._flush()
+
+    assert wizard.currentId() == wizard._progress_page_id
+    assert wizard.button(QWizard.NextButton).isEnabled()
+    assert 'Running install' in wizard.progress_log.toHtml()
+
+    wizard.next()
+
+    assert wizard.currentId() == wizard._summary_page_id
+    assert wizard.buttonText(QWizard.FinishButton) == 'Finish Setup'
+    assert wizard.summary_edit.toPlainText() == 'Installed source workspace.'
 
     wizard.deleteLater()
     app.processEvents()
@@ -113,6 +269,11 @@ def test_setup_wizard_persists_custom_image_profile(
         'update_sim_status_from_poll',
         lambda self, force=False: None,
     )
+    monkeypatch.setattr(
+        MainWindow,
+        '_missing_host_dependencies',
+        lambda self: [],
+    )
     started = {}
     monkeypatch.setattr(
         MainWindow,
@@ -123,6 +284,11 @@ def test_setup_wizard_persists_custom_image_profile(
         MainWindow,
         '_start_custom_image_build',
         lambda self, selection: started.setdefault('build', selection),
+    )
+    monkeypatch.setattr(
+        MainWindow,
+        '_confirm_host_image_pull',
+        lambda self, images: True,
     )
     saved = {}
     monkeypatch.setattr(
@@ -163,6 +329,84 @@ def test_setup_wizard_persists_custom_image_profile(
     )
     assert started['pulls'] == ['ozkrelo/x_mobipick_labs:noetic-v1.1']
     assert started['build'] is selection
+
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_setup_wizard_manual_pull_pauses_before_saving(
+    tmp_path,
+    monkeypatch,
+):
+    registry_path = tmp_path / 'workspaces.yaml'
+    monkeypatch.setenv('MOBIPICK_WORKSPACE_CONFIG', str(registry_path))
+    monkeypatch.setitem(CONFIG, 'images', copy.deepcopy(CONFIG['images']))
+    monkeypatch.setattr(
+        MainWindow,
+        '_discover_filtered_image_records',
+        lambda self: (
+            [{'ref': 'ozkrelo/x_mobipick_labs:noetic-v1.1'}],
+            None,
+        ),
+    )
+    monkeypatch.setattr(
+        MainWindow,
+        'update_sim_status_from_poll',
+        lambda self, force=False: None,
+    )
+
+    calls = {'saved': False, 'pulls': False, 'source': False}
+    monkeypatch.setattr(
+        main_window_module,
+        'save_user_config_update',
+        lambda updates: calls.__setitem__('saved', True),
+    )
+    monkeypatch.setattr(
+        MainWindow,
+        '_start_image_pulls',
+        lambda self, images, **kwargs: calls.__setitem__('pulls', True),
+    )
+    monkeypatch.setattr(
+        MainWindow,
+        '_start_source_workspace_install',
+        lambda self, selection: calls.__setitem__('source', True),
+    )
+    monkeypatch.setattr(
+        MainWindow,
+        '_confirm_manual_image_pull',
+        lambda self, images: False,
+    )
+
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow(verbosity=1)
+    window.poll_timer.stop()
+    window._sigint_timer.stop()
+
+    selection = SetupWizardSelection(
+        pull_public_images=True,
+        public_images=['ozkrelo/x_mobipick_labs:noetic-v1.1'],
+        default_image='ozkrelo/x_mobipick_labs:noetic-v1.1',
+        build_custom_image=False,
+        host_user='testuser',
+        host_uid='1001',
+        host_gid='1001',
+        base_image='ozkrelo/x_mobipick_labs:noetic-v1.1',
+        target_image='ozkrelo/x_mobipick_labs:host_user_from_1.2',
+        compatible_workspace='',
+        remember_completion=True,
+        install_source_workspace=True,
+        source_master_folder=str(tmp_path / 'master'),
+        source_workspace_name='clean_mobipick_labs_ws',
+        source_repository='https://github.com/DFKI-NI/mobipick_labs.git',
+        source_branch='noetic',
+        source_image='ozkrelo/x_mobipick_labs:noetic-v1.1',
+        activate_source_workspace=False,
+        public_image_pull_mode='manual',
+    )
+
+    window._apply_setup_wizard(selection)
+
+    assert calls == {'saved': False, 'pulls': False, 'source': False}
 
     window.deleteLater()
     app.processEvents()
@@ -384,6 +628,11 @@ def test_setup_wizard_does_not_auto_open_when_images_are_available(
         'update_sim_status_from_poll',
         lambda self, force=False: None,
     )
+    monkeypatch.setattr(
+        MainWindow,
+        '_missing_host_dependencies',
+        lambda self: [],
+    )
 
     app = QApplication.instance() or QApplication([])
     window = MainWindow(verbosity=1)
@@ -393,6 +642,51 @@ def test_setup_wizard_does_not_auto_open_when_images_are_available(
 
     assert window._image_choices == ['ozkrelo/x_mobipick_labs:noetic-v1.1']
     assert not window._should_auto_show_setup_wizard()
+
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_setup_wizard_auto_opens_when_host_dependency_is_missing(
+    tmp_path,
+    monkeypatch,
+):
+    registry_path = tmp_path / 'workspaces.yaml'
+    monkeypatch.setenv('MOBIPICK_WORKSPACE_CONFIG', str(registry_path))
+    setup_cfg = copy.deepcopy(CONFIG['setup_wizard'])
+    setup_cfg['completed'] = False
+    monkeypatch.setitem(CONFIG, 'setup_wizard', setup_cfg)
+    monkeypatch.setattr(
+        MainWindow,
+        '_discover_filtered_image_records',
+        lambda self: ([{'ref': 'ozkrelo/x_mobipick_labs:noetic-v1.1'}], None),
+    )
+    monkeypatch.setattr(
+        MainWindow,
+        'update_sim_status_from_poll',
+        lambda self, force=False: None,
+    )
+    monkeypatch.setattr(
+        MainWindow,
+        '_missing_host_dependencies',
+        lambda self: [
+            HostDependency(
+                key='wmctrl',
+                label='wmctrl',
+                package='wmctrl',
+                installed=False,
+                reason='Optional window layout support.',
+            )
+        ],
+    )
+
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow(verbosity=1)
+    window.poll_timer.stop()
+    window._sigint_timer.stop()
+    monkeypatch.setenv('QT_QPA_PLATFORM', 'xcb')
+
+    assert window._should_auto_show_setup_wizard()
 
     window.deleteLater()
     app.processEvents()

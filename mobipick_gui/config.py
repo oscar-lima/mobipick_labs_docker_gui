@@ -4,6 +4,7 @@ from __future__ import annotations
 import atexit
 import copy
 import os
+import shlex
 import sys
 from contextlib import ExitStack
 from pathlib import Path
@@ -1101,6 +1102,33 @@ def user_configuration_paths(
         ('Custom image build contexts', data_dir / 'image_builds'),
     ]
 
+
+def user_state_reset_paths() -> list[Path]:
+    """Return top-level per-user state roots for a full GUI reset."""
+    return [
+        default_user_config_dir(),
+        default_user_data_dir(),
+    ]
+
+
+def user_state_reset_command() -> str:
+    """Return an opt-in shell command that deletes all per-user GUI state."""
+    paths = [str(path.expanduser()) for path in user_state_reset_paths()]
+    quoted_paths = ' '.join(shlex.quote(path) for path in paths)
+    path_lines = ' '.join(shlex.quote(f'  - {path}') for path in paths)
+    return (
+        "printf '%s\\n' "
+        "'DANGER: this will permanently delete Mobipick Labs Docker GUI "
+        "per-user config and data:' "
+        f"{path_lines} "
+        "'This cannot be undone by the GUI.'; "
+        "read -r -p 'Type DELETE_MOBIPICK_GUI_CONFIG to continue: ' reply; "
+        "if [ \"$reply\" = DELETE_MOBIPICK_GUI_CONFIG ]; then "
+        f"rm -rf -- {quoted_paths}; "
+        "printf '%s\\n' 'Deleted Mobipick Labs Docker GUI per-user state.'; "
+        "else printf '%s\\n' 'Aborted. No files were deleted.'; fi"
+    )
+
 __all__ = [
     'CONFIG',
     'CONFIG_DEFAULTS',
@@ -1114,6 +1142,8 @@ __all__ = [
     'default_user_config_dir',
     'default_user_config_path',
     'default_user_data_dir',
+    'user_state_reset_command',
+    'user_state_reset_paths',
     'user_configuration_paths',
     'DOCKER_CP_CONFIG_FILE',
     'DEFAULT_YAML_PATH',

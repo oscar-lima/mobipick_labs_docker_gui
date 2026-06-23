@@ -107,8 +107,9 @@ sudo usermod -aG docker "$USER"
 Log out and back in after changing Docker group membership, or start a shell
 with `newgrp docker`.
 
-Pull at least one Mobipick image before launching the GUI, or use the setup
-wizard on first launch:
+Use the setup wizard on first launch to pull at least one Mobipick image on
+the host PC with streamed output. If you choose the manual wizard option, run
+one of these commands and confirm in the wizard when it finishes:
 
 ```bash
 docker pull ozkrelo/x_mobipick_labs:noetic-v1.1
@@ -269,7 +270,12 @@ The top-level **Settings** menu exposes migration and troubleshooting actions:
 **Export All Settings...** writes the workspace registry, per-user GUI settings,
 and workspace profiles to one portable YAML file; **Import All Settings...**
 restores that file under a chosen workspace master folder; **Show Configuration
-Paths** displays the writable config/data paths that the GUI manages.
+Paths** displays the writable config/data paths that the GUI manages; **Copy
+Full Reset Command...** shows a destructive warning and copies an opt-in
+terminal command for deleting all per-user GUI config/data roots from the PC.
+The reset command requires typing `DELETE_MOBIPICK_GUI_CONFIG` in the terminal
+before it runs `rm -rf`; it does not remove Docker images, Docker containers,
+ROS workspaces, the source checkout, or bundled package defaults.
 
 ## Docker and ROS services
 
@@ -334,9 +340,15 @@ Image behavior is controlled by `images` in `gui_settings.yaml`.
   workspace support, compatible workspaces, working directory, entrypoint, and
   tooltip description.
 
-The setup wizard can pull public images, choose a default image, build a
-host-user development image, and clone/build `DFKI-NI/mobipick_labs` from
-source in a host-mounted workspace. Each optional wizard page has a skip button.
+The setup wizard first checks common Ubuntu host dependencies and shows one
+checkbox per package so users can copy a selected `apt` command into a
+terminal, install the tools themselves, and mark the step done. It can then
+pull public images on the host PC with streamed output, pause for a manual pull
+confirmation, choose a default image, build a host-user development image, and
+clone/build `DFKI-NI/mobipick_labs` from source in a host-mounted workspace.
+Each optional wizard page has a skip button.
+It does not enable `docker cp` paths by default; configure any copy rules later
+from **Tools > Docker > Configure Docker cp Paths**.
 The custom image builder writes a Docker build context under the per-user data
 directory, copies `custom_entrypoint.sh`, adds a host-matching user, installs
 passwordless sudo, and tags the result according to the wizard fields.
@@ -463,6 +475,8 @@ When the Docker image default workspace is active, user edits are saved to
 `~/.config/mobipick-labs-docker-gui/docker_cp_image_tag.yaml`. When a ROS
 workspace is active, edits are saved to
 `~/.config/mobipick-labs-docker-gui/docker_cp_profiles/{workspace}_docker_cp_image_tag.yaml`.
+No copy rules are enabled in the bundled defaults, so fresh installs do not copy
+`pick_n_place.rviz` or any other host file unless the user adds rows here.
 The editor shows workspaces rather than Docker image tags. Add Row opens a
 path setup dialog; the host side uses a local file picker, and the container
 side can use a selected running setup container or manual path entry. Empty
