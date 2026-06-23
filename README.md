@@ -85,7 +85,9 @@ The application targets Linux desktops with X11.
 
 - Python 3.8 or newer.
 - PyQt5 5.15 or newer.
-- Docker Engine and the Docker Compose plugin available to the current user.
+- Docker Engine and Docker Compose available to the current user. The Docker
+  Compose plugin is preferred; the legacy `docker-compose` executable is also
+  supported at runtime.
 - An X11 desktop session for Gazebo, RViz, RQt, and recording.
 - Optional but recommended: NVIDIA Container Toolkit for GPU-accelerated
   simulation.

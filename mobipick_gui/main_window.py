@@ -4042,10 +4042,10 @@ class MainWindow(QMainWindow):
             ),
             HostDependency(
                 key='docker_compose',
-                label='Docker Compose plugin',
+                label='Docker Compose',
                 package='docker-compose-plugin',
                 installed=self._docker_compose_available(),
-                reason='Required because the GUI launches containers with docker compose.',
+                reason='Required because the GUI launches containers with Docker Compose.',
                 required=True,
             ),
             HostDependency(
@@ -4079,20 +4079,47 @@ class MainWindow(QMainWindow):
         ]
 
     @staticmethod
-    def _docker_compose_available() -> bool:
-        if shutil.which('docker') is None:
-            return False
+    def _compose_probe(command: list[str]) -> subprocess.CompletedProcess | None:
         try:
-            cp = subprocess.run(
-                ['docker', 'compose', 'version'],
+            return subprocess.run(
+                command,
                 check=False,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
                 timeout=2,
             )
         except (FileNotFoundError, subprocess.SubprocessError, OSError):
+            return None
+
+    @classmethod
+    def _compose_frontend_supports_run_rm(cls, prefix: list[str]) -> bool:
+        if not prefix or shutil.which(prefix[0]) is None:
             return False
-        return cp.returncode == 0
+        version = cls._compose_probe([*prefix, 'version'])
+        if version is None or version.returncode != 0:
+            return False
+        run_help = cls._compose_probe([*prefix, 'run', '--help'])
+        if run_help is None or run_help.returncode != 0:
+            return False
+        help_text = f'{run_help.stdout}\n{run_help.stderr}'
+        return '--rm' in help_text
+
+    @classmethod
+    def _compose_command_prefix(cls) -> list[str] | None:
+        for prefix in (['docker', 'compose'], ['docker-compose']):
+            if cls._compose_frontend_supports_run_rm(prefix):
+                return prefix
+        return None
+
+    @classmethod
+    def _docker_compose_available(cls) -> bool:
+        return cls._compose_command_prefix() is not None
+
+    @classmethod
+    def _compose_command(cls, *args: str) -> list[str]:
+        prefix = cls._compose_command_prefix() or ['docker', 'compose']
+        return [*prefix, *args]
 
     def _open_custom_image_builder(self) -> None:
         self._open_setup_wizard(build_custom_default=True)
@@ -4882,8 +4909,7 @@ class MainWindow(QMainWindow):
             repository=selection.source_repository,
             branch=selection.source_branch,
         )
-        args = [
-            'compose',
+        args = self._compose_command(
             'run',
             '--rm',
             '--name',
@@ -4900,7 +4926,7 @@ class MainWindow(QMainWindow):
             'bash',
             '-lc',
             self._wrap_line_buffered(command),
-        ]
+        )
 
         def _after_source_install(code: int, _status) -> None:
             self._on_source_workspace_install_finished(
@@ -4912,7 +4938,7 @@ class MainWindow(QMainWindow):
                 on_finished(code)
 
         tab.proc.finished.connect(_after_source_install)
-        self._start_program_with_pseudo_terminal(tab, 'docker', args)
+        self._start_program_with_pseudo_terminal(tab, args[0], args[1:])
         if focus_tab:
             self._focus_tab(key)
         self._log_info(
@@ -5148,8 +5174,7 @@ CMD ["bash"]
             workspace,
             image_workspace_path=self._image_workdir(self._selected_image),
         )
-        args = [
-            'compose',
+        args = self._compose_command(
             'run',
             '--rm',
             '--name',
@@ -5166,8 +5191,8 @@ CMD ["bash"]
             'bash',
             '-lc',
             self._wrap_line_buffered(command),
-        ]
-        self._start_program_with_pseudo_terminal(tab, 'docker', args)
+        )
+        self._start_program_with_pseudo_terminal(tab, args[0], args[1:])
         self._focus_tab(key)
 
     def _workspace_sim_command(self) -> str:
@@ -5402,13 +5427,13 @@ CMD ["bash"]
                 self._claim_xhost(tab, key, log_key=tab.key)
                 service = self._configured_command_service(config)
                 wrapped = self._wrap_line_buffered(full_command)
-                args = [
-                    'compose', 'run', '--rm', '--name', tab.container_name,
+                args = self._compose_command(
+                    'run', '--rm', '--name', tab.container_name,
                     '--label', f'mobipick.exec={exec_id}', '--label', f'mobipick.tab={key}',
                     *self._compose_env_args(container_name=tab.container_name),
                     service, 'bash', '-lc', wrapped
-                ]
-                tab.start_program('docker', args)
+                )
+                tab.start_program(args[0], args[1:])
                 self._schedule_host_to_container_copy(tab)
             self._focus_tab(key)
             self._update_stop_custom_enabled()
@@ -6744,16 +6769,16 @@ CMD ["bash"]
             tab.container_name = f'mpcmd-{exec_id[:10]}'
             self._claim_xhost(tab, key_target, log_key=tab.key)
             inner = f"python3 {CONTAINER_SCRIPTS_DIR}/{self._sh_quote(script)}"
-            args = [
-                'compose', 'run', '--rm', '--name', tab.container_name,
+            args = self._compose_command(
+                'run', '--rm', '--name', tab.container_name,
                 '--label', f'mobipick.exec={exec_id}', '--label', f'mobipick.tab={key_target}',
                 *self._compose_env_args(container_name=tab.container_name),
                 self._ros_tool_service(),
                 'bash',
                 '-lc',
                 self._wrap_line_buffered(inner),
-            ]
-            tab.start_program('docker', args)
+            )
+            tab.start_program(args[0], args[1:])
             self._schedule_host_to_container_copy(tab)
             self._script_active_tab_key = key_target
             self.set_script_visual('green', 'Stop Script', True)
@@ -8522,13 +8547,13 @@ CMD ["bash"]
         self._roscore_stopping = False
         self._roscore_last_start_ts = time.monotonic()
         self.set_roscore_visual('green', 'Stop Roscore', enabled=True)
-        args = [
-            'compose', 'run', '--rm', '--name', self._roscore_container_name,
+        args = self._compose_command(
+            'run', '--rm', '--name', self._roscore_container_name,
             '--label', f'mobipick.exec={exec_id}', '--label', f'mobipick.tab={tab.key}',
             *self._compose_env_args(container_name=self._roscore_container_name),
             'mobipick_cmd', 'bash', '-lc', self._wrap_line_buffered(inner)
-        ]
-        tab.start_program('docker', args)
+        )
+        tab.start_program(args[0], args[1:])
         self._schedule_host_to_container_copy(tab)
         self._focus_tab('roscore')
 
@@ -8673,16 +8698,16 @@ CMD ["bash"]
 
             self._claim_xhost(tab, 'sim', log_key=tab.key)
 
-            args = [
-                'compose', 'run', '--rm', '--name', self._sim_container_name,
+            args = self._compose_command(
+                'run', '--rm', '--name', self._sim_container_name,
                 '--label', f'mobipick.exec={exec_id}', '--label', f'mobipick.tab={tab.key}',
                 *self._compose_env_args(),
                 'mobipick',
                 'bash',
                 '-lc',
                 self._wrap_line_buffered(self._workspace_sim_command()),
-            ]
-            tab.start_program('docker', args)
+            )
+            tab.start_program(args[0], args[1:])
             self._schedule_host_to_container_copy(tab)
             self._focus_tab('sim')
 
@@ -9079,16 +9104,16 @@ CMD ["bash"]
             tab.container_name = f'mpcmd-{exec_id[:10]}'
             self._claim_xhost(tab, 'tables', log_key=tab.key)
             inner = self._tables_demo_command()
-            args = [
-                'compose', 'run', '--rm', '--name', tab.container_name,
+            args = self._compose_command(
+                'run', '--rm', '--name', tab.container_name,
                 '--label', f'mobipick.exec={exec_id}', '--label', f'mobipick.tab={tab.key}',
                 *self._compose_env_args(container_name=tab.container_name),
                 self._ros_tool_service(),
                 'bash',
                 '-lc',
                 self._wrap_line_buffered(inner),
-            ]
-            tab.start_program('docker', args)
+            )
+            tab.start_program(args[0], args[1:])
             self._schedule_host_to_container_copy(tab)
             self.set_tables_visual('green', 'Stop Tables Demo', True)
             self._focus_tab('tables')
@@ -9133,16 +9158,16 @@ CMD ["bash"]
             tab.container_name = f'mpcmd-{exec_id[:10]}'
             self._claim_xhost(tab, 'rviz', log_key=tab.key)
             rviz_cmd = self._rviz_command()
-            args = [
-                'compose', 'run', '--rm', '--name', tab.container_name,
+            args = self._compose_command(
+                'run', '--rm', '--name', tab.container_name,
                 '--label', f'mobipick.exec={exec_id}', '--label', f'mobipick.tab={tab.key}',
                 *self._compose_env_args(container_name=tab.container_name),
                 self._ros_tool_service(),
                 'bash',
                 '-lc',
                 self._wrap_line_buffered(rviz_cmd),
-            ]
-            tab.start_program('docker', args)
+            )
+            tab.start_program(args[0], args[1:])
             self._schedule_host_to_container_copy(tab)
             self.set_rviz_visual('green', 'Stop RViz', True)
             self._focus_tab('rviz')
@@ -9188,16 +9213,16 @@ CMD ["bash"]
             tab.container_name = f'mpcmd-{exec_id[:10]}'
             self._claim_xhost(tab, 'rqt', log_key=tab.key)
             cmd = self._rqt_tables_command()
-            args = [
-                'compose', 'run', '--rm', '--name', tab.container_name,
+            args = self._compose_command(
+                'run', '--rm', '--name', tab.container_name,
                 '--label', f'mobipick.exec={exec_id}', '--label', f'mobipick.tab={tab.key}',
                 *self._compose_env_args(container_name=tab.container_name),
                 self._ros_tool_service(),
                 'bash',
                 '-lc',
                 self._wrap_line_buffered(cmd),
-            ]
-            tab.start_program('docker', args)
+            )
+            tab.start_program(args[0], args[1:])
             self._schedule_host_to_container_copy(tab)
             self.set_rqt_visual('green', 'Stop RQt Tables', True)
             self._focus_tab('rqt')
@@ -9240,13 +9265,13 @@ CMD ["bash"]
 
             env_overrides = self._terminal_env_overrides()
 
-            command_parts = [
-                'docker', 'compose', 'run', '--rm', '--name', container_name,
+            command_parts = self._compose_command(
+                'run', '--rm', '--name', container_name,
                 '--label', f'mobipick.exec={exec_id}',
                 '--label', 'mobipick.role=terminal',
                 '--label', 'mobipick.tab=terminal',
                 '--user', 'root',
-            ]
+            )
             env_overrides = dict(env_overrides)
             command_parts.extend(self._compose_env_args(env_overrides, container_name=container_name))
             command_parts.extend(
@@ -9431,13 +9456,13 @@ CMD ["bash"]
             tab.container_name = f'mpcmd-{exec_id[:10]}'
             self._claim_xhost(tab, key_target, log_key=tab.key)
             wrapped = self._wrap_line_buffered(text)
-            args = [
-                'compose', 'run', '--rm', '--name', tab.container_name,
+            args = self._compose_command(
+                'run', '--rm', '--name', tab.container_name,
                 '--label', f'mobipick.exec={exec_id}', '--label', f'mobipick.tab={key_target}',
                 *self._compose_env_args(container_name=tab.container_name),
                 self._ros_tool_service(), 'bash', '-lc', wrapped
-            ]
-            tab.start_program('docker', args)
+            )
+            tab.start_program(args[0], args[1:])
             self._schedule_host_to_container_copy(tab)
             self._focus_tab(key_target)
             self._update_stop_custom_enabled()
