@@ -59,6 +59,9 @@ class WindowLayoutManager:
         self._start_ts = time.monotonic()
 
     def record_baseline(self, *, exclude_titles: Iterable[str] | None = None):
+        if not self._wmctrl_available:
+            self._auto_apply_done = True
+            return
         titles = {t.strip() for t in (exclude_titles or []) if t}
         windows = self._enumerate_windows(include_classes=True, include_stack=False)
         for win in windows:
