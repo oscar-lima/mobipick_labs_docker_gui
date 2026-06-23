@@ -6,6 +6,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import signal
 import subprocess
 import sys
@@ -91,7 +92,7 @@ CONTAINER_SCRIPTS_DIR = str(
     CONFIG.get('process', {}).get('container_scripts_dir', '/scripts_430ofkjl04fsw')
 )
 from .process_tab import ProcessTab
-from .setup_wizard import ImageSetupWizard, SetupWizardSelection
+from .setup_wizard import HostDependency, ImageSetupWizard, SetupWizardSelection
 from .version import get_version
 from .window_layout import WindowLayoutManager
 from .workspace_dialog import WorkspaceManagerDialog
@@ -3991,10 +3992,12 @@ class MainWindow(QMainWindow):
             return False
         if self._bool_config_value(cfg.get('completed', False)):
             return False
-        if self._image_choices:
-            return False
         platform = os.environ.get('QT_QPA_PLATFORM', '').strip().lower()
-        return platform != 'offscreen'
+        if platform == 'offscreen':
+            return False
+        if self._missing_host_dependencies():
+            return True
+        return not bool(self._image_choices)
 
     def _should_offer_setup_for_missing_default_image(self) -> bool:
         cfg = self._setup_wizard_cfg()
@@ -4019,6 +4022,77 @@ class MainWindow(QMainWindow):
         if isinstance(value, str):
             return value.strip().lower() in {'1', 'true', 'yes', 'on'}
         return bool(value)
+
+    def _missing_host_dependencies(self) -> list[HostDependency]:
+        return [
+            dep
+            for dep in self._host_dependency_statuses()
+            if not dep.installed
+        ]
+
+    def _host_dependency_statuses(self) -> list[HostDependency]:
+        return [
+            HostDependency(
+                key='docker',
+                label='Docker Engine',
+                package='docker.io',
+                installed=shutil.which('docker') is not None,
+                reason='Required to pull images and run Mobipick containers.',
+                required=True,
+            ),
+            HostDependency(
+                key='docker_compose',
+                label='Docker Compose plugin',
+                package='docker-compose-plugin',
+                installed=self._docker_compose_available(),
+                reason='Required because the GUI launches containers with docker compose.',
+                required=True,
+            ),
+            HostDependency(
+                key='wmctrl',
+                label='wmctrl',
+                package='wmctrl',
+                installed=shutil.which('wmctrl') is not None,
+                reason='Optional; enables window layout capture and replay.',
+            ),
+            HostDependency(
+                key='xprop',
+                label='xprop',
+                package='x11-utils',
+                installed=shutil.which('xprop') is not None,
+                reason='Optional; helps identify windows for layout replay.',
+            ),
+            HostDependency(
+                key='graphviz',
+                label='Graphviz',
+                package='graphviz',
+                installed=shutil.which('dot') is not None,
+                reason='Optional; renders workspace graphs.',
+            ),
+            HostDependency(
+                key='ffmpeg',
+                label='FFmpeg',
+                package='ffmpeg',
+                installed=shutil.which('ffmpeg') is not None,
+                reason='Optional; records Auto Launch screen captures.',
+            ),
+        ]
+
+    @staticmethod
+    def _docker_compose_available() -> bool:
+        if shutil.which('docker') is None:
+            return False
+        try:
+            cp = subprocess.run(
+                ['docker', 'compose', 'version'],
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=2,
+            )
+        except (FileNotFoundError, subprocess.SubprocessError, OSError):
+            return False
+        return cp.returncode == 0
 
     def _open_custom_image_builder(self) -> None:
         self._open_setup_wizard(build_custom_default=True)
@@ -4102,6 +4176,8 @@ class MainWindow(QMainWindow):
                 cfg.get('source_install_by_default', False)
             ),
             image_blacklist=self._image_blacklist_patterns(),
+            host_dependencies=self._host_dependency_statuses(),
+            host_dependency_refresher=self._host_dependency_statuses,
             parent=self,
         )
         wizard.set_setup_start_handler(

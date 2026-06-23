@@ -2,13 +2,16 @@
 from __future__ import annotations
 
 import re
+import shlex
 from dataclasses import dataclass, field
 from typing import Callable, Iterable
 
 from PyQt5.QtWidgets import (
+    QApplication,
     QCheckBox,
     QComboBox,
     QFormLayout,
+    QHBoxLayout,
     QLabel,
     QLineEdit,
     QPushButton,
@@ -47,6 +50,18 @@ class SetupWizardSelection:
     public_image_pull_mode: str = 'gui'
 
 
+@dataclass
+class HostDependency:
+    """Host package surfaced by the setup wizard dependency page."""
+
+    key: str
+    label: str
+    package: str
+    installed: bool
+    reason: str
+    required: bool = False
+
+
 class ImageSetupWizard(QWizard):
     """Collect initial Docker image setup choices."""
 
@@ -71,6 +86,8 @@ class ImageSetupWizard(QWizard):
         source_image: str = '',
         install_source_default: bool = False,
         image_blacklist: Iterable[str] = (),
+        host_dependencies: Iterable[HostDependency] = (),
+        host_dependency_refresher: Callable[[], Iterable[HostDependency]] | None = None,
         parent=None,
     ):
         super().__init__(parent)
@@ -82,6 +99,10 @@ class ImageSetupWizard(QWizard):
         ) = None
         self._setup_started = False
         self._setup_complete = False
+        self._host_dependencies: list[HostDependency] = list(host_dependencies)
+        self._host_dependency_refresher = host_dependency_refresher
+        self._dependency_checkboxes: dict[str, QCheckBox] = {}
+        self._dependency_status_labels: dict[str, QLabel] = {}
 
         self.pull_public_images = QCheckBox('Pull public Mobipick images')
         self.pull_public_images.setChecked(True)
@@ -93,6 +114,53 @@ class ImageSetupWizard(QWizard):
         self.install_source_workspace.setChecked(install_source_default)
         self.remember_completion = QCheckBox('Do not show this wizard on startup again')
         self.remember_completion.setChecked(True)
+
+        dependency_page = QWizardPage()
+        dependency_page.setTitle('Host Dependencies')
+        dependency_layout = QVBoxLayout(dependency_page)
+        dependency_hint = QLabel(
+            'Install missing Ubuntu host packages before using Docker, window '
+            'layout capture, workspace graphs, or screen recording. The GUI '
+            'only copies a terminal command; you choose what to run.'
+        )
+        dependency_hint.setWordWrap(True)
+        dependency_layout.addWidget(dependency_hint)
+        for dep in self._host_dependencies:
+            checkbox = QCheckBox(dep.label)
+            checkbox.setChecked(not dep.installed)
+            checkbox.toggled.connect(self._update_dependency_command)
+            checkbox.setToolTip(self._dependency_tooltip(dep))
+            dependency_layout.addWidget(checkbox)
+            reason = QLabel(self._dependency_status_text(dep))
+            reason.setWordWrap(True)
+            reason.setContentsMargins(22, 0, 0, 6)
+            dependency_layout.addWidget(reason)
+            self._dependency_checkboxes[dep.key] = checkbox
+            self._dependency_status_labels[dep.key] = reason
+        if not self._host_dependencies:
+            none_label = QLabel('No host dependency checks are configured.')
+            none_label.setWordWrap(True)
+            dependency_layout.addWidget(none_label)
+        self.dependency_command_edit = QTextEdit()
+        self.dependency_command_edit.setAcceptRichText(False)
+        self.dependency_command_edit.setReadOnly(True)
+        self.dependency_command_edit.setMinimumHeight(120)
+        dependency_layout.addWidget(self.dependency_command_edit)
+        dependency_buttons = QHBoxLayout()
+        self.copy_dependency_command_button = QPushButton('Copy Command')
+        self.copy_dependency_command_button.clicked.connect(
+            self._copy_dependency_command
+        )
+        dependency_buttons.addWidget(self.copy_dependency_command_button)
+        self.dependency_done_button = QPushButton('Done Installing')
+        self.dependency_done_button.clicked.connect(
+            self._mark_selected_dependencies_done
+        )
+        dependency_buttons.addWidget(self.dependency_done_button)
+        dependency_buttons.addStretch(1)
+        dependency_layout.addLayout(dependency_buttons)
+        self._dependency_page_id = self.addPage(dependency_page)
+        self._update_dependency_command()
 
         intro = QWizardPage()
         intro.setTitle('Setup Guide')
@@ -348,6 +416,94 @@ class ImageSetupWizard(QWizard):
             ),
         )
 
+    def _selected_host_dependencies(self) -> list[HostDependency]:
+        selected: list[HostDependency] = []
+        for dep in self._host_dependencies:
+            checkbox = self._dependency_checkboxes.get(dep.key)
+            if checkbox is not None and checkbox.isChecked():
+                selected.append(dep)
+        return selected
+
+    def _dependency_install_command(self) -> str:
+        selected = self._selected_host_dependencies()
+        packages: list[str] = []
+        for dep in selected:
+            if dep.package and dep.package not in packages:
+                packages.append(dep.package)
+        if not packages:
+            return '# Select one or more host dependencies to build a command.'
+
+        lines = [
+            'sudo apt update',
+            'sudo apt install -y ' + ' '.join(shlex.quote(pkg) for pkg in packages),
+        ]
+        selected_keys = {dep.key for dep in selected}
+        if {'docker', 'docker_compose'} & selected_keys:
+            lines.extend([
+                'sudo systemctl enable --now docker',
+                'sudo usermod -aG docker "$USER"',
+                'echo "Log out and back in, or run newgrp docker, before '
+                'using Docker without sudo."',
+            ])
+        return '\n'.join(lines)
+
+    @staticmethod
+    def _dependency_status_text(dep: HostDependency) -> str:
+        status = 'installed' if dep.installed else 'missing'
+        return f'{status}: {dep.reason}'
+
+    @staticmethod
+    def _dependency_tooltip(dep: HostDependency) -> str:
+        required = 'Required' if dep.required else 'Optional'
+        return f'{required}. Apt package: {dep.package}'
+
+    def _update_dependency_command(self) -> None:
+        if not hasattr(self, 'dependency_command_edit'):
+            return
+        command = self._dependency_install_command()
+        self.dependency_command_edit.setPlainText(command)
+        self.copy_dependency_command_button.setEnabled(
+            bool(self._selected_host_dependencies())
+        )
+
+    def _copy_dependency_command(self) -> None:
+        QApplication.clipboard().setText(self._dependency_install_command())
+
+    def _mark_selected_dependencies_done(self) -> None:
+        if self._host_dependency_refresher is not None:
+            refreshed = {
+                dep.key: dep
+                for dep in self._host_dependency_refresher()
+            }
+            for dep in self._host_dependencies:
+                fresh = refreshed.get(dep.key)
+                if fresh is None:
+                    continue
+                dep.label = fresh.label
+                dep.package = fresh.package
+                dep.installed = fresh.installed
+                dep.reason = fresh.reason
+                dep.required = fresh.required
+                checkbox = self._dependency_checkboxes.get(dep.key)
+                label = self._dependency_status_labels.get(dep.key)
+                if checkbox is not None:
+                    checkbox.setText(dep.label)
+                    checkbox.setToolTip(self._dependency_tooltip(dep))
+                    checkbox.setChecked(not dep.installed)
+                if label is not None:
+                    label.setText(self._dependency_status_text(dep))
+            self._update_dependency_command()
+            return
+
+        for dep in self._selected_host_dependencies():
+            checkbox = self._dependency_checkboxes.get(dep.key)
+            label = self._dependency_status_labels.get(dep.key)
+            if checkbox is not None:
+                checkbox.setChecked(False)
+            if label is not None:
+                label.setText(f'done: {dep.reason}')
+        self._update_dependency_command()
+
     @staticmethod
     def _parse_image_list(text: str) -> list[str]:
         images: list[str] = []
@@ -382,4 +538,4 @@ class ImageSetupWizard(QWizard):
             self.button(QWizard.BackButton).setEnabled(False)
 
 
-__all__ = ['ImageSetupWizard', 'SetupWizardSelection']
+__all__ = ['HostDependency', 'ImageSetupWizard', 'SetupWizardSelection']

@@ -340,10 +340,13 @@ Image behavior is controlled by `images` in `gui_settings.yaml`.
   workspace support, compatible workspaces, working directory, entrypoint, and
   tooltip description.
 
-The setup wizard can pull public images on the host PC with streamed output,
-pause for a manual pull confirmation, choose a default image, build a host-user
-development image, and clone/build `DFKI-NI/mobipick_labs` from source in a
-host-mounted workspace. Each optional wizard page has a skip button.
+The setup wizard first checks common Ubuntu host dependencies and shows one
+checkbox per package so users can copy a selected `apt` command into a
+terminal, install the tools themselves, and mark the step done. It can then
+pull public images on the host PC with streamed output, pause for a manual pull
+confirmation, choose a default image, build a host-user development image, and
+clone/build `DFKI-NI/mobipick_labs` from source in a host-mounted workspace.
+Each optional wizard page has a skip button.
 It does not enable `docker cp` paths by default; configure any copy rules later
 from **Tools > Docker > Configure Docker cp Paths**.
 The custom image builder writes a Docker build context under the per-user data
