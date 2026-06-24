@@ -7,7 +7,11 @@ from PyQt5.QtCore import QUrl
 from PyQt5.QtWidgets import QApplication
 
 from mobipick_gui import bug_report, external_links
-from mobipick_gui.bug_report import BUG_REPORT_EMAIL, BugReportDialog
+from mobipick_gui.bug_report import (
+    BUG_REPORT_EMAIL,
+    BUG_REPORT_GITHUB_ISSUE_URL,
+    BugReportDialog,
+)
 
 
 def test_open_external_url_uses_xdg_open_with_detached_streams(monkeypatch):
@@ -77,6 +81,38 @@ def test_bug_report_email_uses_quiet_external_link(monkeypatch):
 
     assert opened['url'].startswith(f'mailto:{BUG_REPORT_EMAIL}')
     assert 'Mobipick%20Labs%20Docker%20GUI%20bug%20report' in opened['url']
+
+    dialog.deleteLater()
+    app.processEvents()
+
+
+def test_bug_report_github_issue_uses_quiet_external_link(monkeypatch):
+    opened = {}
+    monkeypatch.setattr(BugReportDialog, '_start_collectors', lambda self: None)
+    monkeypatch.setattr(
+        bug_report,
+        'open_external_url',
+        lambda url: opened.setdefault(
+            'url',
+            bytes(url.toEncoded()).decode('utf-8'),
+        )
+        or True,
+    )
+
+    app = QApplication.instance() or QApplication([])
+    dialog = BugReportDialog(
+        lambda: {
+            'gui_version': '1.2.3',
+            'setup_diagnostics': 'docker compose failed',
+        },
+        initial_checked_keys={'setup_diagnostics'},
+    )
+
+    dialog.open_github_issue()
+
+    assert opened['url'].startswith(BUG_REPORT_GITHUB_ISSUE_URL)
+    assert 'Mobipick%20Labs%20Docker%20GUI%20bug%20report' in opened['url']
+    assert 'docker%20compose%20failed' in opened['url']
 
     dialog.deleteLater()
     app.processEvents()

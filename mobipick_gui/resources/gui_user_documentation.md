@@ -305,8 +305,12 @@ The tab search is separate from the documentation window search.
 - **Manage Images** lists Docker images matching the GUI filters and lets you
   remove selected images.
 - **Setup Wizard** opens the setup flow. The first page checks common Ubuntu
-  host dependencies and lets you choose packages, copy an install command to
-  the clipboard, install them in a terminal, and click **Done Installing**.
+  host dependencies and lets you choose packages, copy an install script to
+  the clipboard, run it in a terminal, and click **Run Checks**. The script
+  asks for confirmation before each major installation, service, permission,
+  and test step. If a check still fails, **Open Bug Report** prepares the
+  standard diagnostics so you can copy, save, email, or open a prefilled
+  GitHub issue.
   Later pages pull public images on the host PC with streamed output, select
   defaults, build host-user images, and optionally clone and build
   `mobipick_labs` from source in a host-mounted workspace. The manual pull

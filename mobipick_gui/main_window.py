@@ -4030,22 +4030,219 @@ class MainWindow(QMainWindow):
             if not dep.installed
         ]
 
+    @staticmethod
+    def _host_command_status(
+        args: list[str],
+        *,
+        timeout: float = 4.0,
+    ) -> tuple[bool, str]:
+        try:
+            cp = subprocess.run(
+                args,
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=timeout,
+            )
+        except FileNotFoundError:
+            return False, f'command not found: {args[0]}'
+        except subprocess.TimeoutExpired:
+            return False, f'command timed out: {shlex.join(args)}'
+        except OSError as exc:
+            return False, str(exc)
+        output = (cp.stdout or cp.stderr or '').strip()
+        if cp.returncode == 0:
+            return True, output
+        detail = output or f'exit code {cp.returncode}'
+        return False, detail
+
+    @classmethod
+    def _host_shell_status(
+        cls,
+        command: str,
+        *,
+        timeout: float = 4.0,
+    ) -> tuple[bool, str]:
+        return cls._host_command_status(
+            ['bash', '-lc', command],
+            timeout=timeout,
+        )
+
+    @classmethod
+    def _docker_apt_candidate_status(
+        cls,
+        packages: list[str],
+    ) -> tuple[bool, str]:
+        lines: list[str] = []
+        missing: list[str] = []
+        for package in packages:
+            ok, output = cls._host_shell_status(
+                'apt-cache policy '
+                + shlex.quote(package)
+                + r" | awk '/Candidate:/ {print $2; exit}'",
+            )
+            candidate = output.strip() if ok else ''
+            if not candidate or candidate == '(none)':
+                missing.append(package)
+                candidate = candidate or '(none)'
+            lines.append(f'{package}: {candidate}')
+        if missing:
+            lines.append('missing candidates: ' + ', '.join(missing))
+            return False, '; '.join(lines)
+        return True, '; '.join(lines)
+
     def _host_dependency_statuses(self) -> list[HostDependency]:
+        docker_packages = [
+            'docker-ce',
+            'docker-ce-cli',
+            'containerd.io',
+            'docker-buildx-plugin',
+            'docker-compose-plugin',
+        ]
+        apt_candidates_ok, apt_candidate_detail = (
+            self._docker_apt_candidate_status(docker_packages)
+        )
+        repo_ok, repo_detail = self._host_shell_status(
+            r'grep -R "download.docker.com/linux/ubuntu" '
+            r'/etc/apt/sources.list /etc/apt/sources.list.d/*.list '
+            r'2>/dev/null'
+        )
+        snap_ok, snap_detail = self._host_shell_status(
+            'if command -v snap >/dev/null 2>&1 '
+            '&& snap list docker >/dev/null 2>&1; then '
+            'snap list docker; exit 1; '
+            'else echo "Snap Docker not detected."; fi'
+        )
+        systemd_ok, systemd_detail = self._host_shell_status('ps -p 1 -o comm=')
+        has_systemd = systemd_ok and systemd_detail.strip() == 'systemd'
+        if has_systemd:
+            docker_service_ok, docker_service_detail = self._host_command_status(
+                ['systemctl', 'is-active', 'docker']
+            )
+            containerd_service_ok, containerd_service_detail = (
+                self._host_command_status(['systemctl', 'is-active', 'containerd'])
+            )
+        else:
+            docker_service_ok = False
+            containerd_service_ok = False
+            docker_service_detail = 'systemd is not PID 1'
+            containerd_service_detail = 'systemd is not PID 1'
+        _groups_ok, groups_detail = self._host_command_status(['id', '-nG'])
+        _socket_ok, socket_detail = self._host_command_status(
+            ['ls', '-l', '/var/run/docker.sock']
+        )
+
+        docker_path = shutil.which('docker')
+        if docker_path:
+            docker_ok, docker_detail = self._host_command_status(['docker', 'ps'])
+            if docker_ok:
+                docker_reason = 'Docker daemon is reachable by the current user.'
+            else:
+                details = [
+                    f'Docker command was found at {docker_path}, but '
+                    f'"docker ps" failed: {docker_detail}.',
+                ]
+                if not repo_ok:
+                    details.append(
+                        'Docker apt repository was not detected in apt '
+                        f'sources: {repo_detail}.'
+                    )
+                if not apt_candidates_ok:
+                    details.append(
+                        f'Docker apt candidate check failed: {apt_candidate_detail}.'
+                    )
+                if not snap_ok:
+                    details.append(f'Snap Docker appears to be installed: {snap_detail}.')
+                if has_systemd:
+                    if not containerd_service_ok:
+                        details.append(
+                            f'containerd service is not active: {containerd_service_detail}.'
+                        )
+                    if not docker_service_ok:
+                        details.append(
+                            f'docker service is not active: {docker_service_detail}.'
+                        )
+                else:
+                    details.append(
+                        'systemd is not PID 1; Docker service management with '
+                        'systemctl may not work in this environment.'
+                    )
+                details.extend([
+                    f'Current groups: {groups_detail or "(unknown)"}.',
+                    f'Docker socket: {socket_detail or "(missing)"}.',
+                    'Start Docker and make sure this user is in the docker '
+                    'group; log out and back in, or run newgrp docker, after '
+                    'changing groups.',
+                ])
+                docker_reason = ' '.join(details)
+        else:
+            docker_ok = False
+            details = [
+                'Docker command was not found. Install Docker Engine from '
+                "Docker's official Ubuntu apt repository."
+            ]
+            if not repo_ok:
+                details.append(
+                    f'Docker apt repository was not detected: {repo_detail}.'
+                )
+            if not apt_candidates_ok:
+                details.append(
+                    f'Docker apt candidate check failed: {apt_candidate_detail}.'
+                )
+            if not snap_ok:
+                details.append(f'Snap Docker appears to be installed: {snap_detail}.')
+            docker_reason = ' '.join(details)
+
+        compose_ok, compose_detail = self._host_command_status(
+            ['docker', 'compose', 'version']
+        )
+        compose_help_ok, compose_help_detail = self._host_command_status(
+            ['docker', 'compose', 'run', '--help']
+        )
+        docker_compose_ok = compose_ok and compose_help_ok
+        if docker_compose_ok:
+            compose_reason = (
+                'Docker Compose plugin is available'
+                + (f': {compose_detail}' if compose_detail else '.')
+            )
+        elif not compose_ok:
+            details = [
+                f'"docker compose version" failed: {compose_detail}. Install '
+                'the docker-compose-plugin package from Docker\'s official '
+                'Ubuntu apt repository.'
+            ]
+            if not apt_candidates_ok:
+                details.append(
+                    f'Docker apt candidate check failed: {apt_candidate_detail}.'
+                )
+            if not repo_ok:
+                details.append(
+                    f'Docker apt repository was not detected: {repo_detail}.'
+                )
+            compose_reason = ' '.join(details)
+        else:
+            compose_reason = (
+                f'"docker compose run --help" failed: {compose_help_detail}. '
+                'Reinstall the Docker Compose plugin from Docker\'s official '
+                'Ubuntu apt repository.'
+            )
+
         return [
             HostDependency(
                 key='docker',
                 label='Docker Engine',
-                package='docker.io',
-                installed=shutil.which('docker') is not None,
-                reason='Required to pull images and run Mobipick containers.',
+                package='docker-ce',
+                installed=docker_ok,
+                reason=docker_reason,
                 required=True,
             ),
             HostDependency(
                 key='docker_compose',
-                label='Docker Compose',
+                label='Docker Compose plugin',
                 package='docker-compose-plugin',
-                installed=self._docker_compose_available(),
-                reason='Required because the GUI launches containers with Docker Compose.',
+                installed=docker_compose_ok,
+                reason=compose_reason,
                 required=True,
             ),
             HostDependency(
@@ -4077,49 +4274,6 @@ class MainWindow(QMainWindow):
                 reason='Optional; records Auto Launch screen captures.',
             ),
         ]
-
-    @staticmethod
-    def _compose_probe(command: list[str]) -> subprocess.CompletedProcess | None:
-        try:
-            return subprocess.run(
-                command,
-                check=False,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                timeout=2,
-            )
-        except (FileNotFoundError, subprocess.SubprocessError, OSError):
-            return None
-
-    @classmethod
-    def _compose_frontend_supports_run_rm(cls, prefix: list[str]) -> bool:
-        if not prefix or shutil.which(prefix[0]) is None:
-            return False
-        version = cls._compose_probe([*prefix, 'version'])
-        if version is None or version.returncode != 0:
-            return False
-        run_help = cls._compose_probe([*prefix, 'run', '--help'])
-        if run_help is None or run_help.returncode != 0:
-            return False
-        help_text = f'{run_help.stdout}\n{run_help.stderr}'
-        return '--rm' in help_text
-
-    @classmethod
-    def _compose_command_prefix(cls) -> list[str] | None:
-        for prefix in (['docker', 'compose'], ['docker-compose']):
-            if cls._compose_frontend_supports_run_rm(prefix):
-                return prefix
-        return None
-
-    @classmethod
-    def _docker_compose_available(cls) -> bool:
-        return cls._compose_command_prefix() is not None
-
-    @classmethod
-    def _compose_command(cls, *args: str) -> list[str]:
-        prefix = cls._compose_command_prefix() or ['docker', 'compose']
-        return [*prefix, *args]
 
     def _open_custom_image_builder(self) -> None:
         self._open_setup_wizard(build_custom_default=True)
@@ -4205,6 +4359,9 @@ class MainWindow(QMainWindow):
             image_blacklist=self._image_blacklist_patterns(),
             host_dependencies=self._host_dependency_statuses(),
             host_dependency_refresher=self._host_dependency_statuses,
+            host_dependency_report_handler=(
+                self._open_setup_dependency_report
+            ),
             parent=self,
         )
         wizard.set_setup_start_handler(
@@ -4216,6 +4373,30 @@ class MainWindow(QMainWindow):
         wizard.finished.connect(self._on_setup_wizard_closed)
         self._setup_wizard_dialog = wizard
         wizard.show()
+
+    def _open_setup_dependency_report(self, setup_diagnostics: str) -> None:
+        def _context() -> dict:
+            context = self._build_bug_report_context()
+            context['setup_diagnostics'] = setup_diagnostics
+            return context
+
+        if self._bug_report_dialog:
+            self._bug_report_dialog.close()
+        dialog = BugReportDialog(
+            _context,
+            self,
+            initial_notes='Host dependency checks failed during setup.',
+            initial_checked_keys={
+                'ubuntu_version',
+                'gui_version',
+                'setup_diagnostics',
+                'log_tab',
+                'user_notes',
+            },
+        )
+        dialog.finished.connect(self._on_bug_report_dialog_closed)
+        self._bug_report_dialog = dialog
+        dialog.show()
 
     def _default_source_master_folder(self) -> str:
         if self._workspace_registry.master_folder:
@@ -4909,7 +5090,8 @@ class MainWindow(QMainWindow):
             repository=selection.source_repository,
             branch=selection.source_branch,
         )
-        args = self._compose_command(
+        args = [
+            'compose',
             'run',
             '--rm',
             '--name',
@@ -4926,7 +5108,7 @@ class MainWindow(QMainWindow):
             'bash',
             '-lc',
             self._wrap_line_buffered(command),
-        )
+        ]
 
         def _after_source_install(code: int, _status) -> None:
             self._on_source_workspace_install_finished(
@@ -4938,7 +5120,7 @@ class MainWindow(QMainWindow):
                 on_finished(code)
 
         tab.proc.finished.connect(_after_source_install)
-        self._start_program_with_pseudo_terminal(tab, args[0], args[1:])
+        self._start_program_with_pseudo_terminal(tab, 'docker', args)
         if focus_tab:
             self._focus_tab(key)
         self._log_info(
@@ -5174,7 +5356,8 @@ CMD ["bash"]
             workspace,
             image_workspace_path=self._image_workdir(self._selected_image),
         )
-        args = self._compose_command(
+        args = [
+            'compose',
             'run',
             '--rm',
             '--name',
@@ -5191,8 +5374,8 @@ CMD ["bash"]
             'bash',
             '-lc',
             self._wrap_line_buffered(command),
-        )
-        self._start_program_with_pseudo_terminal(tab, args[0], args[1:])
+        ]
+        self._start_program_with_pseudo_terminal(tab, 'docker', args)
         self._focus_tab(key)
 
     def _workspace_sim_command(self) -> str:
@@ -5427,13 +5610,13 @@ CMD ["bash"]
                 self._claim_xhost(tab, key, log_key=tab.key)
                 service = self._configured_command_service(config)
                 wrapped = self._wrap_line_buffered(full_command)
-                args = self._compose_command(
-                    'run', '--rm', '--name', tab.container_name,
+                args = [
+                    'compose', 'run', '--rm', '--name', tab.container_name,
                     '--label', f'mobipick.exec={exec_id}', '--label', f'mobipick.tab={key}',
                     *self._compose_env_args(container_name=tab.container_name),
                     service, 'bash', '-lc', wrapped
-                )
-                tab.start_program(args[0], args[1:])
+                ]
+                tab.start_program('docker', args)
                 self._schedule_host_to_container_copy(tab)
             self._focus_tab(key)
             self._update_stop_custom_enabled()
@@ -5484,7 +5667,7 @@ CMD ["bash"]
                 'MOBIPICK_WORKSPACE_MOUNT_SOURCE',
             }:
                 continue
-            env_args.extend(['-e', f'{key}={value}'])
+            env_args.extend(['--env', f'{key}={value}'])
         return env_args
 
     @staticmethod
@@ -6769,16 +6952,16 @@ CMD ["bash"]
             tab.container_name = f'mpcmd-{exec_id[:10]}'
             self._claim_xhost(tab, key_target, log_key=tab.key)
             inner = f"python3 {CONTAINER_SCRIPTS_DIR}/{self._sh_quote(script)}"
-            args = self._compose_command(
-                'run', '--rm', '--name', tab.container_name,
+            args = [
+                'compose', 'run', '--rm', '--name', tab.container_name,
                 '--label', f'mobipick.exec={exec_id}', '--label', f'mobipick.tab={key_target}',
                 *self._compose_env_args(container_name=tab.container_name),
                 self._ros_tool_service(),
                 'bash',
                 '-lc',
                 self._wrap_line_buffered(inner),
-            )
-            tab.start_program(args[0], args[1:])
+            ]
+            tab.start_program('docker', args)
             self._schedule_host_to_container_copy(tab)
             self._script_active_tab_key = key_target
             self.set_script_visual('green', 'Stop Script', True)
@@ -8547,13 +8730,13 @@ CMD ["bash"]
         self._roscore_stopping = False
         self._roscore_last_start_ts = time.monotonic()
         self.set_roscore_visual('green', 'Stop Roscore', enabled=True)
-        args = self._compose_command(
-            'run', '--rm', '--name', self._roscore_container_name,
+        args = [
+            'compose', 'run', '--rm', '--name', self._roscore_container_name,
             '--label', f'mobipick.exec={exec_id}', '--label', f'mobipick.tab={tab.key}',
             *self._compose_env_args(container_name=self._roscore_container_name),
             'mobipick_cmd', 'bash', '-lc', self._wrap_line_buffered(inner)
-        )
-        tab.start_program(args[0], args[1:])
+        ]
+        tab.start_program('docker', args)
         self._schedule_host_to_container_copy(tab)
         self._focus_tab('roscore')
 
@@ -8698,16 +8881,16 @@ CMD ["bash"]
 
             self._claim_xhost(tab, 'sim', log_key=tab.key)
 
-            args = self._compose_command(
-                'run', '--rm', '--name', self._sim_container_name,
+            args = [
+                'compose', 'run', '--rm', '--name', self._sim_container_name,
                 '--label', f'mobipick.exec={exec_id}', '--label', f'mobipick.tab={tab.key}',
                 *self._compose_env_args(),
                 'mobipick',
                 'bash',
                 '-lc',
                 self._wrap_line_buffered(self._workspace_sim_command()),
-            )
-            tab.start_program(args[0], args[1:])
+            ]
+            tab.start_program('docker', args)
             self._schedule_host_to_container_copy(tab)
             self._focus_tab('sim')
 
@@ -9104,16 +9287,16 @@ CMD ["bash"]
             tab.container_name = f'mpcmd-{exec_id[:10]}'
             self._claim_xhost(tab, 'tables', log_key=tab.key)
             inner = self._tables_demo_command()
-            args = self._compose_command(
-                'run', '--rm', '--name', tab.container_name,
+            args = [
+                'compose', 'run', '--rm', '--name', tab.container_name,
                 '--label', f'mobipick.exec={exec_id}', '--label', f'mobipick.tab={tab.key}',
                 *self._compose_env_args(container_name=tab.container_name),
                 self._ros_tool_service(),
                 'bash',
                 '-lc',
                 self._wrap_line_buffered(inner),
-            )
-            tab.start_program(args[0], args[1:])
+            ]
+            tab.start_program('docker', args)
             self._schedule_host_to_container_copy(tab)
             self.set_tables_visual('green', 'Stop Tables Demo', True)
             self._focus_tab('tables')
@@ -9158,16 +9341,16 @@ CMD ["bash"]
             tab.container_name = f'mpcmd-{exec_id[:10]}'
             self._claim_xhost(tab, 'rviz', log_key=tab.key)
             rviz_cmd = self._rviz_command()
-            args = self._compose_command(
-                'run', '--rm', '--name', tab.container_name,
+            args = [
+                'compose', 'run', '--rm', '--name', tab.container_name,
                 '--label', f'mobipick.exec={exec_id}', '--label', f'mobipick.tab={tab.key}',
                 *self._compose_env_args(container_name=tab.container_name),
                 self._ros_tool_service(),
                 'bash',
                 '-lc',
                 self._wrap_line_buffered(rviz_cmd),
-            )
-            tab.start_program(args[0], args[1:])
+            ]
+            tab.start_program('docker', args)
             self._schedule_host_to_container_copy(tab)
             self.set_rviz_visual('green', 'Stop RViz', True)
             self._focus_tab('rviz')
@@ -9213,16 +9396,16 @@ CMD ["bash"]
             tab.container_name = f'mpcmd-{exec_id[:10]}'
             self._claim_xhost(tab, 'rqt', log_key=tab.key)
             cmd = self._rqt_tables_command()
-            args = self._compose_command(
-                'run', '--rm', '--name', tab.container_name,
+            args = [
+                'compose', 'run', '--rm', '--name', tab.container_name,
                 '--label', f'mobipick.exec={exec_id}', '--label', f'mobipick.tab={tab.key}',
                 *self._compose_env_args(container_name=tab.container_name),
                 self._ros_tool_service(),
                 'bash',
                 '-lc',
                 self._wrap_line_buffered(cmd),
-            )
-            tab.start_program(args[0], args[1:])
+            ]
+            tab.start_program('docker', args)
             self._schedule_host_to_container_copy(tab)
             self.set_rqt_visual('green', 'Stop RQt Tables', True)
             self._focus_tab('rqt')
@@ -9265,13 +9448,13 @@ CMD ["bash"]
 
             env_overrides = self._terminal_env_overrides()
 
-            command_parts = self._compose_command(
-                'run', '--rm', '--name', container_name,
+            command_parts = [
+                'docker', 'compose', 'run', '--rm', '--name', container_name,
                 '--label', f'mobipick.exec={exec_id}',
                 '--label', 'mobipick.role=terminal',
                 '--label', 'mobipick.tab=terminal',
                 '--user', 'root',
-            )
+            ]
             env_overrides = dict(env_overrides)
             command_parts.extend(self._compose_env_args(env_overrides, container_name=container_name))
             command_parts.extend(
@@ -9456,13 +9639,13 @@ CMD ["bash"]
             tab.container_name = f'mpcmd-{exec_id[:10]}'
             self._claim_xhost(tab, key_target, log_key=tab.key)
             wrapped = self._wrap_line_buffered(text)
-            args = self._compose_command(
-                'run', '--rm', '--name', tab.container_name,
+            args = [
+                'compose', 'run', '--rm', '--name', tab.container_name,
                 '--label', f'mobipick.exec={exec_id}', '--label', f'mobipick.tab={key_target}',
                 *self._compose_env_args(container_name=tab.container_name),
                 self._ros_tool_service(), 'bash', '-lc', wrapped
-            )
-            tab.start_program(args[0], args[1:])
+            ]
+            tab.start_program('docker', args)
             self._schedule_host_to_container_copy(tab)
             self._focus_tab(key_target)
             self._update_stop_custom_enabled()

@@ -85,9 +85,7 @@ The application targets Linux desktops with X11.
 
 - Python 3.8 or newer.
 - PyQt5 5.15 or newer.
-- Docker Engine and Docker Compose available to the current user. The Docker
-  Compose plugin is preferred; the legacy `docker-compose` executable is also
-  supported at runtime.
+- Docker Engine and the Docker Compose plugin available to the current user.
 - An X11 desktop session for Gazebo, RViz, RQt, and recording.
 - Optional but recommended: NVIDIA Container Toolkit for GPU-accelerated
   simulation.
@@ -98,13 +96,13 @@ The application targets Linux desktops with X11.
 
 Common Ubuntu setup:
 
-```bash
-sudo apt update
-sudo apt install docker.io docker-compose-plugin wmctrl x11-utils graphviz ffmpeg
-sudo systemctl enable docker
-sudo systemctl start docker
-sudo usermod -aG docker "$USER"
-```
+Use **Tools > Setup Wizard** and copy the Host Dependencies script. The script
+is interactive: before each major step it explains what will run, why it is
+needed, prints the commands, and asks for `y/N` confirmation. The guarded steps
+install apt prerequisites, replace the Docker apt repository key/source, verify
+Docker package candidates, install Docker Engine and the Compose plugin,
+install selected optional tools, restart Docker services, configure docker
+group access, and test Docker with both `sudo` and the current user.
 
 Log out and back in after changing Docker group membership, or start a shell
 with `newgrp docker`.
