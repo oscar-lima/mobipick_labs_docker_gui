@@ -446,6 +446,94 @@ def test_wizard_start_setup_shows_progress_then_summary(tmp_path):
     app.processEvents()
 
 
+def test_setup_wizard_progress_labels_selected_step_count(tmp_path, monkeypatch):
+    app = QApplication.instance() or QApplication([])
+    wizard = ImageSetupWizard(
+        public_images=['ozkrelo/x_mobipick_labs:noetic-v1.2'],
+        default_image='ozkrelo/x_mobipick_labs:noetic-v1.2',
+        host_user='testuser',
+        host_uid='1001',
+        host_gid='1001',
+        base_image='ozkrelo/x_mobipick_labs:noetic-v1.2',
+        target_image='ozkrelo/x_mobipick_labs:host_user_from_1.2',
+        workspace_names=[],
+        configuration_paths=[],
+        source_master_folder=str(tmp_path / 'master'),
+        source_workspace_name='clean_mobipick_labs_ws',
+        source_repository='https://github.com/DFKI-NI/mobipick_labs.git',
+        source_branch='noetic',
+        source_image='ozkrelo/x_mobipick_labs:host_user_from_1.2',
+    )
+    window = MainWindow.__new__(MainWindow)
+    window._setup_wizard_process_tabs = []
+
+    monkeypatch.setattr(
+        window,
+        '_setup_wizard_process_tab',
+        lambda *_args, **_kwargs: object(),
+    )
+    monkeypatch.setattr(
+        window,
+        '_load_available_images',
+        lambda show_feedback=False: None,
+    )
+    monkeypatch.setattr(window, '_log_info', lambda _message: None)
+
+    def finish_immediately(*_args, on_finished=None, **_kwargs):
+        assert on_finished is not None
+        on_finished(0)
+        return True
+
+    monkeypatch.setattr(window, '_start_image_pulls', finish_immediately)
+    monkeypatch.setattr(window, '_start_custom_image_build', finish_immediately)
+    monkeypatch.setattr(
+        window,
+        '_start_source_workspace_install',
+        finish_immediately,
+    )
+
+    selection = SetupWizardSelection(
+        pull_public_images=True,
+        public_images=['ozkrelo/x_mobipick_labs:noetic-v1.2'],
+        default_image='ozkrelo/x_mobipick_labs:noetic-v1.2',
+        build_custom_image=True,
+        host_user='testuser',
+        host_uid='1001',
+        host_gid='1001',
+        base_image='ozkrelo/x_mobipick_labs:noetic-v1.2',
+        target_image='ozkrelo/x_mobipick_labs:host_user_from_1.2',
+        compatible_workspace='',
+        remember_completion=True,
+        install_source_workspace=True,
+        source_master_folder=str(tmp_path / 'master'),
+        source_workspace_name='clean_mobipick_labs_ws',
+        source_repository='https://github.com/DFKI-NI/mobipick_labs.git',
+        source_branch='noetic',
+        source_image='ozkrelo/x_mobipick_labs:host_user_from_1.2',
+    )
+
+    window._run_setup_wizard_sequence(
+        wizard,
+        selection,
+        pull_public_images_automatically=True,
+    )
+    for _attempt in range(10):
+        app.processEvents()
+        if wizard._setup_complete:
+            break
+    wizard.progress_log._flush()
+
+    progress_html = wizard.progress_log.toHtml()
+    assert 'Step 1/3:' in progress_html
+    assert 'Step 2/3:' in progress_html
+    assert 'Step 3/3:' in progress_html
+    assert 'Step 1/3 finished with code 0' in progress_html
+    assert 'Step 3/3 finished with code 0' in progress_html
+
+    wizard.deleteLater()
+    app.processEvents()
+
+
 def test_custom_image_dockerfile_creates_host_user_image():
     dockerfile = MainWindow._custom_image_dockerfile(
         'ozkrelo/x_mobipick_labs:noetic-v1.2'

@@ -4840,6 +4840,7 @@ class MainWindow(QMainWindow):
             'Docker cp paths were left unchanged. Configure them later from '
             'Tools > Docker > Configure Docker cp Paths if needed.'
         )
+        total_steps = len(steps)
 
         def finish(success: bool) -> None:
             self._load_available_images(show_feedback=False)
@@ -4854,13 +4855,17 @@ class MainWindow(QMainWindow):
                 finish(True)
                 return
             label, starter = steps.popleft()
+            step_number = total_steps - len(steps)
+            step_label = f'Step {step_number}/{total_steps}: {label}'
+            wizard.progress_status_label.setText(step_label)
             wizard.append_progress_html(
-                f'<b>{html.escape(label)}</b>'
+                f'<b>{html.escape(step_label)}</b>'
             )
 
             def on_finished(code: int) -> None:
                 wizard.append_progress_html(
-                    f'<i>Step finished with code {code}</i>'
+                    f'<i>Step {step_number}/{total_steps} finished '
+                    f'with code {code}</i>'
                 )
                 if code == 0:
                     summary.append(label)
@@ -4870,6 +4875,9 @@ class MainWindow(QMainWindow):
                 finish(False)
 
             if not starter(on_finished):
+                wizard.append_progress_html(
+                    f'<i>Step {step_number}/{total_steps} failed to start</i>'
+                )
                 summary.append(f'Failed to start: {label}')
                 finish(False)
 

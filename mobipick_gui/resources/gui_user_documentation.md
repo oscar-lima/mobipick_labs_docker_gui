@@ -311,9 +311,11 @@ The tab search is separate from the documentation window search.
   GitHub issue.
   Later pages pull public images on the host PC with streamed output, select
   defaults, build host-user images, and optionally clone and build
-  `mobipick_labs` from source in a host-mounted workspace. The manual pull
-  option pauses setup until you confirm that the command has finished. Each
-  optional wizard page has **Skip This Step**.
+  `mobipick_labs` from source in a host-mounted workspace. The progress page
+  labels selected automatic setup work as **Step 1/N**, **Step 2/N**, and so
+  on, where **N** is the number of automatic steps that will run. The manual
+  pull option pauses setup until you confirm that the command has finished.
+  Each optional wizard page has **Skip This Step**.
   Docker cp paths are not configured by default; add them later from
   **Tools > Docker > Configure Docker cp Paths** when a workflow needs file
   copies.
