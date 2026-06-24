@@ -76,6 +76,46 @@ def test_wizard_collects_source_workspace_selection(tmp_path):
     app.processEvents()
 
 
+def test_wizard_setup_guide_learn_more_explains_checkboxes(tmp_path):
+    app = QApplication.instance() or QApplication([])
+    wizard = ImageSetupWizard(
+        public_images=['ozkrelo/x_mobipick_labs:noetic-v1.2'],
+        default_image='ozkrelo/x_mobipick_labs:noetic-v1.2',
+        host_user='testuser',
+        host_uid='1001',
+        host_gid='1001',
+        base_image='ozkrelo/x_mobipick_labs:noetic-v1.2',
+        target_image='ozkrelo/x_mobipick_labs:host_user_from_1.2',
+        workspace_names=[],
+        configuration_paths=[],
+        source_master_folder=str(tmp_path / 'master'),
+        source_workspace_name='clean_mobipick_labs_ws',
+        source_repository='https://github.com/DFKI-NI/mobipick_labs.git',
+        source_branch='noetic',
+        source_image='ozkrelo/x_mobipick_labs:host_user_from_1.2',
+    )
+
+    wizard._show_setup_options_help()
+    app.processEvents()
+
+    assert wizard._setup_options_dialog is not None
+    detail_edits = wizard._setup_options_dialog.findChildren(QTextEdit)
+    assert len(detail_edits) == 1
+    details = detail_edits[0].toPlainText()
+    assert 'Pull public Mobipick images' in details
+    assert 'Downloads the public Docker images' in details
+    assert 'Build a host-user development image' in details
+    assert 'container user matching your host user' in details
+    assert 'Clone and build mobipick_labs from source on this PC' in details
+    assert 'Creates a host workspace for mobipick_labs' in details
+    assert 'Do not show this wizard on startup again' in details
+    assert 'wizard remains available from the Tools menu' in details
+
+    wizard.close()
+    wizard.deleteLater()
+    app.processEvents()
+
+
 def test_wizard_page_titles_show_step_position(tmp_path):
     app = QApplication.instance() or QApplication([])
     wizard = ImageSetupWizard(

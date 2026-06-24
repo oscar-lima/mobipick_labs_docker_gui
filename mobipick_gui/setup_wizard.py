@@ -116,6 +116,7 @@ class ImageSetupWizard(QWizard):
         self._dependency_status_labels: dict[str, QLabel] = {}
         self._last_dependency_report = ''
         self._dependency_details_dialog: QDialog | None = None
+        self._setup_options_dialog: QDialog | None = None
 
         self.pull_public_images = QCheckBox('Pull public Mobipick images')
         self.pull_public_images.setChecked(True)
@@ -221,6 +222,16 @@ class ImageSetupWizard(QWizard):
         intro_layout.addWidget(self.build_custom_image)
         intro_layout.addWidget(self.install_source_workspace)
         intro_layout.addWidget(self.remember_completion)
+        intro_buttons = QHBoxLayout()
+        self.setup_options_help_button = QPushButton(
+            'Learn More About These Choices'
+        )
+        self.setup_options_help_button.clicked.connect(
+            self._show_setup_options_help
+        )
+        intro_buttons.addWidget(self.setup_options_help_button)
+        intro_buttons.addStretch(1)
+        intro_layout.addLayout(intro_buttons)
         self._intro_page_id = self.addPage(intro)
 
         image_page = QWizardPage()
@@ -977,6 +988,97 @@ class ImageSetupWizard(QWizard):
 
     def _clear_dependency_details_dialog(self, _result: int) -> None:
         self._dependency_details_dialog = None
+
+    def _setup_option_explanations(self) -> list[tuple[QCheckBox, str]]:
+        return [
+            (
+                self.pull_public_images,
+                'Downloads the public Docker images listed on the next page '
+                'with docker pull. Leave this enabled on a fresh machine or '
+                'when the default image is missing locally. You can skip it '
+                'when the needed images are already present, when another '
+                'machine will pull them, or when you choose the manual pull '
+                'method later in the wizard.',
+            ),
+            (
+                self.build_custom_image,
+                'Builds a development image from the selected base image with '
+                'a container user matching your host user, UID, and GID. This '
+                'is useful for editing host-mounted workspaces without root '
+                'owned files appearing on the host. Skip it if you only need '
+                'the public image as-is or already have a suitable custom '
+                'image.',
+            ),
+            (
+                self.install_source_workspace,
+                'Creates a host workspace for mobipick_labs, clones the '
+                'configured repository and branch, then runs the dependency '
+                'installation and build commands in Docker with streamed '
+                'output. Use this when you want a local source checkout for '
+                'development or experiments. Skip it for image-only use or '
+                'when you already manage the workspace yourself.',
+            ),
+            (
+                self.remember_completion,
+                'Saves the wizard as completed after setup so it does not '
+                'open automatically on future startups. The wizard remains '
+                'available from the Tools menu. Leave this unchecked when you '
+                'want the GUI to keep offering setup guidance until the '
+                'environment is fully ready.',
+            ),
+        ]
+
+    def _setup_options_help_html(self) -> str:
+        blocks = [
+            '<h2 style="margin-bottom:6px;">Setup Guide Choices</h2>',
+            '<p style="color:#555;">Each checkbox controls whether a later '
+            'wizard step or startup preference is included in this setup '
+            'run.</p>',
+        ]
+        for checkbox, explanation in self._setup_option_explanations():
+            state = 'currently selected' if checkbox.isChecked() else 'skipped'
+            blocks.append(
+                '<div style="border:1px solid #d6d8dc; '
+                'border-left:5px solid #5d7fa3; '
+                'padding:10px; margin:10px 0;">'
+                '<div style="font-size:16px; font-weight:700;">'
+                f'{html.escape(checkbox.text())}</div>'
+                f'<p><b>Current state:</b> {html.escape(state)}.</p>'
+                f'<p>{html.escape(explanation)}</p>'
+                '</div>'
+            )
+        return ''.join(blocks)
+
+    def _show_setup_options_help(self) -> None:
+        if self._setup_options_dialog is not None:
+            self._setup_options_dialog.close()
+        dialog = QDialog(self)
+        dialog.setWindowTitle('Setup Guide Choice Details')
+        dialog.resize(720, 500)
+        layout = QVBoxLayout(dialog)
+        intro = QLabel(
+            'Use these explanations to decide which setup tasks should run '
+            'for this PC.'
+        )
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+        details = QTextEdit()
+        details.setAcceptRichText(True)
+        details.setReadOnly(True)
+        details.setMinimumWidth(640)
+        details.setMinimumHeight(360)
+        details.setHtml(self._setup_options_help_html())
+        layout.addWidget(details)
+        buttons = QDialogButtonBox(QDialogButtonBox.Close)
+        buttons.rejected.connect(dialog.close)
+        layout.addWidget(buttons)
+        dialog.finished.connect(self._clear_setup_options_dialog)
+        self._setup_options_dialog = dialog
+        if QApplication.platformName() != 'offscreen':
+            dialog.show()
+
+    def _clear_setup_options_dialog(self, _result: int) -> None:
+        self._setup_options_dialog = None
 
     def _dependency_report_text(self, failures: Iterable[HostDependency]) -> str:
         lines = [

@@ -312,6 +312,9 @@ The tab search is separate from the documentation window search.
   dependency. If a check still fails, **Open Bug Report** prepares the
   standard diagnostics so you can copy, save, email, or open a prefilled
   GitHub issue.
+  The setup guide page includes **Learn More About These Choices**, which opens
+  a separate explanation window for the public-image pull, host-user image
+  build, source workspace install, and startup reminder checkboxes.
   Later pages pull public images on the host PC with streamed output, select
   defaults, build host-user images, and optionally clone and build
   `mobipick_labs` from source in a host-mounted workspace. The progress page
