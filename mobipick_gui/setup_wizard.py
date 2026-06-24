@@ -62,6 +62,7 @@ class HostDependency:
     installed: bool
     reason: str
     required: bool = False
+    check_commands: list[str] = field(default_factory=list)
 
 
 class ImageSetupWizard(QWizard):
@@ -706,6 +707,7 @@ class ImageSetupWizard(QWizard):
                 dep.installed = fresh.installed
                 dep.reason = fresh.reason
                 dep.required = fresh.required
+                dep.check_commands = list(fresh.check_commands)
                 checkbox = self._dependency_checkboxes.get(dep.key)
                 label = self._dependency_status_labels.get(dep.key)
                 if checkbox is not None:
@@ -776,6 +778,25 @@ class ImageSetupWizard(QWizard):
             ])
         return '\n'.join(lines)
 
+    def _dependency_check_commands_text(self) -> str:
+        lines = [
+            '# Exact Bash probe commands used by Run Checks',
+        ]
+        if not self._host_dependencies:
+            lines.append('# No host dependency checks are configured.')
+            return '\n'.join(lines)
+        for dep in self._host_dependencies:
+            result = 'OK' if dep.installed else 'FAILED'
+            lines.extend([
+                '',
+                f'# {dep.label} ({result})',
+            ])
+            commands = dep.check_commands or [
+                '# No explicit probe command was recorded for this check.'
+            ]
+            lines.extend(commands)
+        return '\n'.join(lines)
+
     def _show_dependency_check_details(self) -> None:
         if self._dependency_details_dialog is not None:
             self._dependency_details_dialog.close()
@@ -793,9 +814,34 @@ class ImageSetupWizard(QWizard):
         details.setAcceptRichText(False)
         details.setReadOnly(True)
         details.setMinimumWidth(680)
-        details.setMinimumHeight(360)
+        details.setMinimumHeight(220)
         details.setPlainText(self._dependency_check_details_text())
         layout.addWidget(details)
+        command_label = QLabel('Exact Bash probe commands')
+        command_label.setStyleSheet(
+            'QLabel {'
+            'background: #111;'
+            'color: #f3f3f3;'
+            'font-family: monospace;'
+            'font-weight: bold;'
+            'padding: 8px;'
+            '}'
+        )
+        layout.addWidget(command_label)
+        command_edit = QTextEdit()
+        command_edit.setAcceptRichText(False)
+        command_edit.setReadOnly(True)
+        command_edit.setMinimumHeight(180)
+        command_edit.setStyleSheet(
+            'QTextEdit {'
+            'background: #111;'
+            'color: #f3f3f3;'
+            'font-family: monospace;'
+            'selection-background-color: #385a7c;'
+            '}'
+        )
+        command_edit.setPlainText(self._dependency_check_commands_text())
+        layout.addWidget(command_edit)
         buttons = QDialogButtonBox(QDialogButtonBox.Close)
         buttons.rejected.connect(dialog.close)
         layout.addWidget(buttons)

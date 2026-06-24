@@ -263,6 +263,7 @@ def test_wizard_dependency_check_shows_explained_results(tmp_path):
                 installed=True,
                 reason='"docker ps" succeeded',
                 required=True,
+                check_commands=['command -v docker', 'docker ps'],
             ),
             HostDependency(
                 key='wmctrl',
@@ -270,6 +271,7 @@ def test_wizard_dependency_check_shows_explained_results(tmp_path):
                 package='wmctrl',
                 installed=True,
                 reason='found at /usr/bin/wmctrl',
+                check_commands=['command -v wmctrl'],
             ),
         ]
 
@@ -297,8 +299,9 @@ def test_wizard_dependency_check_shows_explained_results(tmp_path):
 
     assert wizard._dependency_details_dialog is not None
     detail_edits = wizard._dependency_details_dialog.findChildren(QTextEdit)
-    assert detail_edits
+    assert len(detail_edits) == 2
     details = detail_edits[0].toPlainText()
+    commands = detail_edits[1].toPlainText()
     assert 'Check: Docker Engine' in details
     assert 'Result: OK' in details
     assert (
@@ -308,6 +311,11 @@ def test_wizard_dependency_check_shows_explained_results(tmp_path):
     assert 'Evidence: "docker ps" succeeded' in details
     assert 'Check: wmctrl' in details
     assert 'Evidence: found at /usr/bin/wmctrl' in details
+    assert '# Docker Engine (OK)' in commands
+    assert 'command -v docker' in commands
+    assert 'docker ps' in commands
+    assert '# wmctrl (OK)' in commands
+    assert 'command -v wmctrl' in commands
 
     wizard.close()
     wizard.deleteLater()

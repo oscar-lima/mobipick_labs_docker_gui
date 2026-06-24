@@ -4125,21 +4125,48 @@ class MainWindow(QMainWindow):
             'docker-buildx-plugin',
             'docker-compose-plugin',
         ]
-        apt_candidates_ok, apt_candidate_detail = (
-            self._docker_apt_candidate_status(docker_packages)
-        )
-        repo_ok, repo_detail = self._host_shell_status(
+        apt_candidate_commands = [
+            'apt-cache policy '
+            + shlex.quote(package)
+            + r" | awk '/Candidate:/ {print $2; exit}'"
+            for package in docker_packages
+        ]
+        repo_command = (
             r'grep -R "download.docker.com/linux/ubuntu" '
             r'/etc/apt/sources.list /etc/apt/sources.list.d/*.list '
             r'2>/dev/null'
         )
-        snap_ok, snap_detail = self._host_shell_status(
+        snap_command = (
             'if command -v snap >/dev/null 2>&1 '
             '&& snap list docker >/dev/null 2>&1; then '
             'snap list docker; exit 1; '
             'else echo "Snap Docker not detected."; fi'
         )
-        systemd_ok, systemd_detail = self._host_shell_status('ps -p 1 -o comm=')
+        systemd_command = 'ps -p 1 -o comm='
+        docker_probe_commands = [
+            *apt_candidate_commands,
+            repo_command,
+            snap_command,
+            systemd_command,
+            'systemctl is-active docker',
+            'systemctl is-active containerd',
+            'id -nG',
+            'ls -l /var/run/docker.sock',
+            'command -v docker',
+            'docker ps',
+        ]
+        compose_probe_commands = [
+            *apt_candidate_commands,
+            repo_command,
+            'docker compose version',
+            'docker compose run --help',
+        ]
+        apt_candidates_ok, apt_candidate_detail = (
+            self._docker_apt_candidate_status(docker_packages)
+        )
+        repo_ok, repo_detail = self._host_shell_status(repo_command)
+        snap_ok, snap_detail = self._host_shell_status(snap_command)
+        systemd_ok, systemd_detail = self._host_shell_status(systemd_command)
         has_systemd = systemd_ok and systemd_detail.strip() == 'systemd'
         if has_systemd:
             docker_service_ok, docker_service_detail = self._host_command_status(
@@ -4158,8 +4185,11 @@ class MainWindow(QMainWindow):
             ['ls', '-l', '/var/run/docker.sock']
         )
 
-        docker_path = shutil.which('docker')
-        if docker_path:
+        docker_path_ok, docker_path_detail = self._host_shell_status(
+            'command -v docker'
+        )
+        if docker_path_ok:
+            docker_path = docker_path_detail or 'docker'
             docker_ok, docker_detail = self._host_command_status(['docker', 'ps'])
             if docker_ok:
                 docker_reason = 'Docker daemon is reachable by the current user.'
@@ -4252,6 +4282,10 @@ class MainWindow(QMainWindow):
                 'Reinstall the Docker Compose plugin from Docker\'s official '
                 'Ubuntu apt repository.'
             )
+        wmctrl_ok, wmctrl_detail = self._host_shell_status('command -v wmctrl')
+        xprop_ok, xprop_detail = self._host_shell_status('command -v xprop')
+        dot_ok, dot_detail = self._host_shell_status('command -v dot')
+        ffmpeg_ok, ffmpeg_detail = self._host_shell_status('command -v ffmpeg')
 
         return [
             HostDependency(
@@ -4261,6 +4295,7 @@ class MainWindow(QMainWindow):
                 installed=docker_ok,
                 reason=docker_reason,
                 required=True,
+                check_commands=docker_probe_commands,
             ),
             HostDependency(
                 key='docker_compose',
@@ -4269,34 +4304,51 @@ class MainWindow(QMainWindow):
                 installed=docker_compose_ok,
                 reason=compose_reason,
                 required=True,
+                check_commands=compose_probe_commands,
             ),
             HostDependency(
                 key='wmctrl',
                 label='wmctrl',
                 package='wmctrl',
-                installed=shutil.which('wmctrl') is not None,
-                reason='Optional; enables window layout capture and replay.',
+                installed=wmctrl_ok,
+                reason=(
+                    'Optional; enables window layout capture and replay. '
+                    f'Probe output: {wmctrl_detail or "not found"}.'
+                ),
+                check_commands=['command -v wmctrl'],
             ),
             HostDependency(
                 key='xprop',
                 label='xprop',
                 package='x11-utils',
-                installed=shutil.which('xprop') is not None,
-                reason='Optional; helps identify windows for layout replay.',
+                installed=xprop_ok,
+                reason=(
+                    'Optional; helps identify windows for layout replay. '
+                    f'Probe output: {xprop_detail or "not found"}.'
+                ),
+                check_commands=['command -v xprop'],
             ),
             HostDependency(
                 key='graphviz',
                 label='Graphviz',
                 package='graphviz',
-                installed=shutil.which('dot') is not None,
-                reason='Optional; renders workspace graphs.',
+                installed=dot_ok,
+                reason=(
+                    'Optional; renders workspace graphs. '
+                    f'Probe output: {dot_detail or "not found"}.'
+                ),
+                check_commands=['command -v dot'],
             ),
             HostDependency(
                 key='ffmpeg',
                 label='FFmpeg',
                 package='ffmpeg',
-                installed=shutil.which('ffmpeg') is not None,
-                reason='Optional; records Auto Launch screen captures.',
+                installed=ffmpeg_ok,
+                reason=(
+                    'Optional; records Auto Launch screen captures. '
+                    f'Probe output: {ffmpeg_detail or "not found"}.'
+                ),
+                check_commands=['command -v ffmpeg'],
             ),
         ]
 
