@@ -10,6 +10,8 @@ from PyQt5.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
+    QDialog,
+    QDialogButtonBox,
     QFormLayout,
     QHBoxLayout,
     QLabel,
@@ -106,6 +108,7 @@ class ImageSetupWizard(QWizard):
         self._dependency_checkboxes: dict[str, QCheckBox] = {}
         self._dependency_status_labels: dict[str, QLabel] = {}
         self._last_dependency_report = ''
+        self._dependency_details_dialog: QDialog | None = None
 
         self.pull_public_images = QCheckBox('Pull public Mobipick images')
         self.pull_public_images.setChecked(True)
@@ -734,6 +737,7 @@ class ImageSetupWizard(QWizard):
                 'All configured host dependency checks passed.'
             )
             self.dependency_report_button.setEnabled(False)
+            self._show_dependency_check_details()
             return
         self._last_dependency_report = self._dependency_report_text(failures)
         self.dependency_result_label.setText(
@@ -743,6 +747,65 @@ class ImageSetupWizard(QWizard):
         self.dependency_report_button.setEnabled(
             self._host_dependency_report_handler is not None
         )
+        self._show_dependency_check_details()
+
+    def _dependency_check_details_text(self) -> str:
+        lines = [
+            'Host dependency check results',
+            '',
+            'These are the checks the setup wizard just ran. The Evidence line '
+            'uses the exact status text returned by the checker.',
+        ]
+        if not self._host_dependencies:
+            lines.extend([
+                '',
+                'No host dependency checks are configured.',
+            ])
+            return '\n'.join(lines)
+        for dep in self._host_dependencies:
+            result = 'OK' if dep.installed else 'FAILED'
+            required = 'required' if dep.required else 'optional'
+            package = dep.package or 'no apt package configured'
+            lines.extend([
+                '',
+                f'Check: {dep.label}',
+                f'Result: {result}',
+                'Why: This is a '
+                f'{required} host dependency. Apt package: {package}.',
+                f'Evidence: {dep.reason}',
+            ])
+        return '\n'.join(lines)
+
+    def _show_dependency_check_details(self) -> None:
+        if self._dependency_details_dialog is not None:
+            self._dependency_details_dialog.close()
+        dialog = QDialog(self)
+        dialog.setWindowTitle('Host Dependency Check Details')
+        dialog.resize(760, 520)
+        layout = QVBoxLayout(dialog)
+        intro = QLabel(
+            'Review exactly what was checked, why it matters, and the evidence '
+            'behind each result.'
+        )
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+        details = QTextEdit()
+        details.setAcceptRichText(False)
+        details.setReadOnly(True)
+        details.setMinimumWidth(680)
+        details.setMinimumHeight(360)
+        details.setPlainText(self._dependency_check_details_text())
+        layout.addWidget(details)
+        buttons = QDialogButtonBox(QDialogButtonBox.Close)
+        buttons.rejected.connect(dialog.close)
+        layout.addWidget(buttons)
+        dialog.finished.connect(self._clear_dependency_details_dialog)
+        self._dependency_details_dialog = dialog
+        if QApplication.platformName() != 'offscreen':
+            dialog.show()
+
+    def _clear_dependency_details_dialog(self, _result: int) -> None:
+        self._dependency_details_dialog = None
 
     def _dependency_report_text(self, failures: Iterable[HostDependency]) -> str:
         lines = [

@@ -4,7 +4,7 @@ import os
 os.environ['QT_QPA_PLATFORM'] = 'offscreen'
 
 import pytest
-from PyQt5.QtWidgets import QApplication, QDialog, QWizard
+from PyQt5.QtWidgets import QApplication, QDialog, QTextEdit, QWizard
 
 from mobipick_gui.config import CONFIG
 import mobipick_gui.main_window as main_window_module
@@ -245,6 +245,69 @@ def test_wizard_dependency_check_opens_bug_report_for_failures(tmp_path):
     assert 'Docker Engine' in reports[-1]
     assert 'permission denied' in reports[-1]
     assert 'docker-compose-plugin' in reports[-1]
+
+    wizard.close()
+    wizard.deleteLater()
+    app.processEvents()
+
+
+def test_wizard_dependency_check_shows_explained_results(tmp_path):
+    app = QApplication.instance() or QApplication([])
+
+    def refresh_dependencies():
+        return [
+            HostDependency(
+                key='docker',
+                label='Docker Engine',
+                package='docker-ce',
+                installed=True,
+                reason='"docker ps" succeeded',
+                required=True,
+            ),
+            HostDependency(
+                key='wmctrl',
+                label='wmctrl',
+                package='wmctrl',
+                installed=True,
+                reason='found at /usr/bin/wmctrl',
+            ),
+        ]
+
+    wizard = ImageSetupWizard(
+        public_images=['ozkrelo/x_mobipick_labs:noetic-v1.2'],
+        default_image='ozkrelo/x_mobipick_labs:noetic-v1.2',
+        host_user='testuser',
+        host_uid='1001',
+        host_gid='1001',
+        base_image='ozkrelo/x_mobipick_labs:noetic-v1.2',
+        target_image='ozkrelo/x_mobipick_labs:host_user_from_1.2',
+        workspace_names=[],
+        configuration_paths=[],
+        source_master_folder=str(tmp_path / 'master'),
+        source_workspace_name='clean_mobipick_labs_ws',
+        source_repository='https://github.com/DFKI-NI/mobipick_labs.git',
+        source_branch='noetic',
+        source_image='ozkrelo/x_mobipick_labs:host_user_from_1.2',
+        host_dependencies=refresh_dependencies(),
+        host_dependency_refresher=refresh_dependencies,
+    )
+
+    wizard._mark_selected_dependencies_done()
+    app.processEvents()
+
+    assert wizard._dependency_details_dialog is not None
+    detail_edits = wizard._dependency_details_dialog.findChildren(QTextEdit)
+    assert detail_edits
+    details = detail_edits[0].toPlainText()
+    assert 'Check: Docker Engine' in details
+    assert 'Result: OK' in details
+    assert (
+        'Why: This is a required host dependency. Apt package: docker-ce.'
+        in details
+    )
+    assert 'Evidence: "docker ps" succeeded' in details
+    assert 'Check: wmctrl' in details
+    assert 'Evidence: found at /usr/bin/wmctrl' in details
 
     wizard.close()
     wizard.deleteLater()
