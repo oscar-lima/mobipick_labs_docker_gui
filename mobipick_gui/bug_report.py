@@ -336,7 +336,7 @@ class BugReportDialog(QDialog):
         mail_button.clicked.connect(self.open_email)
         button_row.addWidget(mail_button)
 
-        github_button = QPushButton('GitHub Issue')
+        github_button = QPushButton('Create GitHub Issue')
         github_button.clicked.connect(self.open_github_issue)
         button_row.addWidget(github_button)
 
