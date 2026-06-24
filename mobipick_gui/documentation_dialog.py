@@ -6,7 +6,6 @@ from pathlib import Path
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QColor, QTextCharFormat, QTextCursor, QTextDocument
 from PyQt5.QtWidgets import (
-    QDialog,
     QDialogButtonBox,
     QHBoxLayout,
     QLabel,
@@ -20,6 +19,7 @@ from PyQt5.QtWidgets import (
 )
 
 from .external_links import open_external_url
+from .window_utils import MaximizableDialog as QDialog
 
 
 class DocumentationDialog(QDialog):

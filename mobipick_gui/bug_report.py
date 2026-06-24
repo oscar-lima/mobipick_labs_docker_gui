@@ -12,7 +12,6 @@ from PyQt5.QtGui import QFont
 from PyQt5.QtWidgets import (
     QApplication,
     QCheckBox,
-    QDialog,
     QFileDialog,
     QHBoxLayout,
     QLabel,
@@ -26,6 +25,7 @@ from PyQt5.QtWidgets import (
 
 from .external_links import open_external_url
 from .version import get_version
+from .window_utils import MaximizableDialog as QDialog
 
 BUG_REPORT_EMAIL = 'mobipick-labs@dfki.de'
 BUG_REPORT_GITHUB_ISSUE_URL = (

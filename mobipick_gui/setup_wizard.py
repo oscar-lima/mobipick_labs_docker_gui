@@ -10,7 +10,6 @@ from PyQt5.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
-    QDialog,
     QDialogButtonBox,
     QFormLayout,
     QHBoxLayout,
@@ -24,6 +23,10 @@ from PyQt5.QtWidgets import (
 )
 
 from .log_widget import LogTextEdit
+from .window_utils import (
+    MaximizableDialog as QDialog,
+    configure_maximizable_window,
+)
 
 
 @dataclass
@@ -95,6 +98,7 @@ class ImageSetupWizard(QWizard):
         parent=None,
     ):
         super().__init__(parent)
+        configure_maximizable_window(self)
         self.setWindowTitle('Mobipick Setup Wizard')
         self.setWizardStyle(QWizard.ModernStyle)
         self.resize(820, 640)

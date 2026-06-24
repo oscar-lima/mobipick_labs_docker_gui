@@ -35,7 +35,6 @@ from PyQt5.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
-    QDialog,
     QDialogButtonBox,
     QDoubleSpinBox,
     QFileDialog,
@@ -101,6 +100,10 @@ CONTAINER_SCRIPTS_DIR = str(
 from .process_tab import ProcessTab
 from .setup_wizard import HostDependency, ImageSetupWizard, SetupWizardSelection
 from .version import get_version
+from .window_utils import (
+    MaximizableDialog as QDialog,
+    configure_maximizable_window,
+)
 from .window_layout import WindowLayoutManager
 from .workspace_dialog import WorkspaceManagerDialog
 from .workspaces import RosWorkspace, WorkspaceRegistry
@@ -1710,6 +1713,7 @@ class WorkspaceMatchDialog(QDialog):
 class MainWindow(QMainWindow):
     def __init__(self, verbosity: int = 1):
         super().__init__()
+        configure_maximizable_window(self)
 
         try:
             value = int(verbosity)
@@ -6907,9 +6911,7 @@ CMD ["bash"]
         save_button.clicked.connect(self._on_save_window_state_clicked)
         layout.addWidget(save_button)
         dialog.setLayout(layout)
-        dialog.setSizeGripEnabled(False)
         dialog.setMinimumWidth(280)
-        dialog.setMaximumWidth(360)
         self._window_layout_dialog = dialog
         return dialog
 
@@ -7690,7 +7692,6 @@ CMD ["bash"]
         dialog = QDialog(None)  # top-level so wmctrl can move it independently
         dialog.setWindowTitle('Recording Control')
         dialog.setWindowFlag(Qt.WindowStaysOnTopHint, True)
-        dialog.setWindowFlag(Qt.Tool, True)
         dialog.setWindowModality(Qt.NonModal)
         dialog.setAttribute(Qt.WA_DeleteOnClose, False)
         layout = QVBoxLayout(dialog)
@@ -7706,7 +7707,6 @@ CMD ["bash"]
         self._recording_stop_button = button
         dialog.setLayout(layout)
         dialog.setMinimumWidth(260)
-        dialog.setMaximumWidth(360)
 
         def _mark_closed():
             self._recording_window = None
