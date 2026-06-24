@@ -24,6 +24,7 @@ Options:
   --prerelease          Mark release as prerelease
   --target COMMIT       Tag this specific commit instead of branch HEAD
   --no-pull             Do not run git pull --ff-only
+  --bump-version        Update package version files for tag, commit, push, then exit
   --help                Show this help
 
 Interactive mode:
@@ -239,6 +240,137 @@ validate_package_version_matches_tag() {
   fi
 }
 
+package_version_matches_tag() {
+  local tag="$1"
+  local ref="${2:-}"
+  local expected_version="${tag#v}"
+  local package_version
+  local fallback_version
+
+  package_version="$(package_version_from_pyproject "$ref")"
+  fallback_version="$(fallback_version_from_version_py "$ref")"
+
+  [[ "$package_version" == "$expected_version" && ( -z "$fallback_version" || "$fallback_version" == "$expected_version" ) ]]
+}
+
+update_package_versions() {
+  local version="$1"
+
+  python3 - "$version" <<'PY'
+import sys
+from pathlib import Path
+
+version = sys.argv[1]
+pyproject_path = Path("pyproject.toml")
+version_path = Path("mobipick_gui/version.py")
+
+pyproject_lines = pyproject_path.read_text(encoding="utf-8").splitlines(keepends=True)
+in_project = False
+pyproject_count = 0
+
+for index, line in enumerate(pyproject_lines):
+    stripped = line.strip()
+
+    if stripped.startswith("[") and stripped.endswith("]"):
+        in_project = stripped == "[project]"
+        continue
+
+    if in_project and stripped.startswith("version"):
+        newline = "\n" if line.endswith("\n") else ""
+        pyproject_lines[index] = f'version = "{version}"{newline}'
+        pyproject_count += 1
+        break
+
+if pyproject_count != 1:
+    sys.exit("Could not update project.version in pyproject.toml")
+
+pyproject_path.write_text("".join(pyproject_lines), encoding="utf-8")
+
+if version_path.is_file():
+    version_lines = version_path.read_text(encoding="utf-8").splitlines(keepends=True)
+    fallback_count = 0
+
+    for index, line in enumerate(version_lines):
+        if line.startswith("_FALLBACK_VERSION"):
+            newline = "\n" if line.endswith("\n") else ""
+            version_lines[index] = f"_FALLBACK_VERSION = '{version}'{newline}"
+            fallback_count += 1
+            break
+
+    if fallback_count != 1:
+        sys.exit("Could not update _FALLBACK_VERSION in mobipick_gui/version.py")
+
+    version_path.write_text("".join(version_lines), encoding="utf-8")
+PY
+}
+
+commit_and_push_version_bump() {
+  local tag="$1"
+  local remote="$2"
+  local branch="$3"
+  local expected_version="${tag#v}"
+
+  update_package_versions "$expected_version"
+  validate_package_version_matches_tag "$tag"
+
+  if git diff --quiet -- pyproject.toml mobipick_gui/version.py; then
+    echo "Package version files already match $expected_version."
+    return 0
+  fi
+
+  echo
+  echo "Committing package version bump..."
+  git add pyproject.toml
+
+  if [[ -f mobipick_gui/version.py ]]; then
+    git add mobipick_gui/version.py
+  fi
+
+  git commit -m "bump version to $expected_version"
+
+  echo "Pushing version bump..."
+  git push "$remote" "$branch"
+}
+
+ensure_package_version_matches_tag() {
+  local tag="$1"
+  local ref="$2"
+  local allow_bump="$3"
+  local remote="$4"
+  local branch="$5"
+  local expected_version="${tag#v}"
+  local package_version
+  local fallback_version
+
+  if package_version_matches_tag "$tag" "$ref"; then
+    return 0
+  fi
+
+  package_version="$(package_version_from_pyproject "$ref")"
+  fallback_version="$(fallback_version_from_version_py "$ref")"
+
+  echo "Package version mismatch:" >&2
+  echo "  tag:                         $tag" >&2
+  echo "  pyproject.toml:              $package_version" >&2
+  echo "  mobipick_gui/version.py:     ${fallback_version:-not found}" >&2
+  echo "  expected package version:    $expected_version" >&2
+  echo >&2
+
+  if [[ "$allow_bump" == true && -t 0 ]]; then
+    ask_yes_no "Update, commit, and push package version $expected_version now?" || {
+      die "Package versions must match the release tag before publishing."
+    }
+
+    commit_and_push_version_bump "$tag" "$remote" "$branch"
+
+    echo
+    echo "Package version bump is on $branch."
+    return 0
+  fi
+
+  die "Package versions must match the release tag before publishing."
+}
+
 current_branch() {
   git rev-parse --abbrev-ref HEAD
 }
@@ -266,7 +398,9 @@ main() {
   local draft=false
   local prerelease=false
   local target=""
+  local target_was_explicit=false
   local do_pull=true
+  local bump_version=false
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -300,10 +434,15 @@ main() {
         ;;
       --target)
         target="${2:-}"
+        target_was_explicit=true
         shift 2
         ;;
       --no-pull)
         do_pull=false
+        shift
+        ;;
+      --bump-version)
+        bump_version=true
         shift
         ;;
       --help)
@@ -336,6 +475,16 @@ main() {
   fi
 
   validate_tag "$tag"
+
+  if [[ "$bump_version" == true ]]; then
+    if [[ -z "$branch" ]]; then
+      branch="$(current_branch)"
+    fi
+
+    commit_and_push_version_bump "$tag" "$remote" "$branch"
+    echo "Updated, committed, and pushed package version ${tag#v}."
+    exit 0
+  fi
 
   if [[ -z "$branch" ]]; then
     branch="$(ask "Branch to release from" "$(current_branch)")"
@@ -389,7 +538,11 @@ main() {
     target="$(git rev-parse "$target")"
   fi
 
-  validate_package_version_matches_tag "$tag" "$target"
+  ensure_package_version_matches_tag "$tag" "$target" "$([[ "$target_was_explicit" == false ]] && echo true || echo false)" "$remote" "$branch"
+
+  if [[ "$target_was_explicit" == false ]]; then
+    target="$(git rev-parse HEAD)"
+  fi
 
   local short_target
   short_target="$(git rev-parse --short "$target")"

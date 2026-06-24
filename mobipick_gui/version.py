@@ -7,7 +7,7 @@ except ImportError:  # pragma: no cover - Python < 3.8 fallback
     from importlib_metadata import PackageNotFoundError, version  # type: ignore
 
 PACKAGE_NAME = 'mobipick-labs-docker-gui'
-_FALLBACK_VERSION = '0.1.1'
+_FALLBACK_VERSION = '0.1.2'
 
 
 def get_version() -> str:

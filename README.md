@@ -227,14 +227,14 @@ published. Merging to `main` alone does not publish a new PyPI version.
 
 Recommended release steps:
 
-1. Update the version in `pyproject.toml` and `mobipick_gui/version.py`.
-2. Run the tests and build locally.
-3. Merge the release branch to `main`.
-4. Create and publish a GitHub Release from `main` with `./release.sh`.
+1. Run the tests and build locally.
+2. Merge the release branch to `main`.
+3. Create and publish a GitHub Release from `main` with `./release.sh`.
    The script suggests the next patch tag from existing releases/tags and
-   aborts before tagging if the tag, package version, and fallback version do
-   not match.
-5. Confirm the workflow succeeds, then verify the new release on
+   updates, commits, and pushes the package version bump before tagging when
+   needed. Explicit `--target` releases still require the package version to
+   already match the tag.
+4. Confirm the workflow succeeds, then verify the new release on
    <https://pypi.org/project/mobipick-labs-docker-gui/>.
 
 ## Configuration model
