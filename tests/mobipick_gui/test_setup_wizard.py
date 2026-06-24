@@ -302,6 +302,8 @@ def test_wizard_dependency_check_shows_explained_results(tmp_path):
     assert len(detail_edits) == 2
     details = detail_edits[0].toPlainText()
     commands = detail_edits[1].toPlainText()
+    assert 'Everything OK' in details
+    assert 'All configured host dependency checks passed.' in details
     assert 'Check: Docker Engine' in details
     assert 'Result: OK' in details
     assert (

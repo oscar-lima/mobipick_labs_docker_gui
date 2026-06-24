@@ -303,11 +303,12 @@ The tab search is separate from the documentation window search.
   host dependencies and lets you choose packages, copy an install script to
   the clipboard, run it in a terminal, and click **Run Checks**. The script
   asks for confirmation before each major installation, service, permission,
-  and test step. **Run Checks** opens a details window explaining each check,
-  why it matters, and the evidence used for the result. A black command
-  section lists the exact Bash probe commands used for each host dependency.
-  If a check still fails, **Open Bug Report** prepares the standard
-  diagnostics so you can copy, save, email, or open a prefilled GitHub issue.
+  and test step. **Run Checks** opens a details window with a color-coded
+  summary, each check's purpose, and the evidence used for the result. A
+  black command section lists the exact Bash probe commands used for each host
+  dependency. If a check still fails, **Open Bug Report** prepares the
+  standard diagnostics so you can copy, save, email, or open a prefilled
+  GitHub issue.
   Later pages pull public images on the host PC with streamed output, select
   defaults, build host-user images, and optionally clone and build
   `mobipick_labs` from source in a host-mounted workspace. The manual pull

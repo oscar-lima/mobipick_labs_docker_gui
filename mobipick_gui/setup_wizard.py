@@ -1,6 +1,7 @@
 """First-run setup wizard and Docker image builder settings."""
 from __future__ import annotations
 
+import html
 import re
 import shlex
 from dataclasses import dataclass, field
@@ -759,9 +760,29 @@ class ImageSetupWizard(QWizard):
         lines = [
             'Host dependency check results',
             '',
-            'These are the checks the setup wizard just ran. The Evidence line '
-            'uses the exact status text returned by the checker.',
         ]
+        if self._host_dependencies and all(
+            dep.installed for dep in self._host_dependencies
+        ):
+            lines.extend([
+                'EVERYTHING OK',
+                'All configured host dependency checks passed.',
+                '',
+            ])
+        elif self._host_dependencies:
+            failed = sum(
+                1 for dep in self._host_dependencies if not dep.installed
+            )
+            lines.extend([
+                f'{failed} CHECK(S) NEED ATTENTION',
+                'Review the failed checks below and use Open Bug Report if '
+                'you need to share the diagnostics.',
+                '',
+            ])
+        lines.append(
+            'These are the checks the setup wizard just ran. The Evidence line '
+            'uses the exact status text returned by the checker.'
+        )
         if not self._host_dependencies:
             lines.extend([
                 '',
@@ -781,6 +802,73 @@ class ImageSetupWizard(QWizard):
                 f'Evidence: {dep.reason}',
             ])
         return '\n'.join(lines)
+
+    def _dependency_check_details_html(self) -> str:
+        if not self._host_dependencies:
+            return (
+                '<h2>Host dependency check results</h2>'
+                '<p>No host dependency checks are configured.</p>'
+            )
+        all_ok = all(dep.installed for dep in self._host_dependencies)
+        failed_count = sum(
+            1 for dep in self._host_dependencies if not dep.installed
+        )
+        if all_ok:
+            banner = (
+                '<div style="background:#e8f7ee; color:#0b6b31; '
+                'border:1px solid #8fd0a8; padding:14px; '
+                'font-size:22px; font-weight:700;">Everything OK</div>'
+                '<p style="color:#285c3b; font-size:14px;">'
+                'All configured host dependency checks passed.</p>'
+            )
+        else:
+            banner = (
+                '<div style="background:#fff3e3; color:#8a4b00; '
+                'border:1px solid #e5b56f; padding:14px; '
+                f'font-size:20px; font-weight:700;">{failed_count} '
+                'check(s) need attention</div>'
+                '<p style="color:#704100; font-size:14px;">'
+                'Review the failed checks below and use Open Bug Report if '
+                'you need to share the diagnostics.</p>'
+            )
+        blocks = [
+            '<h2 style="margin-bottom:6px;">Host dependency check results</h2>',
+            banner,
+            '<p style="color:#555;">These are the checks the setup wizard just '
+            'ran. The Evidence line uses the exact status text returned by '
+            'the checker.</p>',
+        ]
+        for dep in self._host_dependencies:
+            status = 'OK' if dep.installed else 'FAILED'
+            status_color = '#0b7a35' if dep.installed else '#b42318'
+            status_bg = '#e8f7ee' if dep.installed else '#fdecec'
+            border_color = '#b8ddc4' if dep.installed else '#efb3ae'
+            required = 'required' if dep.required else 'optional'
+            article = 'a' if dep.required else 'an'
+            package = dep.package or 'no apt package configured'
+            blocks.append(
+                '<div style="border:1px solid #d6d8dc; '
+                'border-left:5px solid '
+                f'{border_color}; padding:10px; margin:10px 0;">'
+                '<div style="font-size:16px; font-weight:700;">'
+                '<b>Check:</b> '
+                f'{html.escape(dep.label)} '
+                '<span style="background:'
+                f'{status_bg}; color:{status_color}; border:1px solid '
+                f'{border_color}; padding:2px 8px; font-size:12px;">'
+                f'{status}</span></div>'
+                '<p><b>Result:</b> '
+                f'<span style="color:{status_color}; font-weight:700;">'
+                f'{status}</span></p>'
+                '<p><b>Why:</b> This is '
+                f'{article} '
+                f'{html.escape(required)} host dependency. Apt package: '
+                f'{html.escape(package)}.</p>'
+                '<p><b>Evidence:</b> '
+                f'{html.escape(dep.reason)}</p>'
+                '</div>'
+            )
+        return ''.join(blocks)
 
     def _dependency_check_commands_text(self) -> str:
         lines = [
@@ -815,11 +903,11 @@ class ImageSetupWizard(QWizard):
         intro.setWordWrap(True)
         layout.addWidget(intro)
         details = QTextEdit()
-        details.setAcceptRichText(False)
+        details.setAcceptRichText(True)
         details.setReadOnly(True)
         details.setMinimumWidth(680)
         details.setMinimumHeight(220)
-        details.setPlainText(self._dependency_check_details_text())
+        details.setHtml(self._dependency_check_details_html())
         layout.addWidget(details)
         command_label = QLabel('Exact Bash probe commands')
         command_label.setStyleSheet(
