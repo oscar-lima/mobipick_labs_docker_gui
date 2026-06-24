@@ -300,10 +300,13 @@ The tab search is separate from the documentation window search.
   Profile** or **Export Profile** in the editor to import or save a complete
   button configuration as one YAML file.
 - **Setup Wizard** opens the setup flow. The first page checks common Ubuntu
-  host dependencies and lets you choose packages, copy an install script to
-  the clipboard, run it in a terminal, and click **Run Checks**. The script
-  asks for confirmation before each major installation, service, permission,
-  and test step. **Run Checks** opens a details window with a color-coded
+  host dependencies, and each wizard page title is numbered as **Step 1/N**,
+  **Step 2/N**, and so on as you move through the flow. The host dependency
+  page lets you choose packages, copy an install script to the clipboard, run
+  it in a terminal, and click **Run Checks**. The script asks for confirmation
+  before each major installation, service, permission, and test step as
+  **Step 1/N**, **Step 2/N**, and so on. **Run Checks** opens a details
+  window with a color-coded
   summary, each check's purpose, and the evidence used for the result. A
   black command section lists the exact Bash probe commands used for each host
   dependency. If a check still fails, **Open Bug Report** prepares the

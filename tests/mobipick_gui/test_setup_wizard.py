@@ -76,6 +76,50 @@ def test_wizard_collects_source_workspace_selection(tmp_path):
     app.processEvents()
 
 
+def test_wizard_page_titles_show_step_position(tmp_path):
+    app = QApplication.instance() or QApplication([])
+    wizard = ImageSetupWizard(
+        public_images=['ozkrelo/x_mobipick_labs:noetic-v1.2'],
+        default_image='ozkrelo/x_mobipick_labs:noetic-v1.2',
+        host_user='testuser',
+        host_uid='1001',
+        host_gid='1001',
+        base_image='ozkrelo/x_mobipick_labs:noetic-v1.2',
+        target_image='ozkrelo/x_mobipick_labs:host_user_from_1.2',
+        workspace_names=[],
+        configuration_paths=[],
+        source_master_folder=str(tmp_path / 'master'),
+        source_workspace_name='clean_mobipick_labs_ws',
+        source_repository='https://github.com/DFKI-NI/mobipick_labs.git',
+        source_branch='noetic',
+        source_image='ozkrelo/x_mobipick_labs:host_user_from_1.2',
+    )
+    expected_titles = [
+        'Step 1/7) Host Dependencies',
+        'Step 2/7) Setup Guide',
+        'Step 3/7) Public Images',
+        'Step 4/7) Development Image',
+        'Step 5/7) Source Workspace',
+    ]
+
+    wizard.show()
+    app.processEvents()
+    for expected_title in expected_titles:
+        assert wizard.currentPage().title() == expected_title
+        if expected_title != expected_titles[-1]:
+            wizard.next()
+            app.processEvents()
+
+    assert wizard.page(wizard._progress_page_id).title() == 'Step 6/7) Run Setup'
+    assert (
+        wizard.page(wizard._summary_page_id).title()
+        == 'Step 7/7) Setup Summary'
+    )
+
+    wizard.deleteLater()
+    app.processEvents()
+
+
 def test_wizard_dependency_page_builds_copyable_install_command(tmp_path):
     app = QApplication.instance() or QApplication([])
     refreshed = []
@@ -151,7 +195,9 @@ def test_wizard_dependency_page_builds_copyable_install_command(tmp_path):
     command = wizard.dependency_command_edit.toPlainText()
     assert command.startswith("bash <<'MOBIPICK_DOCKER_INSTALL'")
     assert 'confirm_step()' in command
-    assert 'Run this step? [y/N]' in command
+    assert 'SETUP_STEP_TOTAL=7' in command
+    assert 'Run ${step_label}? [y/N]' in command
+    assert '==> ${step_label}: ${title}' in command
     assert 'https://download.docker.com/linux/ubuntu' in command
     assert 'sudo apt install -y ca-certificates curl gnupg' in command
     assert 'sudo gpg --dearmor --yes -o /etc/apt/keyrings/docker.gpg' in command
@@ -180,7 +226,8 @@ def test_wizard_dependency_page_builds_copyable_install_command(tmp_path):
     assert not wizard._dependency_checkboxes['docker'].isChecked()
     assert wizard._dependency_checkboxes['wmctrl'].isChecked()
     assert 'sudo apt install -y "${host_packages[@]}"' in wizard.dependency_command_edit.toPlainText()
-    assert 'Run this step? [y/N]' in wizard.dependency_command_edit.toPlainText()
+    assert 'SETUP_STEP_TOTAL=2' in wizard.dependency_command_edit.toPlainText()
+    assert 'Run ${step_label}? [y/N]' in wizard.dependency_command_edit.toPlainText()
     assert 'download.docker.com' not in wizard.dependency_command_edit.toPlainText()
 
     wizard.close()

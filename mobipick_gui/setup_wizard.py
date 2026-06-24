@@ -108,6 +108,7 @@ class ImageSetupWizard(QWizard):
         ) = None
         self._setup_started = False
         self._setup_complete = False
+        self._setup_page_titles: list[tuple[int, str]] = []
         self._host_dependencies: list[HostDependency] = list(host_dependencies)
         self._host_dependency_refresher = host_dependency_refresher
         self._host_dependency_report_handler = host_dependency_report_handler
@@ -344,9 +345,25 @@ class ImageSetupWizard(QWizard):
         summary_layout.addWidget(self.summary_edit)
         summary_page.setFinalPage(True)
         self._summary_page_id = self.addPage(summary_page)
+        self._setup_page_titles = [
+            (self._dependency_page_id, 'Host Dependencies'),
+            (self._intro_page_id, 'Setup Guide'),
+            (self._image_page_id, 'Public Images'),
+            (self._dev_page_id, 'Development Image'),
+            (self._source_page_id, 'Source Workspace'),
+            (self._progress_page_id, 'Run Setup'),
+            (self._summary_page_id, 'Setup Summary'),
+        ]
+        self._number_setup_page_titles()
 
         self.currentIdChanged.connect(self._update_navigation_buttons)
         self._update_navigation_buttons(self.currentId())
+
+    def _number_setup_page_titles(self) -> None:
+        """Prefix wizard page titles with their position in the flow."""
+        total = len(self._setup_page_titles)
+        for index, (page_id, title) in enumerate(self._setup_page_titles, 1):
+            self.page(page_id).setTitle(f'Step {index}/{total}) {title}')
 
     def set_setup_start_handler(
         self,
@@ -473,20 +490,25 @@ class ImageSetupWizard(QWizard):
     @staticmethod
     def _script_confirmation_helpers() -> list[str]:
         return [
+            'SETUP_STEP_NUMBER=0',
+            'SETUP_STEP_TOTAL=0',
+            '',
             'confirm_step() {',
             '  local title="$1"',
             '  local why="$2"',
             '  shift 2',
+            '  SETUP_STEP_NUMBER=$((SETUP_STEP_NUMBER + 1))',
+            '  local step_label="Step ${SETUP_STEP_NUMBER}/${SETUP_STEP_TOTAL}"',
             '  echo',
-            '  echo "==> ${title}"',
+            '  echo "==> ${step_label}: ${title}"',
             '  echo "Why: ${why}"',
             '  echo "Commands to run:"',
             '  printf "  %s\\n" "$@"',
             '  local answer',
-            '  read -r -p "Run this step? [y/N] " answer',
+            '  read -r -p "Run ${step_label}? [y/N] " answer',
             '  case "${answer}" in',
             '    y|Y|yes|YES|Yes) ;;',
-            '    *) echo "Stopped before: ${title}"; exit 130 ;;',
+            '    *) echo "Stopped before ${step_label}: ${title}"; exit 130 ;;',
             '  esac',
             '}',
         ]
@@ -499,6 +521,7 @@ class ImageSetupWizard(QWizard):
             '',
             *cls._script_confirmation_helpers(),
             '',
+            'SETUP_STEP_TOTAL=2',
             cls._script_array('host_packages', packages),
             '',
             'confirm_step \\',
@@ -550,6 +573,16 @@ class ImageSetupWizard(QWizard):
             '',
             'docker_packages=(docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin)',
             cls._script_array('support_packages', support_packages),
+            'SETUP_STEP_TOTAL=7',
+            'if (( ${#support_packages[@]} > 0 )); then',
+            '  SETUP_STEP_TOTAL=$((SETUP_STEP_TOTAL + 1))',
+            'fi',
+            'if [[ "$(ps -p 1 -o comm= 2>/dev/null || true)" == "systemd" ]]; then',
+            '  SETUP_MANAGE_SYSTEMD=1',
+            '  SETUP_STEP_TOTAL=$((SETUP_STEP_TOTAL + 1))',
+            'else',
+            '  SETUP_MANAGE_SYSTEMD=0',
+            'fi',
             '',
             'confirm_step \\',
             '  "Install apt prerequisites" \\',
@@ -609,7 +642,7 @@ class ImageSetupWizard(QWizard):
             '  sudo apt install -y "${support_packages[@]}"',
             'fi',
             '',
-            'if [[ "$(ps -p 1 -o comm= 2>/dev/null || true)" == "systemd" ]]; then',
+            'if [[ "${SETUP_MANAGE_SYSTEMD}" == "1" ]]; then',
             '  confirm_step \\',
             '    "Enable and restart Docker services" \\',
             '    "Docker needs containerd and the docker daemon running before the GUI can launch containers." \\',
