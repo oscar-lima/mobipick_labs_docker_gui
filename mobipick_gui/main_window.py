@@ -2219,6 +2219,7 @@ class MainWindow(QMainWindow):
 
         app_instance = QApplication.instance()
         if app_instance:
+            app_instance.installEventFilter(self)
             app_instance.aboutToQuit.connect(self._ensure_cleanup_before_exit)
 
     # ---------- Menu bar ----------
@@ -2231,7 +2232,7 @@ class MainWindow(QMainWindow):
             file_menu,
             'Quit',
             self.close,
-            shortcuts=[QKeySequence.Close, QKeySequence.Quit],
+            shortcuts=[QKeySequence('Ctrl+Q')],
             tooltip='Close the GUI and clean up running containers',
         )
 
@@ -2407,12 +2408,33 @@ class MainWindow(QMainWindow):
         return menu
 
     def eventFilter(self, watched, event):  # noqa: N802 - Qt API
+        if event.type() == QEvent.KeyPress:
+            if self._handle_active_window_close_shortcut(event):
+                return True
         if isinstance(watched, QMenu):
             if event.type() == QEvent.MouseMove:
                 self._update_menu_tooltip(watched, event)
             elif event.type() in (QEvent.Leave, QEvent.Hide):
                 self._hide_menu_tooltip()
         return super().eventFilter(watched, event)
+
+    def _handle_active_window_close_shortcut(self, event) -> bool:
+        """Close the active tool window for Ctrl+W without exiting the GUI."""
+        is_ctrl_w = (
+            event.key() == Qt.Key_W
+            and event.modifiers() == Qt.ControlModifier
+        )
+        if (
+            self._exit_in_progress
+            or not (is_ctrl_w or event.matches(QKeySequence.Close))
+        ):
+            return False
+        app_instance = QApplication.instance()
+        active_window = app_instance.activeWindow() if app_instance else None
+        if active_window is None or active_window is self:
+            return False
+        active_window.close()
+        return True
 
     def _update_menu_tooltip(self, menu: QMenu, event) -> None:
         action = menu.actionAt(event.pos())

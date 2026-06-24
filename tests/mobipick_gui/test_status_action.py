@@ -4,7 +4,8 @@ os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
 from PyQt5.QtCore import QEvent, Qt
 from PyQt5.QtGui import QKeySequence
-from PyQt5.QtWidgets import QApplication, QPushButton, QToolTip
+from PyQt5.QtTest import QTest
+from PyQt5.QtWidgets import QApplication, QDialog, QPushButton, QToolTip
 
 from mobipick_gui.config import CONFIG
 from mobipick_gui.main_window import MainWindow
@@ -60,7 +61,7 @@ def test_update_status_is_menu_only(tmp_path, monkeypatch):
     app.processEvents()
 
 
-def test_file_quit_action_uses_linux_close_shortcuts(tmp_path, monkeypatch):
+def test_file_quit_action_uses_quit_shortcut(tmp_path, monkeypatch):
     monkeypatch.setenv('MOBIPICK_WORKSPACE_CONFIG', str(tmp_path / 'workspaces.yaml'))
     monkeypatch.setattr(
         MainWindow,
@@ -89,10 +90,9 @@ def test_file_quit_action_uses_linux_close_shortcuts(tmp_path, monkeypatch):
 
     assert match is not None
     _, action = match
-    assert {shortcut.toString() for shortcut in action.shortcuts()} == {
-        QKeySequence(QKeySequence.Close).toString(),
-        QKeySequence(QKeySequence.Quit).toString(),
-    }
+    assert [shortcut.toString() for shortcut in action.shortcuts()] == [
+        QKeySequence('Ctrl+Q').toString(),
+    ]
     assert action.property('mobipick_menu_tooltip') == (
         'Close the GUI and clean up running containers'
     )
@@ -101,6 +101,47 @@ def test_file_quit_action_uses_linux_close_shortcuts(tmp_path, monkeypatch):
     app.processEvents()
 
     assert close_calls == [True]
+
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_ctrl_w_closes_active_secondary_window(tmp_path, monkeypatch):
+    monkeypatch.setenv('MOBIPICK_WORKSPACE_CONFIG', str(tmp_path / 'workspaces.yaml'))
+    monkeypatch.setattr(
+        MainWindow,
+        '_discover_filtered_image_records',
+        lambda self: ([{'ref': CONFIG['images']['default']}], None),
+    )
+    monkeypatch.setattr(
+        MainWindow,
+        'update_sim_status_from_poll',
+        lambda self, force=False: None,
+    )
+
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow(verbosity=1)
+    window.poll_timer.stop()
+    window._sigint_timer.stop()
+    close_calls = []
+    monkeypatch.setattr(
+        window,
+        '_begin_exit_sequence',
+        lambda: close_calls.append(True),
+    )
+    window.show()
+
+    dialog = QDialog(window)
+    dialog.setWindowTitle('Secondary Window')
+    dialog.show()
+    dialog.activateWindow()
+    app.processEvents()
+
+    QTest.keyClick(dialog, Qt.Key_W, Qt.ControlModifier)
+    app.processEvents()
+
+    assert not dialog.isVisible()
+    assert close_calls == []
 
     window.deleteLater()
     app.processEvents()
