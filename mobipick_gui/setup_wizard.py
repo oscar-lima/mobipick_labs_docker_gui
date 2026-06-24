@@ -363,7 +363,7 @@ class ImageSetupWizard(QWizard):
         """Prefix wizard page titles with their position in the flow."""
         total = len(self._setup_page_titles)
         for index, (page_id, title) in enumerate(self._setup_page_titles, 1):
-            self.page(page_id).setTitle(f'Step {index}/{total}) {title}')
+            self.page(page_id).setTitle(f'Step {index}/{total}: {title}')
 
     def set_setup_start_handler(
         self,

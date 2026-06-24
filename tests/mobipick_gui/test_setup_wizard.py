@@ -95,11 +95,11 @@ def test_wizard_page_titles_show_step_position(tmp_path):
         source_image='ozkrelo/x_mobipick_labs:host_user_from_1.2',
     )
     expected_titles = [
-        'Step 1/7) Host Dependencies',
-        'Step 2/7) Setup Guide',
-        'Step 3/7) Public Images',
-        'Step 4/7) Development Image',
-        'Step 5/7) Source Workspace',
+        'Step 1/7: Host Dependencies',
+        'Step 2/7: Setup Guide',
+        'Step 3/7: Public Images',
+        'Step 4/7: Development Image',
+        'Step 5/7: Source Workspace',
     ]
 
     wizard.show()
@@ -110,10 +110,10 @@ def test_wizard_page_titles_show_step_position(tmp_path):
             wizard.next()
             app.processEvents()
 
-    assert wizard.page(wizard._progress_page_id).title() == 'Step 6/7) Run Setup'
+    assert wizard.page(wizard._progress_page_id).title() == 'Step 6/7: Run Setup'
     assert (
         wizard.page(wizard._summary_page_id).title()
-        == 'Step 7/7) Setup Summary'
+        == 'Step 7/7: Setup Summary'
     )
 
     wizard.deleteLater()
