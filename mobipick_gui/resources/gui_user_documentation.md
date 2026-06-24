@@ -391,7 +391,8 @@ the **Install Source** tab.
 - **Documentation** opens this user documentation window.
 - **File Bug Report...** opens a diagnostic report builder. Choose which
   sections to include, add notes, and save or copy the report.
-- **About** shows the GUI version, maintainer contact, and Mobipick Labs link.
+- **About** shows the GUI version, maintainer contact, GUI source code
+  repository, and Mobipick Labs link.
 
 ## Workspace and image warnings
 

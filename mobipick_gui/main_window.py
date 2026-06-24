@@ -109,6 +109,8 @@ from .workspace_dialog import WorkspaceManagerDialog
 from .workspaces import RosWorkspace, WorkspaceRegistry
 
 _SIGINT_TRIGGERED = False
+ABOUT_MAINTAINER_NAME = 'Oscar Lima'
+ABOUT_MAINTAINER_EMAIL = 'oscar.lima@dfki.de'
 
 
 def trigger_sigint():
@@ -127,6 +129,26 @@ def _text_width(font_metrics, text: str) -> int:
 def _configure_expanding_toolbar_button(button: QPushButton) -> None:
     """Let toolbar buttons grow with the window while keeping text readable."""
     button.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+
+
+def _about_details_html() -> str:
+    """Return the rich text used in the About dialog."""
+    maintainer_name = html.escape(ABOUT_MAINTAINER_NAME)
+    maintainer_email = html.escape(ABOUT_MAINTAINER_EMAIL)
+    return (
+        '<h2>Mobipick Labs Docker GUI</h2>'
+        f'<p>Version: {html.escape(get_version())}</p>'
+        '<p>Maintainer:<br>'
+        f'{maintainer_name}<br>'
+        f'<a href="mailto:{maintainer_email}">'
+        f'{maintainer_email}</a></p>'
+        '<p>GUI source code:<br>'
+        '<a href="https://github.com/oscar-lima/mobipick_labs_docker_gui">'
+        'https://github.com/oscar-lima/mobipick_labs_docker_gui</a></p>'
+        '<p>Mobipick Labs:<br>'
+        '<a href="https://github.com/DFKI-NI/mobipick_labs">'
+        'https://github.com/DFKI-NI/mobipick_labs</a></p>'
+    )
 
 
 class ButtonProfileTable(QTableWidget):
@@ -2874,17 +2896,7 @@ class MainWindow(QMainWindow):
             logo_label.setPixmap(logo.scaledToWidth(220, Qt.SmoothTransformation))
         layout.addWidget(logo_label)
 
-        details = QLabel(
-            '<h2>Mobipick Labs Docker GUI</h2>'
-            f'<p>Version: {html.escape(get_version())}</p>'
-            '<p>Maintainer:<br>'
-            'Mobipick Labs<br>'
-            '<a href="mailto:mobipick-labs@dfki.de">'
-            'mobipick-labs@dfki.de</a></p>'
-            '<p>Mobipick Labs:<br>'
-            '<a href="https://github.com/DFKI-NI/mobipick_labs">'
-            'https://github.com/DFKI-NI/mobipick_labs</a></p>'
-        )
+        details = QLabel(_about_details_html())
         details.setTextFormat(Qt.RichText)
         details.setOpenExternalLinks(False)
         details.setTextInteractionFlags(Qt.TextBrowserInteraction)

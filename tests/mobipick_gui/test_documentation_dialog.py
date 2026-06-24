@@ -6,7 +6,7 @@ from PyQt5.QtWidgets import QApplication
 
 from mobipick_gui.config import CONFIG
 from mobipick_gui.documentation_dialog import DocumentationDialog
-from mobipick_gui.main_window import MainWindow
+from mobipick_gui.main_window import MainWindow, _about_details_html
 
 
 def _find_menu_action(menu, text):
@@ -41,6 +41,19 @@ def test_documentation_dialog_renders_markdown_and_highlights_search(tmp_path):
 
     dialog.deleteLater()
     app.processEvents()
+
+
+def test_about_dialog_details_show_maintainer_contact():
+    details = _about_details_html()
+
+    assert 'Maintainer:<br>Oscar Lima<br>' in details
+    assert 'href="mailto:oscar.lima@dfki.de"' in details
+    assert '>oscar.lima@dfki.de</a>' in details
+    assert 'GUI source code:<br>' in details
+    assert (
+        'href="https://github.com/oscar-lima/mobipick_labs_docker_gui"'
+        in details
+    )
 
 
 def test_help_menu_documentation_opens_dialog(tmp_path, monkeypatch):
