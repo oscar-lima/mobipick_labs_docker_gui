@@ -21,7 +21,14 @@ from urllib.parse import urlsplit
 
 import yaml
 from PyQt5.QtCore import QEvent, QIODevice, QPoint, QProcess, QProcessEnvironment, QTimer, Qt
-from PyQt5.QtGui import QColor, QGuiApplication, QPixmap, QTextCursor, QTextDocument
+from PyQt5.QtGui import (
+    QColor,
+    QGuiApplication,
+    QKeySequence,
+    QPixmap,
+    QTextCursor,
+    QTextDocument,
+)
 from PyQt5.QtWidgets import (
     QAction,
     QAbstractItemView,
@@ -2008,7 +2015,9 @@ class MainWindow(QMainWindow):
         self.manage_images_button.clicked.connect(self.manage_images)
 
         self.setup_wizard_button = QPushButton('Setup Wizard')
-        self.setup_wizard_button.setToolTip('Configure Docker images and first-run setup')
+        self.setup_wizard_button.setToolTip(
+            'Configure first-run setup, host dependencies, workspaces, and images'
+        )
         self.setup_wizard_button.clicked.connect(
             lambda _checked=False: self._open_setup_wizard()
         )
@@ -2213,6 +2222,15 @@ class MainWindow(QMainWindow):
     def _create_menu_bar(self) -> None:
         menu_bar = self.menuBar()
 
+        file_menu = self._add_menu(menu_bar, 'File')
+        self._add_menu_action(
+            file_menu,
+            'Quit',
+            self.close,
+            shortcuts=[QKeySequence.Close, QKeySequence.Quit],
+            tooltip='Close the GUI and clean up running containers',
+        )
+
         workspace_menu = self._add_menu(menu_bar, 'Workspace')
         self._add_menu_action(
             workspace_menu,
@@ -2268,15 +2286,19 @@ class MainWindow(QMainWindow):
             self._open_button_profile_dialog,
             tooltip='Edit the active workspace toolbar button profile',
         )
+        self._add_menu_action(
+            tools_menu,
+            'Setup Wizard',
+            lambda _checked=False: self._open_setup_wizard(),
+            tooltip=(
+                'Configure first-run setup, host dependencies, workspaces, '
+                'and images'
+            ),
+        )
         tools_menu.addSeparator()
 
         docker_menu = self._add_menu(tools_menu, 'Docker')
         self._add_menu_action(docker_menu, 'Manage Images', self.manage_images)
-        self._add_menu_action(
-            docker_menu,
-            'Setup Wizard',
-            lambda _checked=False: self._open_setup_wizard(),
-        )
         self._add_menu_action(
             docker_menu,
             'Configure Image Filters',
@@ -2414,9 +2436,12 @@ class MainWindow(QMainWindow):
         text: str,
         slot,
         *,
+        shortcuts=None,
         tooltip: str = '',
     ) -> QAction:
         action = QAction(text, self)
+        if shortcuts:
+            action.setShortcuts(shortcuts)
         if tooltip:
             action.setProperty('mobipick_menu_tooltip', tooltip)
             action.setToolTip(tooltip)

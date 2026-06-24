@@ -299,11 +299,6 @@ The tab search is separate from the documentation window search.
   are fixed buttons and cannot be edited from this profile. Use **Load
   Profile** or **Export Profile** in the editor to import or save a complete
   button configuration as one YAML file.
-
-### Docker
-
-- **Manage Images** lists Docker images matching the GUI filters and lets you
-  remove selected images.
 - **Setup Wizard** opens the setup flow. The first page checks common Ubuntu
   host dependencies and lets you choose packages, copy an install script to
   the clipboard, run it in a terminal, and click **Run Checks**. The script
@@ -320,6 +315,11 @@ The tab search is separate from the documentation window search.
   Docker cp paths are not configured by default; add them later from
   **Tools > Docker > Configure Docker cp Paths** when a workflow needs file
   copies.
+
+### Docker
+
+- **Manage Images** lists Docker images matching the GUI filters and lets you
+  remove selected images.
 - **Configure Image Filters** edits the local-image discovery filters and image
   refs or patterns that should be ignored by setup, image discovery, and Docker
   cp path setup.

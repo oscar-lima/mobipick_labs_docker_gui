@@ -3,6 +3,7 @@ import os
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
 from PyQt5.QtCore import QEvent, Qt
+from PyQt5.QtGui import QKeySequence
 from PyQt5.QtWidgets import QApplication, QPushButton, QToolTip
 
 from mobipick_gui.config import CONFIG
@@ -19,6 +20,14 @@ def _find_menu_action(menu, text):
             if found is not None:
                 return found
     return None
+
+
+def _top_menu(window, text):
+    return next(
+        action.menu()
+        for action in window.menuBar().actions()
+        if action.text() == text
+    )
 
 
 def test_update_status_is_menu_only(tmp_path, monkeypatch):
@@ -39,17 +48,59 @@ def test_update_status_is_menu_only(tmp_path, monkeypatch):
     window.poll_timer.stop()
     window._sigint_timer.stop()
 
-    tools_menu = next(
-        action.menu()
-        for action in window.menuBar().actions()
-        if action.text() == 'Tools'
-    )
+    tools_menu = _top_menu(window, 'Tools')
 
     assert any(action.text() == 'Update Status' for action in tools_menu.actions())
     assert 'Update Status' not in {
         button.text()
         for button in window.findChildren(QPushButton)
     }
+
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_file_quit_action_uses_linux_close_shortcuts(tmp_path, monkeypatch):
+    monkeypatch.setenv('MOBIPICK_WORKSPACE_CONFIG', str(tmp_path / 'workspaces.yaml'))
+    monkeypatch.setattr(
+        MainWindow,
+        '_discover_filtered_image_records',
+        lambda self: ([{'ref': CONFIG['images']['default']}], None),
+    )
+    monkeypatch.setattr(
+        MainWindow,
+        'update_sim_status_from_poll',
+        lambda self, force=False: None,
+    )
+
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow(verbosity=1)
+    window.poll_timer.stop()
+    window._sigint_timer.stop()
+    close_calls = []
+    monkeypatch.setattr(
+        window,
+        '_begin_exit_sequence',
+        lambda: close_calls.append(True),
+    )
+
+    file_menu = _top_menu(window, 'File')
+    match = _find_menu_action(file_menu, 'Quit')
+
+    assert match is not None
+    _, action = match
+    assert {shortcut.toString() for shortcut in action.shortcuts()} == {
+        QKeySequence(QKeySequence.Close).toString(),
+        QKeySequence(QKeySequence.Quit).toString(),
+    }
+    assert action.property('mobipick_menu_tooltip') == (
+        'Close the GUI and clean up running containers'
+    )
+
+    action.trigger()
+    app.processEvents()
+
+    assert close_calls == [True]
 
     window.deleteLater()
     app.processEvents()
@@ -73,13 +124,13 @@ def test_top_menu_actions_have_tooltips(tmp_path, monkeypatch):
     window.poll_timer.stop()
     window._sigint_timer.stop()
 
-    tools_menu = next(
-        action.menu()
-        for action in window.menuBar().actions()
-        if action.text() == 'Tools'
-    )
+    tools_menu = _top_menu(window, 'Tools')
 
     expected = {
+        'Setup Wizard': (
+            'Configure first-run setup, host dependencies, workspaces, '
+            'and images'
+        ),
         'Build Custom Image': 'Build a host-user development Docker image',
         'Execute Docker cp': 'Copy configured paths from the active container to the host',
         'Window Layout': 'Open helper to save window positions for wmctrl replay',
@@ -96,7 +147,6 @@ def test_top_menu_actions_have_tooltips(tmp_path, monkeypatch):
 
     unrequested = [
         'Manage Images',
-        'Setup Wizard',
         'Commit Current Tab',
         'Configure Auto Launch',
     ]
@@ -105,6 +155,38 @@ def test_top_menu_actions_have_tooltips(tmp_path, monkeypatch):
         assert match is not None
         _, action = match
         assert action.property('mobipick_menu_tooltip') is None
+
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_setup_wizard_is_top_level_tools_action(tmp_path, monkeypatch):
+    monkeypatch.setenv('MOBIPICK_WORKSPACE_CONFIG', str(tmp_path / 'workspaces.yaml'))
+    monkeypatch.setattr(
+        MainWindow,
+        '_discover_filtered_image_records',
+        lambda self: ([{'ref': CONFIG['images']['default']}], None),
+    )
+    monkeypatch.setattr(
+        MainWindow,
+        'update_sim_status_from_poll',
+        lambda self, force=False: None,
+    )
+
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow(verbosity=1)
+    window.poll_timer.stop()
+    window._sigint_timer.stop()
+
+    tools_menu = _top_menu(window, 'Tools')
+    docker_menu = next(
+        action.menu()
+        for action in tools_menu.actions()
+        if action.text() == 'Docker'
+    )
+
+    assert any(action.text() == 'Setup Wizard' for action in tools_menu.actions())
+    assert all(action.text() != 'Setup Wizard' for action in docker_menu.actions())
 
     window.deleteLater()
     app.processEvents()
