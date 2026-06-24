@@ -21,14 +21,20 @@ from urllib.parse import urlsplit
 
 import yaml
 from PyQt5.QtCore import QEvent, QIODevice, QPoint, QProcess, QProcessEnvironment, QTimer, Qt
-from PyQt5.QtGui import QColor, QGuiApplication, QPixmap, QTextCursor, QTextDocument
+from PyQt5.QtGui import (
+    QColor,
+    QGuiApplication,
+    QKeySequence,
+    QPixmap,
+    QTextCursor,
+    QTextDocument,
+)
 from PyQt5.QtWidgets import (
     QAction,
     QAbstractItemView,
     QApplication,
     QCheckBox,
     QComboBox,
-    QDialog,
     QDialogButtonBox,
     QDoubleSpinBox,
     QFileDialog,
@@ -94,11 +100,17 @@ CONTAINER_SCRIPTS_DIR = str(
 from .process_tab import ProcessTab
 from .setup_wizard import HostDependency, ImageSetupWizard, SetupWizardSelection
 from .version import get_version
+from .window_utils import (
+    MaximizableDialog as QDialog,
+    configure_maximizable_window,
+)
 from .window_layout import WindowLayoutManager
 from .workspace_dialog import WorkspaceManagerDialog
 from .workspaces import RosWorkspace, WorkspaceRegistry
 
 _SIGINT_TRIGGERED = False
+ABOUT_MAINTAINER_NAME = 'Oscar Lima'
+ABOUT_MAINTAINER_EMAIL = 'oscar.lima@dfki.de'
 
 
 def trigger_sigint():
@@ -117,6 +129,26 @@ def _text_width(font_metrics, text: str) -> int:
 def _configure_expanding_toolbar_button(button: QPushButton) -> None:
     """Let toolbar buttons grow with the window while keeping text readable."""
     button.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+
+
+def _about_details_html() -> str:
+    """Return the rich text used in the About dialog."""
+    maintainer_name = html.escape(ABOUT_MAINTAINER_NAME)
+    maintainer_email = html.escape(ABOUT_MAINTAINER_EMAIL)
+    return (
+        '<h2>Mobipick Labs Docker GUI</h2>'
+        f'<p>Version: {html.escape(get_version())}</p>'
+        '<p>Maintainer:<br>'
+        f'{maintainer_name}<br>'
+        f'<a href="mailto:{maintainer_email}">'
+        f'{maintainer_email}</a></p>'
+        '<p>GUI source code:<br>'
+        '<a href="https://github.com/oscar-lima/mobipick_labs_docker_gui">'
+        'https://github.com/oscar-lima/mobipick_labs_docker_gui</a></p>'
+        '<p>Mobipick Labs:<br>'
+        '<a href="https://github.com/DFKI-NI/mobipick_labs">'
+        'https://github.com/DFKI-NI/mobipick_labs</a></p>'
+    )
 
 
 class ButtonProfileTable(QTableWidget):
@@ -1703,6 +1735,7 @@ class WorkspaceMatchDialog(QDialog):
 class MainWindow(QMainWindow):
     def __init__(self, verbosity: int = 1):
         super().__init__()
+        configure_maximizable_window(self)
 
         try:
             value = int(verbosity)
@@ -2008,7 +2041,9 @@ class MainWindow(QMainWindow):
         self.manage_images_button.clicked.connect(self.manage_images)
 
         self.setup_wizard_button = QPushButton('Setup Wizard')
-        self.setup_wizard_button.setToolTip('Configure Docker images and first-run setup')
+        self.setup_wizard_button.setToolTip(
+            'Configure first-run setup, host dependencies, workspaces, and images'
+        )
         self.setup_wizard_button.clicked.connect(
             lambda _checked=False: self._open_setup_wizard()
         )
@@ -2206,12 +2241,22 @@ class MainWindow(QMainWindow):
 
         app_instance = QApplication.instance()
         if app_instance:
+            app_instance.installEventFilter(self)
             app_instance.aboutToQuit.connect(self._ensure_cleanup_before_exit)
 
     # ---------- Menu bar ----------
 
     def _create_menu_bar(self) -> None:
         menu_bar = self.menuBar()
+
+        file_menu = self._add_menu(menu_bar, 'File')
+        self._add_menu_action(
+            file_menu,
+            'Quit',
+            self.close,
+            shortcuts=[QKeySequence('Ctrl+Q')],
+            tooltip='Close the GUI and clean up running containers',
+        )
 
         workspace_menu = self._add_menu(menu_bar, 'Workspace')
         self._add_menu_action(
@@ -2268,15 +2313,19 @@ class MainWindow(QMainWindow):
             self._open_button_profile_dialog,
             tooltip='Edit the active workspace toolbar button profile',
         )
+        self._add_menu_action(
+            tools_menu,
+            'Setup Wizard',
+            lambda _checked=False: self._open_setup_wizard(),
+            tooltip=(
+                'Configure first-run setup, host dependencies, workspaces, '
+                'and images'
+            ),
+        )
         tools_menu.addSeparator()
 
         docker_menu = self._add_menu(tools_menu, 'Docker')
         self._add_menu_action(docker_menu, 'Manage Images', self.manage_images)
-        self._add_menu_action(
-            docker_menu,
-            'Setup Wizard',
-            lambda _checked=False: self._open_setup_wizard(),
-        )
         self._add_menu_action(
             docker_menu,
             'Configure Image Filters',
@@ -2381,12 +2430,33 @@ class MainWindow(QMainWindow):
         return menu
 
     def eventFilter(self, watched, event):  # noqa: N802 - Qt API
+        if event.type() == QEvent.KeyPress:
+            if self._handle_active_window_close_shortcut(event):
+                return True
         if isinstance(watched, QMenu):
             if event.type() == QEvent.MouseMove:
                 self._update_menu_tooltip(watched, event)
             elif event.type() in (QEvent.Leave, QEvent.Hide):
                 self._hide_menu_tooltip()
         return super().eventFilter(watched, event)
+
+    def _handle_active_window_close_shortcut(self, event) -> bool:
+        """Close the active tool window for Ctrl+W without exiting the GUI."""
+        is_ctrl_w = (
+            event.key() == Qt.Key_W
+            and event.modifiers() == Qt.ControlModifier
+        )
+        if (
+            self._exit_in_progress
+            or not (is_ctrl_w or event.matches(QKeySequence.Close))
+        ):
+            return False
+        app_instance = QApplication.instance()
+        active_window = app_instance.activeWindow() if app_instance else None
+        if active_window is None or active_window is self:
+            return False
+        active_window.close()
+        return True
 
     def _update_menu_tooltip(self, menu: QMenu, event) -> None:
         action = menu.actionAt(event.pos())
@@ -2414,9 +2484,12 @@ class MainWindow(QMainWindow):
         text: str,
         slot,
         *,
+        shortcuts=None,
         tooltip: str = '',
     ) -> QAction:
         action = QAction(text, self)
+        if shortcuts:
+            action.setShortcuts(shortcuts)
         if tooltip:
             action.setProperty('mobipick_menu_tooltip', tooltip)
             action.setToolTip(tooltip)
@@ -2823,17 +2896,7 @@ class MainWindow(QMainWindow):
             logo_label.setPixmap(logo.scaledToWidth(220, Qt.SmoothTransformation))
         layout.addWidget(logo_label)
 
-        details = QLabel(
-            '<h2>Mobipick Labs Docker GUI</h2>'
-            f'<p>Version: {html.escape(get_version())}</p>'
-            '<p>Maintainer:<br>'
-            'Mobipick Labs<br>'
-            '<a href="mailto:mobipick-labs@dfki.de">'
-            'mobipick-labs@dfki.de</a></p>'
-            '<p>Mobipick Labs:<br>'
-            '<a href="https://github.com/DFKI-NI/mobipick_labs">'
-            'https://github.com/DFKI-NI/mobipick_labs</a></p>'
-        )
+        details = QLabel(_about_details_html())
         details.setTextFormat(Qt.RichText)
         details.setOpenExternalLinks(False)
         details.setTextInteractionFlags(Qt.TextBrowserInteraction)
@@ -4030,69 +4093,302 @@ class MainWindow(QMainWindow):
             if not dep.installed
         ]
 
+    @staticmethod
+    def _host_command_status(
+        args: list[str],
+        *,
+        timeout: float = 4.0,
+    ) -> tuple[bool, str]:
+        try:
+            cp = subprocess.run(
+                args,
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=timeout,
+            )
+        except FileNotFoundError:
+            return False, f'command not found: {args[0]}'
+        except subprocess.TimeoutExpired:
+            return False, f'command timed out: {shlex.join(args)}'
+        except OSError as exc:
+            return False, str(exc)
+        output = (cp.stdout or cp.stderr or '').strip()
+        if cp.returncode == 0:
+            return True, output
+        detail = output or f'exit code {cp.returncode}'
+        return False, detail
+
+    @classmethod
+    def _host_shell_status(
+        cls,
+        command: str,
+        *,
+        timeout: float = 4.0,
+    ) -> tuple[bool, str]:
+        return cls._host_command_status(
+            ['bash', '-lc', command],
+            timeout=timeout,
+        )
+
+    @classmethod
+    def _docker_apt_candidate_status(
+        cls,
+        packages: list[str],
+    ) -> tuple[bool, str]:
+        lines: list[str] = []
+        missing: list[str] = []
+        for package in packages:
+            ok, output = cls._host_shell_status(
+                'apt-cache policy '
+                + shlex.quote(package)
+                + r" | awk '/Candidate:/ {print $2; exit}'",
+            )
+            candidate = output.strip() if ok else ''
+            if not candidate or candidate == '(none)':
+                missing.append(package)
+                candidate = candidate or '(none)'
+            lines.append(f'{package}: {candidate}')
+        if missing:
+            lines.append('missing candidates: ' + ', '.join(missing))
+            return False, '; '.join(lines)
+        return True, '; '.join(lines)
+
     def _host_dependency_statuses(self) -> list[HostDependency]:
+        docker_packages = [
+            'docker-ce',
+            'docker-ce-cli',
+            'containerd.io',
+            'docker-buildx-plugin',
+            'docker-compose-plugin',
+        ]
+        apt_candidate_commands = [
+            'apt-cache policy '
+            + shlex.quote(package)
+            + r" | awk '/Candidate:/ {print $2; exit}'"
+            for package in docker_packages
+        ]
+        repo_command = (
+            r'grep -R "download.docker.com/linux/ubuntu" '
+            r'/etc/apt/sources.list /etc/apt/sources.list.d/*.list '
+            r'2>/dev/null'
+        )
+        snap_command = (
+            'if command -v snap >/dev/null 2>&1 '
+            '&& snap list docker >/dev/null 2>&1; then '
+            'snap list docker; exit 1; '
+            'else echo "Snap Docker not detected."; fi'
+        )
+        systemd_command = 'ps -p 1 -o comm='
+        docker_probe_commands = [
+            *apt_candidate_commands,
+            repo_command,
+            snap_command,
+            systemd_command,
+            'systemctl is-active docker',
+            'systemctl is-active containerd',
+            'id -nG',
+            'ls -l /var/run/docker.sock',
+            'command -v docker',
+            'docker ps',
+        ]
+        compose_probe_commands = [
+            *apt_candidate_commands,
+            repo_command,
+            'docker compose version',
+            'docker compose run --help',
+        ]
+        apt_candidates_ok, apt_candidate_detail = (
+            self._docker_apt_candidate_status(docker_packages)
+        )
+        repo_ok, repo_detail = self._host_shell_status(repo_command)
+        snap_ok, snap_detail = self._host_shell_status(snap_command)
+        systemd_ok, systemd_detail = self._host_shell_status(systemd_command)
+        has_systemd = systemd_ok and systemd_detail.strip() == 'systemd'
+        if has_systemd:
+            docker_service_ok, docker_service_detail = self._host_command_status(
+                ['systemctl', 'is-active', 'docker']
+            )
+            containerd_service_ok, containerd_service_detail = (
+                self._host_command_status(['systemctl', 'is-active', 'containerd'])
+            )
+        else:
+            docker_service_ok = False
+            containerd_service_ok = False
+            docker_service_detail = 'systemd is not PID 1'
+            containerd_service_detail = 'systemd is not PID 1'
+        _groups_ok, groups_detail = self._host_command_status(['id', '-nG'])
+        _socket_ok, socket_detail = self._host_command_status(
+            ['ls', '-l', '/var/run/docker.sock']
+        )
+
+        docker_path_ok, docker_path_detail = self._host_shell_status(
+            'command -v docker'
+        )
+        if docker_path_ok:
+            docker_path = docker_path_detail or 'docker'
+            docker_ok, docker_detail = self._host_command_status(['docker', 'ps'])
+            if docker_ok:
+                docker_reason = 'Docker daemon is reachable by the current user.'
+            else:
+                details = [
+                    f'Docker command was found at {docker_path}, but '
+                    f'"docker ps" failed: {docker_detail}.',
+                ]
+                if not repo_ok:
+                    details.append(
+                        'Docker apt repository was not detected in apt '
+                        f'sources: {repo_detail}.'
+                    )
+                if not apt_candidates_ok:
+                    details.append(
+                        f'Docker apt candidate check failed: {apt_candidate_detail}.'
+                    )
+                if not snap_ok:
+                    details.append(f'Snap Docker appears to be installed: {snap_detail}.')
+                if has_systemd:
+                    if not containerd_service_ok:
+                        details.append(
+                            f'containerd service is not active: {containerd_service_detail}.'
+                        )
+                    if not docker_service_ok:
+                        details.append(
+                            f'docker service is not active: {docker_service_detail}.'
+                        )
+                else:
+                    details.append(
+                        'systemd is not PID 1; Docker service management with '
+                        'systemctl may not work in this environment.'
+                    )
+                details.extend([
+                    f'Current groups: {groups_detail or "(unknown)"}.',
+                    f'Docker socket: {socket_detail or "(missing)"}.',
+                    'Start Docker and make sure this user is in the docker '
+                    'group; log out and back in, or run newgrp docker, after '
+                    'changing groups.',
+                ])
+                docker_reason = ' '.join(details)
+        else:
+            docker_ok = False
+            details = [
+                'Docker command was not found. Install Docker Engine from '
+                "Docker's official Ubuntu apt repository."
+            ]
+            if not repo_ok:
+                details.append(
+                    f'Docker apt repository was not detected: {repo_detail}.'
+                )
+            if not apt_candidates_ok:
+                details.append(
+                    f'Docker apt candidate check failed: {apt_candidate_detail}.'
+                )
+            if not snap_ok:
+                details.append(f'Snap Docker appears to be installed: {snap_detail}.')
+            docker_reason = ' '.join(details)
+
+        compose_ok, compose_detail = self._host_command_status(
+            ['docker', 'compose', 'version']
+        )
+        compose_help_ok, compose_help_detail = self._host_command_status(
+            ['docker', 'compose', 'run', '--help']
+        )
+        docker_compose_ok = compose_ok and compose_help_ok
+        if docker_compose_ok:
+            compose_reason = (
+                'Docker Compose plugin is available'
+                + (f': {compose_detail}' if compose_detail else '.')
+            )
+        elif not compose_ok:
+            details = [
+                f'"docker compose version" failed: {compose_detail}. Install '
+                'the docker-compose-plugin package from Docker\'s official '
+                'Ubuntu apt repository.'
+            ]
+            if not apt_candidates_ok:
+                details.append(
+                    f'Docker apt candidate check failed: {apt_candidate_detail}.'
+                )
+            if not repo_ok:
+                details.append(
+                    f'Docker apt repository was not detected: {repo_detail}.'
+                )
+            compose_reason = ' '.join(details)
+        else:
+            compose_reason = (
+                f'"docker compose run --help" failed: {compose_help_detail}. '
+                'Reinstall the Docker Compose plugin from Docker\'s official '
+                'Ubuntu apt repository.'
+            )
+        wmctrl_ok, wmctrl_detail = self._host_shell_status('command -v wmctrl')
+        xprop_ok, xprop_detail = self._host_shell_status('command -v xprop')
+        dot_ok, dot_detail = self._host_shell_status('command -v dot')
+        ffmpeg_ok, ffmpeg_detail = self._host_shell_status('command -v ffmpeg')
+
         return [
             HostDependency(
                 key='docker',
                 label='Docker Engine',
-                package='docker.io',
-                installed=shutil.which('docker') is not None,
-                reason='Required to pull images and run Mobipick containers.',
+                package='docker-ce',
+                installed=docker_ok,
+                reason=docker_reason,
                 required=True,
+                check_commands=docker_probe_commands,
             ),
             HostDependency(
                 key='docker_compose',
                 label='Docker Compose plugin',
                 package='docker-compose-plugin',
-                installed=self._docker_compose_available(),
-                reason='Required because the GUI launches containers with docker compose.',
+                installed=docker_compose_ok,
+                reason=compose_reason,
                 required=True,
+                check_commands=compose_probe_commands,
             ),
             HostDependency(
                 key='wmctrl',
                 label='wmctrl',
                 package='wmctrl',
-                installed=shutil.which('wmctrl') is not None,
-                reason='Optional; enables window layout capture and replay.',
+                installed=wmctrl_ok,
+                reason=(
+                    'Optional; enables window layout capture and replay. '
+                    f'Probe output: {wmctrl_detail or "not found"}.'
+                ),
+                check_commands=['command -v wmctrl'],
             ),
             HostDependency(
                 key='xprop',
                 label='xprop',
                 package='x11-utils',
-                installed=shutil.which('xprop') is not None,
-                reason='Optional; helps identify windows for layout replay.',
+                installed=xprop_ok,
+                reason=(
+                    'Optional; helps identify windows for layout replay. '
+                    f'Probe output: {xprop_detail or "not found"}.'
+                ),
+                check_commands=['command -v xprop'],
             ),
             HostDependency(
                 key='graphviz',
                 label='Graphviz',
                 package='graphviz',
-                installed=shutil.which('dot') is not None,
-                reason='Optional; renders workspace graphs.',
+                installed=dot_ok,
+                reason=(
+                    'Optional; renders workspace graphs. '
+                    f'Probe output: {dot_detail or "not found"}.'
+                ),
+                check_commands=['command -v dot'],
             ),
             HostDependency(
                 key='ffmpeg',
                 label='FFmpeg',
                 package='ffmpeg',
-                installed=shutil.which('ffmpeg') is not None,
-                reason='Optional; records Auto Launch screen captures.',
+                installed=ffmpeg_ok,
+                reason=(
+                    'Optional; records Auto Launch screen captures. '
+                    f'Probe output: {ffmpeg_detail or "not found"}.'
+                ),
+                check_commands=['command -v ffmpeg'],
             ),
         ]
-
-    @staticmethod
-    def _docker_compose_available() -> bool:
-        if shutil.which('docker') is None:
-            return False
-        try:
-            cp = subprocess.run(
-                ['docker', 'compose', 'version'],
-                check=False,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=2,
-            )
-        except (FileNotFoundError, subprocess.SubprocessError, OSError):
-            return False
-        return cp.returncode == 0
 
     def _open_custom_image_builder(self) -> None:
         self._open_setup_wizard(build_custom_default=True)
@@ -4178,6 +4474,9 @@ class MainWindow(QMainWindow):
             image_blacklist=self._image_blacklist_patterns(),
             host_dependencies=self._host_dependency_statuses(),
             host_dependency_refresher=self._host_dependency_statuses,
+            host_dependency_report_handler=(
+                self._open_setup_dependency_report
+            ),
             parent=self,
         )
         wizard.set_setup_start_handler(
@@ -4189,6 +4488,30 @@ class MainWindow(QMainWindow):
         wizard.finished.connect(self._on_setup_wizard_closed)
         self._setup_wizard_dialog = wizard
         wizard.show()
+
+    def _open_setup_dependency_report(self, setup_diagnostics: str) -> None:
+        def _context() -> dict:
+            context = self._build_bug_report_context()
+            context['setup_diagnostics'] = setup_diagnostics
+            return context
+
+        if self._bug_report_dialog:
+            self._bug_report_dialog.close()
+        dialog = BugReportDialog(
+            _context,
+            self,
+            initial_notes='Host dependency checks failed during setup.',
+            initial_checked_keys={
+                'ubuntu_version',
+                'gui_version',
+                'setup_diagnostics',
+                'log_tab',
+                'user_notes',
+            },
+        )
+        dialog.finished.connect(self._on_bug_report_dialog_closed)
+        self._bug_report_dialog = dialog
+        dialog.show()
 
     def _default_source_master_folder(self) -> str:
         if self._workspace_registry.master_folder:
@@ -4551,6 +4874,7 @@ class MainWindow(QMainWindow):
             'Docker cp paths were left unchanged. Configure them later from '
             'Tools > Docker > Configure Docker cp Paths if needed.'
         )
+        total_steps = len(steps)
 
         def finish(success: bool) -> None:
             self._load_available_images(show_feedback=False)
@@ -4565,13 +4889,17 @@ class MainWindow(QMainWindow):
                 finish(True)
                 return
             label, starter = steps.popleft()
+            step_number = total_steps - len(steps)
+            step_label = f'Step {step_number}/{total_steps}: {label}'
+            wizard.progress_status_label.setText(step_label)
             wizard.append_progress_html(
-                f'<b>{html.escape(label)}</b>'
+                f'<b>{html.escape(step_label)}</b>'
             )
 
             def on_finished(code: int) -> None:
                 wizard.append_progress_html(
-                    f'<i>Step finished with code {code}</i>'
+                    f'<i>Step {step_number}/{total_steps} finished '
+                    f'with code {code}</i>'
                 )
                 if code == 0:
                     summary.append(label)
@@ -4581,6 +4909,9 @@ class MainWindow(QMainWindow):
                 finish(False)
 
             if not starter(on_finished):
+                wizard.append_progress_html(
+                    f'<i>Step {step_number}/{total_steps} failed to start</i>'
+                )
                 summary.append(f'Failed to start: {label}')
                 finish(False)
 
@@ -6622,9 +6953,7 @@ CMD ["bash"]
         save_button.clicked.connect(self._on_save_window_state_clicked)
         layout.addWidget(save_button)
         dialog.setLayout(layout)
-        dialog.setSizeGripEnabled(False)
         dialog.setMinimumWidth(280)
-        dialog.setMaximumWidth(360)
         self._window_layout_dialog = dialog
         return dialog
 
@@ -7405,7 +7734,6 @@ CMD ["bash"]
         dialog = QDialog(None)  # top-level so wmctrl can move it independently
         dialog.setWindowTitle('Recording Control')
         dialog.setWindowFlag(Qt.WindowStaysOnTopHint, True)
-        dialog.setWindowFlag(Qt.Tool, True)
         dialog.setWindowModality(Qt.NonModal)
         dialog.setAttribute(Qt.WA_DeleteOnClose, False)
         layout = QVBoxLayout(dialog)
@@ -7421,7 +7749,6 @@ CMD ["bash"]
         self._recording_stop_button = button
         dialog.setLayout(layout)
         dialog.setMinimumWidth(260)
-        dialog.setMaximumWidth(360)
 
         def _mark_closed():
             self._recording_window = None

@@ -9,6 +9,57 @@ from PyQt5.QtWidgets import QApplication, QMainWindow
 
 import mobipick_gui.main_window as main_window_module
 from mobipick_gui.main_window import MainWindow
+from mobipick_gui.window_utils import MaximizableDialog
+
+
+def test_maximizable_dialog_has_standard_window_controls():
+    app = QApplication.instance() or QApplication([])
+    dialog = MaximizableDialog()
+
+    flags = dialog.windowFlags()
+
+    assert flags & Qt.WindowMinimizeButtonHint
+    assert flags & Qt.WindowMaximizeButtonHint
+    assert flags & Qt.WindowCloseButtonHint
+
+    dialog.deleteLater()
+    app.processEvents()
+
+
+def test_helper_windows_can_be_maximized(tmp_path):
+    app = QApplication.instance() or QApplication([])
+
+    class FakeMainWindow:
+        _window_layout_dialog = None
+        _recording_window = None
+        _recording_path_label = None
+        _recording_stop_button = None
+
+        def __init__(self):
+            self._window_layout_path = tmp_path / 'window_layout.yaml'
+
+        def _on_save_window_state_clicked(self):
+            pass
+
+        def _on_recording_stop_clicked(self):
+            pass
+
+    fake = FakeMainWindow()
+
+    layout_dialog = MainWindow._ensure_window_layout_dialog(fake)
+    recording_dialog = MainWindow._ensure_recording_window(fake)
+
+    assert layout_dialog.windowFlags() & Qt.WindowMaximizeButtonHint
+    assert recording_dialog.windowFlags() & Qt.WindowMaximizeButtonHint
+    assert (
+        recording_dialog.windowFlags() & Qt.WindowType_Mask
+    ) != Qt.Tool
+    assert layout_dialog.maximumWidth() > 1000
+    assert recording_dialog.maximumWidth() > 1000
+
+    layout_dialog.deleteLater()
+    recording_dialog.deleteLater()
+    app.processEvents()
 
 
 def test_save_window_state_persists_geometry(monkeypatch):

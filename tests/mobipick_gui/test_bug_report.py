@@ -69,8 +69,9 @@ def test_format_bug_report_uses_selected_sections():
             'workspace_match': 'workspace match',
             'host_workspace_mount': 'enabled',
             'log_tab_text': 'important log line',
+            'setup_diagnostics': 'Docker Compose plugin missing',
         },
-        {'gui_version', 'selected_workspace', 'user_notes'},
+        {'gui_version', 'selected_workspace', 'setup_diagnostics', 'user_notes'},
         {},
         'clicked run and saw an error',
     )
@@ -78,6 +79,7 @@ def test_format_bug_report_uses_selected_sections():
     assert 'Version' in report
     assert '1.2.3' in report
     assert 'demo_ws' in report
+    assert 'Docker Compose plugin missing' in report
     assert 'clicked run and saw an error' in report
     assert 'important log line' not in report
 
@@ -101,6 +103,28 @@ def test_bug_report_dialog_uses_default_checked_sections(monkeypatch):
     assert '1.2.3' in preview
     assert '## Selected Docker Image / Workspace Match' in preview
     assert '## Ubuntu Version' not in preview
+
+    dialog.deleteLater()
+    app.processEvents()
+
+
+def test_bug_report_dialog_can_preselect_setup_diagnostics(monkeypatch):
+    monkeypatch.setattr(BugReportDialog, '_start_collectors', lambda self: None)
+    app = QApplication.instance() or QApplication([])
+
+    dialog = BugReportDialog(
+        lambda: {
+            'gui_version': '1.2.3',
+            'setup_diagnostics': 'docker ps failed: permission denied',
+        },
+        initial_notes='Setup failed after install.',
+        initial_checked_keys={'setup_diagnostics'},
+    )
+
+    preview = dialog.preview_edit.toPlainText()
+    assert '## Setup Checks' in preview
+    assert 'docker ps failed: permission denied' in preview
+    assert 'Setup failed after install.' in preview
 
     dialog.deleteLater()
     app.processEvents()

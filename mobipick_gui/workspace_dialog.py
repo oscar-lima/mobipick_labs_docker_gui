@@ -12,7 +12,6 @@ from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QPixmap
 from PyQt5.QtWidgets import (
     QComboBox,
-    QDialog,
     QDialogButtonBox,
     QFileDialog,
     QFormLayout,
@@ -38,6 +37,7 @@ from .config import (
     PROJECT_ROOT,
 )
 from .settings_transfer import export_settings, import_settings
+from .window_utils import MaximizableDialog as QDialog
 from .workspaces import (
     DEFAULT_IMAGE_WORKSPACE_PATH,
     IMAGE_WORKSPACE_EXTENDS,

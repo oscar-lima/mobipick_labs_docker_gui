@@ -299,22 +299,37 @@ The tab search is separate from the documentation window search.
   are fixed buttons and cannot be edited from this profile. Use **Load
   Profile** or **Export Profile** in the editor to import or save a complete
   button configuration as one YAML file.
+- **Setup Wizard** opens the setup flow. The first page checks common Ubuntu
+  host dependencies, and each wizard page title is numbered as **Step 1/N**,
+  **Step 2/N**, and so on as you move through the flow. The host dependency
+  page lets you choose packages, copy an install script to the clipboard, run
+  it in a terminal, and click **Run Checks**. The script asks for confirmation
+  before each major installation, service, permission, and test step as
+  **Step 1/N**, **Step 2/N**, and so on. **Run Checks** opens a details
+  window with a color-coded
+  summary, each check's purpose, and the evidence used for the result. A
+  black command section lists the exact Bash probe commands used for each host
+  dependency. If a check still fails, **Open Bug Report** prepares the
+  standard diagnostics so you can copy, save, email, or open a prefilled
+  GitHub issue.
+  The setup guide page includes **Learn More About These Choices**, which opens
+  a separate explanation window for the public-image pull, host-user image
+  build, source workspace install, and startup reminder checkboxes.
+  Later pages pull public images on the host PC with streamed output, select
+  defaults, build host-user images, and optionally clone and build
+  `mobipick_labs` from source in a host-mounted workspace. The progress page
+  labels selected automatic setup work as **Step 1/N**, **Step 2/N**, and so
+  on, where **N** is the number of automatic steps that will run. The manual
+  pull option pauses setup until you confirm that the command has finished.
+  Each optional wizard page has **Skip This Step**.
+  Docker cp paths are not configured by default; add them later from
+  **Tools > Docker > Configure Docker cp Paths** when a workflow needs file
+  copies.
 
 ### Docker
 
 - **Manage Images** lists Docker images matching the GUI filters and lets you
   remove selected images.
-- **Setup Wizard** opens the setup flow. The first page checks common Ubuntu
-  host dependencies and lets you choose packages, copy an install command to
-  the clipboard, install them in a terminal, and click **Done Installing**.
-  Later pages pull public images on the host PC with streamed output, select
-  defaults, build host-user images, and optionally clone and build
-  `mobipick_labs` from source in a host-mounted workspace. The manual pull
-  option pauses setup until you confirm that the command has finished. Each
-  optional wizard page has **Skip This Step**.
-  Docker cp paths are not configured by default; add them later from
-  **Tools > Docker > Configure Docker cp Paths** when a workflow needs file
-  copies.
 - **Configure Image Filters** edits the local-image discovery filters and image
   refs or patterns that should be ignored by setup, image discovery, and Docker
   cp path setup.
@@ -376,7 +391,8 @@ the **Install Source** tab.
 - **Documentation** opens this user documentation window.
 - **File Bug Report...** opens a diagnostic report builder. Choose which
   sections to include, add notes, and save or copy the report.
-- **About** shows the GUI version, maintainer contact, and Mobipick Labs link.
+- **About** shows the GUI version, maintainer contact, GUI source code
+  repository, and Mobipick Labs link.
 
 ## Workspace and image warnings
 

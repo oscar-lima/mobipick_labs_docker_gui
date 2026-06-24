@@ -1,6 +1,7 @@
 """First-run setup wizard and Docker image builder settings."""
 from __future__ import annotations
 
+import html
 import re
 import shlex
 from dataclasses import dataclass, field
@@ -10,6 +11,7 @@ from PyQt5.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
+    QDialogButtonBox,
     QFormLayout,
     QHBoxLayout,
     QLabel,
@@ -22,6 +24,10 @@ from PyQt5.QtWidgets import (
 )
 
 from .log_widget import LogTextEdit
+from .window_utils import (
+    MaximizableDialog as QDialog,
+    configure_maximizable_window,
+)
 
 
 @dataclass
@@ -60,6 +66,7 @@ class HostDependency:
     installed: bool
     reason: str
     required: bool = False
+    check_commands: list[str] = field(default_factory=list)
 
 
 class ImageSetupWizard(QWizard):
@@ -88,9 +95,11 @@ class ImageSetupWizard(QWizard):
         image_blacklist: Iterable[str] = (),
         host_dependencies: Iterable[HostDependency] = (),
         host_dependency_refresher: Callable[[], Iterable[HostDependency]] | None = None,
+        host_dependency_report_handler: Callable[[str], None] | None = None,
         parent=None,
     ):
         super().__init__(parent)
+        configure_maximizable_window(self)
         self.setWindowTitle('Mobipick Setup Wizard')
         self.setWizardStyle(QWizard.ModernStyle)
         self.resize(820, 640)
@@ -99,10 +108,15 @@ class ImageSetupWizard(QWizard):
         ) = None
         self._setup_started = False
         self._setup_complete = False
+        self._setup_page_titles: list[tuple[int, str]] = []
         self._host_dependencies: list[HostDependency] = list(host_dependencies)
         self._host_dependency_refresher = host_dependency_refresher
+        self._host_dependency_report_handler = host_dependency_report_handler
         self._dependency_checkboxes: dict[str, QCheckBox] = {}
         self._dependency_status_labels: dict[str, QLabel] = {}
+        self._last_dependency_report = ''
+        self._dependency_details_dialog: QDialog | None = None
+        self._setup_options_dialog: QDialog | None = None
 
         self.pull_public_images = QCheckBox('Pull public Mobipick images')
         self.pull_public_images.setChecked(True)
@@ -146,17 +160,26 @@ class ImageSetupWizard(QWizard):
         self.dependency_command_edit.setReadOnly(True)
         self.dependency_command_edit.setMinimumHeight(120)
         dependency_layout.addWidget(self.dependency_command_edit)
+        self.dependency_result_label = QLabel('')
+        self.dependency_result_label.setWordWrap(True)
+        dependency_layout.addWidget(self.dependency_result_label)
         dependency_buttons = QHBoxLayout()
         self.copy_dependency_command_button = QPushButton('Copy Command')
         self.copy_dependency_command_button.clicked.connect(
             self._copy_dependency_command
         )
         dependency_buttons.addWidget(self.copy_dependency_command_button)
-        self.dependency_done_button = QPushButton('Done Installing')
+        self.dependency_done_button = QPushButton('Run Checks')
         self.dependency_done_button.clicked.connect(
             self._mark_selected_dependencies_done
         )
         dependency_buttons.addWidget(self.dependency_done_button)
+        self.dependency_report_button = QPushButton('Open Bug Report')
+        self.dependency_report_button.clicked.connect(
+            self._open_dependency_report
+        )
+        self.dependency_report_button.setEnabled(False)
+        dependency_buttons.addWidget(self.dependency_report_button)
         dependency_buttons.addStretch(1)
         dependency_layout.addLayout(dependency_buttons)
         self._dependency_page_id = self.addPage(dependency_page)
@@ -199,6 +222,16 @@ class ImageSetupWizard(QWizard):
         intro_layout.addWidget(self.build_custom_image)
         intro_layout.addWidget(self.install_source_workspace)
         intro_layout.addWidget(self.remember_completion)
+        intro_buttons = QHBoxLayout()
+        self.setup_options_help_button = QPushButton(
+            'Learn More About These Choices'
+        )
+        self.setup_options_help_button.clicked.connect(
+            self._show_setup_options_help
+        )
+        intro_buttons.addWidget(self.setup_options_help_button)
+        intro_buttons.addStretch(1)
+        intro_layout.addLayout(intro_buttons)
         self._intro_page_id = self.addPage(intro)
 
         image_page = QWizardPage()
@@ -323,9 +356,25 @@ class ImageSetupWizard(QWizard):
         summary_layout.addWidget(self.summary_edit)
         summary_page.setFinalPage(True)
         self._summary_page_id = self.addPage(summary_page)
+        self._setup_page_titles = [
+            (self._dependency_page_id, 'Host Dependencies'),
+            (self._intro_page_id, 'Setup Guide'),
+            (self._image_page_id, 'Public Images'),
+            (self._dev_page_id, 'Development Image'),
+            (self._source_page_id, 'Source Workspace'),
+            (self._progress_page_id, 'Run Setup'),
+            (self._summary_page_id, 'Setup Summary'),
+        ]
+        self._number_setup_page_titles()
 
         self.currentIdChanged.connect(self._update_navigation_buttons)
         self._update_navigation_buttons(self.currentId())
+
+    def _number_setup_page_titles(self) -> None:
+        """Prefix wizard page titles with their position in the flow."""
+        total = len(self._setup_page_titles)
+        for index, (page_id, title) in enumerate(self._setup_page_titles, 1):
+            self.page(page_id).setTitle(f'Step {index}/{total}: {title}')
 
     def set_setup_start_handler(
         self,
@@ -426,26 +475,240 @@ class ImageSetupWizard(QWizard):
 
     def _dependency_install_command(self) -> str:
         selected = self._selected_host_dependencies()
+        selected_keys = {dep.key for dep in selected}
+        needs_docker = bool({'docker', 'docker_compose'} & selected_keys)
         packages: list[str] = []
         for dep in selected:
+            if needs_docker and dep.key in {'docker', 'docker_compose'}:
+                continue
             if dep.package and dep.package not in packages:
                 packages.append(dep.package)
-        if not packages:
+        if not packages and not needs_docker:
             return '# Select one or more host dependencies to build a command.'
 
-        lines = [
-            'sudo apt update',
-            'sudo apt install -y ' + ' '.join(shlex.quote(pkg) for pkg in packages),
-        ]
-        selected_keys = {dep.key for dep in selected}
-        if {'docker', 'docker_compose'} & selected_keys:
-            lines.extend([
-                'sudo systemctl enable --now docker',
-                'sudo usermod -aG docker "$USER"',
-                'echo "Log out and back in, or run newgrp docker, before '
-                'using Docker without sudo."',
-            ])
+        lines: list[str] = []
+        if needs_docker:
+            lines.extend(self._docker_official_install_command(packages))
+        elif packages:
+            lines.extend(self._host_packages_install_command(packages))
         return '\n'.join(lines)
+
+    @staticmethod
+    def _script_array(name: str, values: list[str]) -> str:
+        quoted = ' '.join(shlex.quote(value) for value in values)
+        return f'{name}=({quoted})'
+
+    @staticmethod
+    def _script_confirmation_helpers() -> list[str]:
+        return [
+            'SETUP_STEP_NUMBER=0',
+            'SETUP_STEP_TOTAL=0',
+            '',
+            'confirm_step() {',
+            '  local title="$1"',
+            '  local why="$2"',
+            '  shift 2',
+            '  SETUP_STEP_NUMBER=$((SETUP_STEP_NUMBER + 1))',
+            '  local step_label="Step ${SETUP_STEP_NUMBER}/${SETUP_STEP_TOTAL}"',
+            '  echo',
+            '  echo "==> ${step_label}: ${title}"',
+            '  echo "Why: ${why}"',
+            '  echo "Commands to run:"',
+            '  printf "  %s\\n" "$@"',
+            '  local answer',
+            '  read -r -p "Run ${step_label}? [y/N] " answer',
+            '  case "${answer}" in',
+            '    y|Y|yes|YES|Yes) ;;',
+            '    *) echo "Stopped before ${step_label}: ${title}"; exit 130 ;;',
+            '  esac',
+            '}',
+        ]
+
+    @classmethod
+    def _host_packages_install_command(cls, packages: list[str]) -> list[str]:
+        return [
+            "bash <<'MOBIPICK_HOST_PACKAGE_INSTALL'",
+            'set -Eeuo pipefail',
+            '',
+            *cls._script_confirmation_helpers(),
+            '',
+            'SETUP_STEP_TOTAL=2',
+            cls._script_array('host_packages', packages),
+            '',
+            'confirm_step \\',
+            '  "Refresh Ubuntu package indexes" \\',
+            '  "apt needs current indexes before installing selected host tools." \\',
+            '  "sudo apt update"',
+            'sudo apt update',
+            '',
+            'confirm_step \\',
+            '  "Install selected host tools" \\',
+            '  "These optional tools enable GUI features such as window layouts, graphs, or recording." \\',
+            '  "sudo apt install -y ${host_packages[*]}"',
+            'sudo apt install -y "${host_packages[@]}"',
+            '',
+            'echo "Selected host tool installation finished."',
+            'MOBIPICK_HOST_PACKAGE_INSTALL',
+        ]
+
+    @classmethod
+    def _docker_official_install_command(cls, support_packages: list[str]) -> list[str]:
+        return [
+            "bash <<'MOBIPICK_DOCKER_INSTALL'",
+            'set -Eeuo pipefail',
+            '',
+            'fail() { echo "ERROR: $*" >&2; exit 1; }',
+            'warn() { echo "WARNING: $*" >&2; }',
+            *cls._script_confirmation_helpers(),
+            '',
+            'if [[ ! -r /etc/os-release ]]; then',
+            '  fail "/etc/os-release is missing; cannot detect Ubuntu release."',
+            'fi',
+            '. /etc/os-release',
+            'if [[ "${ID:-}" != "ubuntu" ]]; then',
+            '  warn "This script is intended for Ubuntu; detected ${PRETTY_NAME:-unknown}."',
+            'fi',
+            'codename="${UBUNTU_CODENAME:-${VERSION_CODENAME:-}}"',
+            'if [[ -z "${codename}" ]]; then',
+            '  fail "Could not determine Ubuntu codename from /etc/os-release."',
+            'fi',
+            'arch="$(dpkg --print-architecture)"',
+            'case "${arch}" in',
+            '  amd64|arm64|armhf|s390x) ;;',
+            '  *) warn "Architecture ${arch} may not be supported by Docker packages." ;;',
+            'esac',
+            '',
+            'if command -v snap >/dev/null 2>&1 && snap list docker >/dev/null 2>&1; then',
+            '  warn "Snap Docker is installed. If apt Docker fails, remove it with: sudo snap remove docker"',
+            'fi',
+            '',
+            'docker_packages=(docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin)',
+            cls._script_array('support_packages', support_packages),
+            'SETUP_STEP_TOTAL=7',
+            'if (( ${#support_packages[@]} > 0 )); then',
+            '  SETUP_STEP_TOTAL=$((SETUP_STEP_TOTAL + 1))',
+            'fi',
+            'if [[ "$(ps -p 1 -o comm= 2>/dev/null || true)" == "systemd" ]]; then',
+            '  SETUP_MANAGE_SYSTEMD=1',
+            '  SETUP_STEP_TOTAL=$((SETUP_STEP_TOTAL + 1))',
+            'else',
+            '  SETUP_MANAGE_SYSTEMD=0',
+            'fi',
+            '',
+            'confirm_step \\',
+            '  "Install apt prerequisites" \\',
+            '  "Docker\'s official apt repository needs ca-certificates, curl, and gnupg to download and install the repository signing key." \\',
+            '  "sudo apt update" \\',
+            '  "sudo apt install -y ca-certificates curl gnupg"',
+            'sudo apt update',
+            'sudo apt install -y ca-certificates curl gnupg',
+            '',
+            'tmp_key="$(mktemp)"',
+            'trap \'rm -f "${tmp_key}"\' EXIT',
+            'confirm_step \\',
+            '  "Replace Docker apt repository key and source file" \\',
+            '  "This removes stale Docker repository files, downloads Docker\'s current GPG key, and writes the apt source for this Ubuntu release." \\',
+            '  "sudo rm -f /etc/apt/keyrings/docker.gpg /etc/apt/keyrings/docker.asc /etc/apt/sources.list.d/docker.list" \\',
+            '  "curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o ${tmp_key}" \\',
+            '  "sudo gpg --dearmor --yes -o /etc/apt/keyrings/docker.gpg ${tmp_key}" \\',
+            '  "write /etc/apt/sources.list.d/docker.list"',
+            'sudo install -m 0755 -d /etc/apt/keyrings',
+            'sudo rm -f /etc/apt/keyrings/docker.gpg /etc/apt/keyrings/docker.asc /etc/apt/sources.list.d/docker.list',
+            'curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o "${tmp_key}"',
+            'sudo gpg --dearmor --yes -o /etc/apt/keyrings/docker.gpg "${tmp_key}"',
+            'sudo chmod a+r /etc/apt/keyrings/docker.gpg',
+            '',
+            'repo_line="deb [arch=${arch} signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu ${codename} stable"',
+            'echo "${repo_line}" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null',
+            'echo "==> Docker repo file:"',
+            'cat /etc/apt/sources.list.d/docker.list',
+            '',
+            'confirm_step \\',
+            '  "Update apt indexes and verify Docker package candidates" \\',
+            '  "This proves apt can see Docker\'s repository before any Docker packages are installed." \\',
+            '  "sudo apt update" \\',
+            '  "apt-cache policy ${docker_packages[*]}"',
+            'sudo apt update',
+            '',
+            'echo "==> Checking Docker package candidates"',
+            'apt-cache policy "${docker_packages[@]}"',
+            'for package in "${docker_packages[@]}"; do',
+            '  candidate="$(apt-cache policy "${package}" | awk \'/Candidate:/ {print $2; exit}\')"',
+            '  if [[ -z "${candidate}" || "${candidate}" == "(none)" ]]; then',
+            '    fail "${package} has no apt candidate. Check the Docker repository output above."',
+            '  fi',
+            'done',
+            '',
+            'confirm_step \\',
+            '  "Install Docker Engine and Compose plugin" \\',
+            '  "This installs Docker Engine, containerd, buildx, and the Docker Compose plugin from Docker\'s official repository." \\',
+            '  "sudo apt install -y ${docker_packages[*]}"',
+            'sudo apt install -y "${docker_packages[@]}"',
+            '',
+            'if (( ${#support_packages[@]} > 0 )); then',
+            '  confirm_step \\',
+            '    "Install selected optional host tools" \\',
+            '    "These packages enable optional GUI features such as window layout replay, workspace graphs, or screen recording." \\',
+            '    "sudo apt install -y ${support_packages[*]}"',
+            '  sudo apt install -y "${support_packages[@]}"',
+            'fi',
+            '',
+            'if [[ "${SETUP_MANAGE_SYSTEMD}" == "1" ]]; then',
+            '  confirm_step \\',
+            '    "Enable and restart Docker services" \\',
+            '    "Docker needs containerd and the docker daemon running before the GUI can launch containers." \\',
+            '    "sudo systemctl daemon-reload" \\',
+            '    "sudo systemctl enable containerd || true" \\',
+            '    "sudo systemctl restart containerd" \\',
+            '    "sudo systemctl enable docker || true" \\',
+            '    "sudo systemctl restart docker"',
+            '  sudo systemctl daemon-reload',
+            '  sudo systemctl enable containerd || true',
+            '  sudo systemctl restart containerd',
+            '  sudo systemctl enable docker || true',
+            '  sudo systemctl restart docker',
+            'else',
+            '  warn "systemd is not PID 1; skipping systemctl service management."',
+            'fi',
+            '',
+            'confirm_step \\',
+            '  "Configure docker group access" \\',
+            '  "This lets the current user run Docker without sudo after group membership is refreshed; it also normalizes the Docker socket group if present." \\',
+            '  "sudo groupadd -f docker" \\',
+            '  "sudo usermod -aG docker $USER" \\',
+            '  "sudo chgrp docker /var/run/docker.sock || true" \\',
+            '  "sudo chmod 660 /var/run/docker.sock || true"',
+            'sudo groupadd -f docker',
+            'sudo usermod -aG docker "$USER"',
+            'if [[ -S /var/run/docker.sock ]]; then',
+            '  sudo chgrp docker /var/run/docker.sock || true',
+            '  sudo chmod 660 /var/run/docker.sock || true',
+            'fi',
+            '',
+            'confirm_step \\',
+            '  "Test Docker with sudo" \\',
+            '  "This checks whether the daemon and Compose plugin work independently of current-user group membership." \\',
+            '  "sudo docker images" \\',
+            '  "sudo docker compose version"',
+            'sudo docker images',
+            'sudo docker compose version',
+            '',
+            'confirm_step \\',
+            '  "Test Docker as current user" \\',
+            '  "This checks whether the current shell can access Docker without sudo; if it fails, a logout/login or newgrp docker is usually needed." \\',
+            '  "docker images" \\',
+            '  "docker compose version"',
+            'if docker images >/dev/null 2>&1; then',
+            '  docker images',
+            'else',
+            '  warn "Plain docker still cannot access the daemon in this shell."',
+            '  warn "Log out and back in, or run: newgrp docker"',
+            'fi',
+            'docker compose version',
+            '',
+            'echo "Docker installation checks finished."',
+            'MOBIPICK_DOCKER_INSTALL',
+        ]
 
     @staticmethod
     def _dependency_status_text(dep: HostDependency) -> str:
@@ -455,7 +718,9 @@ class ImageSetupWizard(QWizard):
     @staticmethod
     def _dependency_tooltip(dep: HostDependency) -> str:
         required = 'Required' if dep.required else 'Optional'
-        return f'{required}. Apt package: {dep.package}'
+        if dep.package:
+            return f'{required}. Apt package: {dep.package}'
+        return required
 
     def _update_dependency_command(self) -> None:
         if not hasattr(self, 'dependency_command_edit'):
@@ -465,6 +730,13 @@ class ImageSetupWizard(QWizard):
         self.copy_dependency_command_button.setEnabled(
             bool(self._selected_host_dependencies())
         )
+        if hasattr(self, 'dependency_report_button'):
+            self.dependency_report_button.setEnabled(
+                bool(
+                    self._last_dependency_report
+                    and self._host_dependency_report_handler
+                )
+            )
 
     def _copy_dependency_command(self) -> None:
         QApplication.clipboard().setText(self._dependency_install_command())
@@ -484,6 +756,7 @@ class ImageSetupWizard(QWizard):
                 dep.installed = fresh.installed
                 dep.reason = fresh.reason
                 dep.required = fresh.required
+                dep.check_commands = list(fresh.check_commands)
                 checkbox = self._dependency_checkboxes.get(dep.key)
                 label = self._dependency_status_labels.get(dep.key)
                 if checkbox is not None:
@@ -493,16 +766,346 @@ class ImageSetupWizard(QWizard):
                 if label is not None:
                     label.setText(self._dependency_status_text(dep))
             self._update_dependency_command()
+            self._finish_dependency_check()
             return
 
         for dep in self._selected_host_dependencies():
             checkbox = self._dependency_checkboxes.get(dep.key)
             label = self._dependency_status_labels.get(dep.key)
+            dep.installed = True
             if checkbox is not None:
                 checkbox.setChecked(False)
             if label is not None:
                 label.setText(f'done: {dep.reason}')
         self._update_dependency_command()
+        self._finish_dependency_check()
+
+    def _finish_dependency_check(self) -> None:
+        failures = [dep for dep in self._host_dependencies if not dep.installed]
+        if not failures:
+            self._last_dependency_report = ''
+            self.dependency_result_label.setText(
+                'All configured host dependency checks passed.'
+            )
+            self.dependency_report_button.setEnabled(False)
+            self._show_dependency_check_details()
+            return
+        self._last_dependency_report = self._dependency_report_text(failures)
+        self.dependency_result_label.setText(
+            'Some host dependency checks still failed. Open the bug report to '
+            'copy, email, save, or create a GitHub issue with the details.'
+        )
+        self.dependency_report_button.setEnabled(
+            self._host_dependency_report_handler is not None
+        )
+        self._show_dependency_check_details()
+
+    def _dependency_check_details_text(self) -> str:
+        lines = [
+            'Host dependency check results',
+            '',
+        ]
+        if self._host_dependencies and all(
+            dep.installed for dep in self._host_dependencies
+        ):
+            lines.extend([
+                'EVERYTHING OK',
+                'All configured host dependency checks passed.',
+                '',
+            ])
+        elif self._host_dependencies:
+            failed = sum(
+                1 for dep in self._host_dependencies if not dep.installed
+            )
+            lines.extend([
+                f'{failed} CHECK(S) NEED ATTENTION',
+                'Review the failed checks below and use Open Bug Report if '
+                'you need to share the diagnostics.',
+                '',
+            ])
+        lines.append(
+            'These are the checks the setup wizard just ran. The Evidence line '
+            'uses the exact status text returned by the checker.'
+        )
+        if not self._host_dependencies:
+            lines.extend([
+                '',
+                'No host dependency checks are configured.',
+            ])
+            return '\n'.join(lines)
+        for dep in self._host_dependencies:
+            result = 'OK' if dep.installed else 'FAILED'
+            required = 'required' if dep.required else 'optional'
+            package = dep.package or 'no apt package configured'
+            lines.extend([
+                '',
+                f'Check: {dep.label}',
+                f'Result: {result}',
+                'Why: This is a '
+                f'{required} host dependency. Apt package: {package}.',
+                f'Evidence: {dep.reason}',
+            ])
+        return '\n'.join(lines)
+
+    def _dependency_check_details_html(self) -> str:
+        if not self._host_dependencies:
+            return (
+                '<h2>Host dependency check results</h2>'
+                '<p>No host dependency checks are configured.</p>'
+            )
+        all_ok = all(dep.installed for dep in self._host_dependencies)
+        failed_count = sum(
+            1 for dep in self._host_dependencies if not dep.installed
+        )
+        if all_ok:
+            banner = (
+                '<div style="background:#e8f7ee; color:#0b6b31; '
+                'border:1px solid #8fd0a8; padding:14px; '
+                'font-size:22px; font-weight:700;">Everything OK</div>'
+                '<p style="color:#285c3b; font-size:14px;">'
+                'All configured host dependency checks passed.</p>'
+            )
+        else:
+            banner = (
+                '<div style="background:#fff3e3; color:#8a4b00; '
+                'border:1px solid #e5b56f; padding:14px; '
+                f'font-size:20px; font-weight:700;">{failed_count} '
+                'check(s) need attention</div>'
+                '<p style="color:#704100; font-size:14px;">'
+                'Review the failed checks below and use Open Bug Report if '
+                'you need to share the diagnostics.</p>'
+            )
+        blocks = [
+            '<h2 style="margin-bottom:6px;">Host dependency check results</h2>',
+            banner,
+            '<p style="color:#555;">These are the checks the setup wizard just '
+            'ran. The Evidence line uses the exact status text returned by '
+            'the checker.</p>',
+        ]
+        for dep in self._host_dependencies:
+            status = 'OK' if dep.installed else 'FAILED'
+            status_color = '#0b7a35' if dep.installed else '#b42318'
+            status_bg = '#e8f7ee' if dep.installed else '#fdecec'
+            border_color = '#b8ddc4' if dep.installed else '#efb3ae'
+            required = 'required' if dep.required else 'optional'
+            article = 'a' if dep.required else 'an'
+            package = dep.package or 'no apt package configured'
+            blocks.append(
+                '<div style="border:1px solid #d6d8dc; '
+                'border-left:5px solid '
+                f'{border_color}; padding:10px; margin:10px 0;">'
+                '<div style="font-size:16px; font-weight:700;">'
+                '<b>Check:</b> '
+                f'{html.escape(dep.label)} '
+                '<span style="background:'
+                f'{status_bg}; color:{status_color}; border:1px solid '
+                f'{border_color}; padding:2px 8px; font-size:12px;">'
+                f'{status}</span></div>'
+                '<p><b>Result:</b> '
+                f'<span style="color:{status_color}; font-weight:700;">'
+                f'{status}</span></p>'
+                '<p><b>Why:</b> This is '
+                f'{article} '
+                f'{html.escape(required)} host dependency. Apt package: '
+                f'{html.escape(package)}.</p>'
+                '<p><b>Evidence:</b> '
+                f'{html.escape(dep.reason)}</p>'
+                '</div>'
+            )
+        return ''.join(blocks)
+
+    def _dependency_check_commands_text(self) -> str:
+        lines = [
+            '# Exact Bash probe commands used by Run Checks',
+        ]
+        if not self._host_dependencies:
+            lines.append('# No host dependency checks are configured.')
+            return '\n'.join(lines)
+        for dep in self._host_dependencies:
+            result = 'OK' if dep.installed else 'FAILED'
+            lines.extend([
+                '',
+                f'# {dep.label} ({result})',
+            ])
+            commands = dep.check_commands or [
+                '# No explicit probe command was recorded for this check.'
+            ]
+            lines.extend(commands)
+        return '\n'.join(lines)
+
+    def _show_dependency_check_details(self) -> None:
+        if self._dependency_details_dialog is not None:
+            self._dependency_details_dialog.close()
+        dialog = QDialog(self)
+        dialog.setWindowTitle('Host Dependency Check Details')
+        dialog.resize(760, 520)
+        layout = QVBoxLayout(dialog)
+        intro = QLabel(
+            'Review exactly what was checked, why it matters, and the evidence '
+            'behind each result.'
+        )
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+        details = QTextEdit()
+        details.setAcceptRichText(True)
+        details.setReadOnly(True)
+        details.setMinimumWidth(680)
+        details.setMinimumHeight(220)
+        details.setHtml(self._dependency_check_details_html())
+        layout.addWidget(details)
+        command_label = QLabel('Exact Bash probe commands')
+        command_label.setStyleSheet(
+            'QLabel {'
+            'background: #111;'
+            'color: #f3f3f3;'
+            'font-family: monospace;'
+            'font-weight: bold;'
+            'padding: 8px;'
+            '}'
+        )
+        layout.addWidget(command_label)
+        command_edit = QTextEdit()
+        command_edit.setAcceptRichText(False)
+        command_edit.setReadOnly(True)
+        command_edit.setMinimumHeight(180)
+        command_edit.setStyleSheet(
+            'QTextEdit {'
+            'background: #111;'
+            'color: #f3f3f3;'
+            'font-family: monospace;'
+            'selection-background-color: #385a7c;'
+            '}'
+        )
+        command_edit.setPlainText(self._dependency_check_commands_text())
+        layout.addWidget(command_edit)
+        buttons = QDialogButtonBox(QDialogButtonBox.Close)
+        buttons.rejected.connect(dialog.close)
+        layout.addWidget(buttons)
+        dialog.finished.connect(self._clear_dependency_details_dialog)
+        self._dependency_details_dialog = dialog
+        if QApplication.platformName() != 'offscreen':
+            dialog.show()
+
+    def _clear_dependency_details_dialog(self, _result: int) -> None:
+        self._dependency_details_dialog = None
+
+    def _setup_option_explanations(self) -> list[tuple[QCheckBox, str]]:
+        return [
+            (
+                self.pull_public_images,
+                'Downloads the public Docker images listed on the next page '
+                'with docker pull. Leave this enabled on a fresh machine or '
+                'when the default image is missing locally. You can skip it '
+                'when the needed images are already present, when another '
+                'machine will pull them, or when you choose the manual pull '
+                'method later in the wizard.',
+            ),
+            (
+                self.build_custom_image,
+                'Builds a development image from the selected base image with '
+                'a container user matching your host user, UID, and GID. This '
+                'is useful for editing host-mounted workspaces without root '
+                'owned files appearing on the host. Skip it if you only need '
+                'the public image as-is or already have a suitable custom '
+                'image.',
+            ),
+            (
+                self.install_source_workspace,
+                'Creates a host workspace for mobipick_labs, clones the '
+                'configured repository and branch, then runs the dependency '
+                'installation and build commands in Docker with streamed '
+                'output. Use this when you want a local source checkout for '
+                'development or experiments. Skip it for image-only use or '
+                'when you already manage the workspace yourself.',
+            ),
+            (
+                self.remember_completion,
+                'Saves the wizard as completed after setup so it does not '
+                'open automatically on future startups. The wizard remains '
+                'available from the Tools menu. Leave this unchecked when you '
+                'want the GUI to keep offering setup guidance until the '
+                'environment is fully ready.',
+            ),
+        ]
+
+    def _setup_options_help_html(self) -> str:
+        blocks = [
+            '<h2 style="margin-bottom:6px;">Setup Guide Choices</h2>',
+            '<p style="color:#555;">Each checkbox controls whether a later '
+            'wizard step or startup preference is included in this setup '
+            'run.</p>',
+        ]
+        for checkbox, explanation in self._setup_option_explanations():
+            state = 'currently selected' if checkbox.isChecked() else 'skipped'
+            blocks.append(
+                '<div style="border:1px solid #d6d8dc; '
+                'border-left:5px solid #5d7fa3; '
+                'padding:10px; margin:10px 0;">'
+                '<div style="font-size:16px; font-weight:700;">'
+                f'{html.escape(checkbox.text())}</div>'
+                f'<p><b>Current state:</b> {html.escape(state)}.</p>'
+                f'<p>{html.escape(explanation)}</p>'
+                '</div>'
+            )
+        return ''.join(blocks)
+
+    def _show_setup_options_help(self) -> None:
+        if self._setup_options_dialog is not None:
+            self._setup_options_dialog.close()
+        dialog = QDialog(self)
+        dialog.setWindowTitle('Setup Guide Choice Details')
+        dialog.resize(720, 500)
+        layout = QVBoxLayout(dialog)
+        intro = QLabel(
+            'Use these explanations to decide which setup tasks should run '
+            'for this PC.'
+        )
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+        details = QTextEdit()
+        details.setAcceptRichText(True)
+        details.setReadOnly(True)
+        details.setMinimumWidth(640)
+        details.setMinimumHeight(360)
+        details.setHtml(self._setup_options_help_html())
+        layout.addWidget(details)
+        buttons = QDialogButtonBox(QDialogButtonBox.Close)
+        buttons.rejected.connect(dialog.close)
+        layout.addWidget(buttons)
+        dialog.finished.connect(self._clear_setup_options_dialog)
+        self._setup_options_dialog = dialog
+        if QApplication.platformName() != 'offscreen':
+            dialog.show()
+
+    def _clear_setup_options_dialog(self, _result: int) -> None:
+        self._setup_options_dialog = None
+
+    def _dependency_report_text(self, failures: Iterable[HostDependency]) -> str:
+        lines = [
+            'Host dependency checks failed after running the setup command.',
+            '',
+            'Failed checks:',
+        ]
+        for dep in failures:
+            required = 'required' if dep.required else 'optional'
+            lines.append(f'- {dep.label} ({required}): {dep.reason}')
+        lines.extend([
+            '',
+            'Generated install command:',
+            self._dependency_install_command(),
+            '',
+            'All current checks:',
+        ])
+        for dep in self._host_dependencies:
+            status = 'OK' if dep.installed else 'FAILED'
+            lines.append(f'- {status}: {dep.label}: {dep.reason}')
+        return '\n'.join(lines)
+
+    def _open_dependency_report(self) -> None:
+        if not self._last_dependency_report:
+            self._finish_dependency_check()
+        if self._last_dependency_report and self._host_dependency_report_handler:
+            self._host_dependency_report_handler(self._last_dependency_report)
 
     @staticmethod
     def _parse_image_list(text: str) -> list[str]:

@@ -12,7 +12,6 @@ from PyQt5.QtGui import QFont
 from PyQt5.QtWidgets import (
     QApplication,
     QCheckBox,
-    QDialog,
     QFileDialog,
     QHBoxLayout,
     QLabel,
@@ -26,8 +25,12 @@ from PyQt5.QtWidgets import (
 
 from .external_links import open_external_url
 from .version import get_version
+from .window_utils import MaximizableDialog as QDialog
 
 BUG_REPORT_EMAIL = 'mobipick-labs@dfki.de'
+BUG_REPORT_GITHUB_ISSUE_URL = (
+    'https://github.com/oscar-lima/mobipick_labs_docker_gui/issues/new'
+)
 
 
 @dataclass(frozen=True)
@@ -47,6 +50,7 @@ BUG_REPORT_SECTIONS: tuple[BugReportSection, ...] = (
     BugReportSection('selected_workspace', 'Selected ROS 1 workspace', True),
     BugReportSection('selected_image_match', 'Selected image/workspace match', True),
     BugReportSection('workspace_graph', 'Available workspaces graph'),
+    BugReportSection('setup_diagnostics', 'Setup checks'),
     BugReportSection('log_tab', 'Log tab'),
     BugReportSection('user_notes', 'User input'),
 )
@@ -218,6 +222,11 @@ def format_bug_report(
         add_section('Selected Docker Image / Workspace Match', _format_selected_image_match(merged))
     if 'workspace_graph' in included_keys:
         add_section('Available ROS 1 Workspaces', _format_workspace_graph(merged))
+    if 'setup_diagnostics' in included_keys:
+        add_section(
+            'Setup Checks',
+            str(merged.get('setup_diagnostics') or '(No setup diagnostics)'),
+        )
     if 'log_tab' in included_keys:
         add_section('Log Tab', str(merged.get('log_tab_text') or '(Log tab is empty)'))
     if 'user_notes' in included_keys:
@@ -233,6 +242,9 @@ class BugReportDialog(QDialog):
         self,
         context_provider: Callable[[], dict],
         parent: QWidget | None = None,
+        *,
+        initial_notes: str = '',
+        initial_checked_keys: set[str] | None = None,
     ):
         super().__init__(parent)
         self.setWindowTitle('Bug Report')
@@ -247,6 +259,7 @@ class BugReportDialog(QDialog):
         }
         self._processes: dict[str, QProcess] = {}
         self._checkboxes: dict[str, QCheckBox] = {}
+        initial_checked_keys = set(initial_checked_keys or set())
 
         root = QHBoxLayout(self)
         root.setSpacing(12)
@@ -259,7 +272,10 @@ class BugReportDialog(QDialog):
 
         for section in BUG_REPORT_SECTIONS:
             checkbox = QCheckBox(section.label)
-            checkbox.setChecked(section.default_checked)
+            checkbox.setChecked(
+                section.default_checked
+                or section.key in initial_checked_keys
+            )
             checkbox.toggled.connect(self._update_preview)
             self._checkboxes[section.key] = checkbox
             left_layout.addWidget(checkbox)
@@ -275,6 +291,13 @@ class BugReportDialog(QDialog):
         self.notes_edit.setMinimumHeight(130)
         self.notes_edit.textChanged.connect(self._on_notes_changed)
         left_layout.addWidget(self.notes_edit)
+        if initial_notes:
+            self.notes_edit.blockSignals(True)
+            self.notes_edit.setPlainText(initial_notes)
+            self.notes_edit.blockSignals(False)
+            notes_checkbox = self._checkboxes.get('user_notes')
+            if notes_checkbox:
+                notes_checkbox.setChecked(True)
         left_layout.addStretch(1)
 
         right = QWidget()
@@ -312,6 +335,10 @@ class BugReportDialog(QDialog):
         mail_button = QPushButton('Email')
         mail_button.clicked.connect(self.open_email)
         button_row.addWidget(mail_button)
+
+        github_button = QPushButton('Create GitHub Issue')
+        github_button.clicked.connect(self.open_github_issue)
+        button_row.addWidget(github_button)
 
         close_button = QPushButton('Close')
         close_button.clicked.connect(self.close)
@@ -383,6 +410,21 @@ class BugReportDialog(QDialog):
                 self,
                 'Bug Report',
                 'Unable to open the default email application.',
+            )
+
+    def open_github_issue(self) -> None:
+        subject = 'Mobipick Labs Docker GUI bug report'
+        body = self.report_text()
+        url = QUrl(
+            f'{BUG_REPORT_GITHUB_ISSUE_URL}'
+            f'?title={quote(subject, safe="")}'
+            f'&body={quote(body, safe="")}'
+        )
+        if not open_external_url(url):
+            QMessageBox.warning(
+                self,
+                'Bug Report',
+                'Unable to open the GitHub issue page.',
             )
 
     def _included_keys(self) -> set[str]:
@@ -494,6 +536,7 @@ class BugReportDialog(QDialog):
 
 __all__ = [
     'BUG_REPORT_EMAIL',
+    'BUG_REPORT_GITHUB_ISSUE_URL',
     'BUG_REPORT_SECTIONS',
     'BugReportDialog',
     'BugReportSection',
