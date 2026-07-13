@@ -5392,6 +5392,7 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def _custom_image_dockerfile(base_image: str) -> str:
+        """Return a host-user image recipe safe for large directory UIDs."""
         return f"""FROM {base_image}
 
 ARG USER
@@ -5411,7 +5412,8 @@ RUN set -eux; \\
         groupadd -g "${{GID}}" "${{USER}}"; \\
     fi; \\
     if ! id -u "${{USER}}" >/dev/null 2>&1; then \\
-        useradd -m -u "${{UID}}" -g "${{GID}}" -s /bin/bash "${{USER}}"; \\
+        useradd --no-log-init -m -u "${{UID}}" -g "${{GID}}" \\
+            -s /bin/bash "${{USER}}"; \\
     fi
 
 RUN apt-get update && \\
