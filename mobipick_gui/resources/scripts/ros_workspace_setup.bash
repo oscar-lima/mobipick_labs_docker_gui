@@ -244,10 +244,38 @@ mobipick_source_workspace_chain() {
 
     mobipick_normalize_workspace_environment
     mobipick_use_private_devel_paths
-    export ROS_WORKSPACE="${MOBIPICK_WORKSPACE_PATH%/}/src"
+    # Keep the conventional workspace variable separate from ROS_PACKAGE_PATH,
+    # which contains source and package directories.
+    export ROS_WORKSPACE="${MOBIPICK_WORKSPACE_PATH%/}"
     if [ -n "${MOBIPICK_ROS_PACKAGE_PATH:-}" ]; then
         export ROS_PACKAGE_PATH="${MOBIPICK_ROS_PACKAGE_PATH}${ROS_PACKAGE_PATH:+:${ROS_PACKAGE_PATH}}"
         mobipick_normalize_path_list ROS_PACKAGE_PATH
     fi
     mobipick_remove_workspace_aliases
+}
+
+mobipick_pin_catkin_build_workspace() {
+    # catkin_tools normally discovers its workspace by walking up from the
+    # current directory to the nearest .catkin_tools directory. A stale marker
+    # in src/ therefore breaks package-local `catkin build --this` calls. Pin
+    # builds to the workspace selected by the GUI, while preserving an explicit
+    # workspace supplied by the user.
+    function catkin {
+        local argument
+
+        if [ "${1:-}" = "build" ] && [ -n "${MOBIPICK_WORKSPACE_PATH:-}" ]; then
+            for argument in "$@"; do
+                case "$argument" in
+                    -w|--workspace|--workspace=*)
+                        command catkin "$@"
+                        return
+                        ;;
+                esac
+            done
+            command catkin build --workspace "$MOBIPICK_WORKSPACE_PATH" "${@:2}"
+            return
+        fi
+
+        command catkin "$@"
+    }
 }

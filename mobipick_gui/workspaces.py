@@ -372,7 +372,9 @@ class WorkspaceRegistry:
                 '1' if self.is_runtime_built(workspace) else '0'
             ),
             'MOBIPICK_ROS_PACKAGE_PATH': ':'.join(source_paths),
-            'ROS_WORKSPACE': str(directory / 'src'),
+            # Keep the conventional workspace variable separate from the
+            # source and package paths exposed above.
+            'ROS_WORKSPACE': str(directory),
             'MOBIPICK_WORKSPACE_MOUNT_SOURCE': str(mount_root),
             'MOBIPICK_WORKSPACE_MOUNT_TARGET': str(container_root),
         }

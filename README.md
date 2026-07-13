@@ -313,6 +313,10 @@ For host workspace mode, the registry mounts the common workspace root once
 inside Docker at the canonical container root `~/ros_ws`. It maps selected
 workspaces and underlays into that root, exports `MOBIPICK_WORKSPACE_*`
 variables, and provides fallback source paths when a workspace is not built.
+Interactive terminals pin `catkin build` to the selected workspace root, so
+package-local operations such as `catkin build --this` are not redirected by
+stale nested `.catkin_tools` metadata. An explicit `--workspace` option still
+takes precedence.
 
 `WorkspaceManagerDialog` is the UI for:
 

@@ -45,6 +45,7 @@ def test_terminal_rc_restores_ros_shell_functions():
 
     assert bash_rc_index < ros_setup_index < workspace_setup_index
     assert 'source "${HOME}/.bashrc"' not in terminal_rc
+    assert 'mobipick_pin_catkin_build_workspace' in terminal_rc
 
 
 def test_terminal_rc_loads_image_helpers_but_skips_ros1(tmp_path):

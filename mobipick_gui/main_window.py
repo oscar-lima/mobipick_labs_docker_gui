@@ -9356,7 +9356,11 @@ CMD ["bash"]
             'export PYTHONUNBUFFERED=1 PYTHONIOENCODING=UTF-8; '
             f'{color_env}'
             'if command -v stdbuf >/dev/null 2>&1; then '
-            f'stdbuf -oL -eL {inner}; '
+            # The command may start with a shell builtin (for example,
+            # ``source``) or contain multiple statements. Run the complete
+            # program in Bash instead of asking stdbuf to execute its first
+            # token as an external command.
+            f'stdbuf -oL -eL bash -c {self._sh_quote(inner)}; '
             'else '
             f'{inner}; '
             'fi'

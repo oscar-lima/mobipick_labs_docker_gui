@@ -52,4 +52,5 @@ if [ "${MOBIPICK_WORKSPACE_ENABLED:-0}" = "1" ]; then
     # shellcheck disable=SC1091
     source /scripts_430ofkjl04fsw/ros_workspace_setup.bash
     mobipick_source_workspace_chain
+    mobipick_pin_catkin_build_workspace
 fi

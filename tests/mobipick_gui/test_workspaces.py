@@ -63,7 +63,7 @@ def test_runtime_environment_mounts_master_at_canonical_ros_ws(tmp_path):
     assert environment['MOBIPICK_WORKSPACE_COMPAT_ROOTS'] == str(master)
     assert environment['MOBIPICK_WORKSPACE_BUILT'] == '0'
     assert environment['ROS_WORKSPACE'] == str(
-        container_root / 'demo_ws' / 'src'
+        container_root / 'demo_ws'
     )
     assert environment['MOBIPICK_ROS_PACKAGE_PATH'] == str(
         container_root / 'demo_ws' / 'src'
@@ -359,7 +359,7 @@ def test_runtime_environment_maps_relocated_catkin_build(tmp_path):
         str(old_root),
     ]
     assert environment['ROS_WORKSPACE'] == str(
-        container_root / 'gpt_ws' / 'src'
+        container_root / 'gpt_ws'
     )
     assert environment['MOBIPICK_ROS_PACKAGE_PATH'] == str(
         container_root / 'gpt_ws' / 'src' / 'mobipick_gpt'

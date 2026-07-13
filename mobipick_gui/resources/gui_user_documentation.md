@@ -138,6 +138,11 @@ In remote ROS master mode, RQt connects to the selected external ROS master.
 The terminal uses the selected image, workspace, ROS environment, and current
 ROS master mode.
 
+For a selected catkin workspace, `catkin build` works from its root. From
+inside one of its package directories, `catkin build --this` builds that
+package using the selected workspace, even if a stale `.catkin_tools` directory
+exists below the workspace root.
+
 **Close Terminal** closes the terminal process and stops its container.
 
 The **Run as root** checkbox controls how a new terminal starts:
