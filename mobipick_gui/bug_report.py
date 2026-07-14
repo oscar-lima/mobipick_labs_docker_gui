@@ -3,7 +3,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+import getpass
+import ipaddress
+import os
 from pathlib import Path
+import re
+import socket
 from typing import Callable
 from urllib.parse import quote
 
@@ -60,6 +65,144 @@ COMMAND_SECTION_KEYS = {
     'nvidia_smi',
     'docker_images',
 }
+
+_SENSITIVE_VALUE_RE = re.compile(
+    r'(?i)\b(password|passwd|passphrase|token|secret|api[_-]?key)'
+    r'(\s*[:=]\s*)([^\s,;]+)'
+)
+_NUMERIC_ID_RE = re.compile(
+    r'(?i)\b(uid|gid|pid|user id|group id)(\s*[:=]\s*)(\d+)'
+)
+_IPV4_RE = re.compile(r'(?<![\w.])(?:\d{1,3}\.){3}\d{1,3}(?![\w.])')
+_IPV6_CANDIDATE_RE = re.compile(
+    r'(?<![\w:])(?:[0-9a-fA-F]{0,4}:){2,7}[0-9a-fA-F]{0,4}(?![\w:])'
+)
+_MAC_ADDRESS_RE = re.compile(
+    r'(?i)(?<![0-9a-f])(?:[0-9a-f]{2}[:-]){5}[0-9a-f]{2}(?![0-9a-f])'
+)
+_ACCOUNT_HOST_RE = re.compile(
+    r'(?<![A-Za-z0-9._-])[A-Za-z0-9._-]+@[A-Za-z0-9._-]+'
+    r'(?=[:\s])'
+)
+_QUOTED_LOCAL_PATH_RE = re.compile(
+    r'(?P<quote>[\'\"])(?P<path>(?:[A-Za-z]:[\\/]|~?/|\.{1,2}/).*?)'
+    r'(?P=quote)'
+)
+_FILE_URL_RE = re.compile(r'(?i)\bfile://[^\s\'\"<>]+')
+_WINDOWS_LOCAL_PATH_RE = re.compile(
+    r'(?<![\w])(?:[A-Za-z]:[\\/]|\\\\)[^\s\'\"<>|,;)]+'
+)
+_POSIX_LOCAL_PATH_RE = re.compile(
+    r'(?<![\w/])(?:~|\.{1,2})?/(?![/\s])[^\s\'\"<>|,;)]+'
+)
+
+
+def _stars(value: str) -> str:
+    """Mask a value while retaining its character-count clue."""
+    return ''.join('*' if char.isalnum() else char for char in value)
+
+
+def _runtime_private_names() -> tuple[set[str], set[str]]:
+    """Return likely local user and computer names without exposing them."""
+    users = {
+        os.environ.get('USER', ''),
+        os.environ.get('LOGNAME', ''),
+        os.environ.get('SUDO_USER', ''),
+        Path.home().name,
+    }
+    try:
+        users.add(getpass.getuser())
+    except (KeyError, OSError):
+        pass
+
+    hosts = {
+        os.environ.get('HOST', ''),
+        os.environ.get('HOSTNAME', ''),
+        os.environ.get('COMPUTERNAME', ''),
+    }
+    try:
+        hosts.add(socket.gethostname())
+        hosts.add(socket.getfqdn())
+    except OSError:
+        pass
+
+    ignored_users = {'', 'root', 'user', 'ubuntu'}
+    ignored_hosts = {'', 'localhost', 'localhost.localdomain'}
+    return users - ignored_users, hosts - ignored_hosts
+
+
+def _replace_private_names(
+    text: str,
+    names: set[str],
+    placeholder: str,
+) -> str:
+    for name in sorted(names, key=len, reverse=True):
+        text = re.sub(
+            rf'(?<![A-Za-z0-9]){re.escape(name)}(?![A-Za-z0-9])',
+            placeholder,
+            text,
+            flags=re.IGNORECASE,
+        )
+    return text
+
+
+def _mask_ip_address(match: re.Match[str]) -> str:
+    value = match.group(0)
+    try:
+        ipaddress.ip_address(value)
+    except ValueError:
+        return value
+    return _stars(value)
+
+
+def anonymize_bug_report(
+    text: str,
+    *,
+    user_names: set[str] | None = None,
+    host_names: set[str] | None = None,
+) -> str:
+    """Remove local identity, filesystem, network, and secret values.
+
+    Masked identifiers retain their length as stars because that can be useful
+    diagnostic information without disclosing the value itself.
+    """
+    runtime_users, runtime_hosts = _runtime_private_names()
+    users = runtime_users if user_names is None else set(user_names)
+    hosts = runtime_hosts if host_names is None else set(host_names)
+
+    text = _SENSITIVE_VALUE_RE.sub(
+        lambda match: match.group(1) + match.group(2) + _stars(match.group(3)),
+        text,
+    )
+    text = _NUMERIC_ID_RE.sub(
+        lambda match: match.group(1) + match.group(2) + _stars(match.group(3)),
+        text,
+    )
+    text = _MAC_ADDRESS_RE.sub(lambda match: _stars(match.group(0)), text)
+    text = _IPV4_RE.sub(_mask_ip_address, text)
+    text = _IPV6_CANDIDATE_RE.sub(_mask_ip_address, text)
+    text = _ACCOUNT_HOST_RE.sub('<user name>@<host name>', text)
+
+    # Quoted paths are handled first so paths containing spaces cannot leak.
+    text = _QUOTED_LOCAL_PATH_RE.sub(
+        lambda match: f'{match.group("quote")}<local path>{match.group("quote")}',
+        text,
+    )
+    text = _FILE_URL_RE.sub('<local path>', text)
+    for path in {str(Path.home()), os.getcwd()}:
+        if path and path != '/':
+            text = text.replace(path, '<local path>')
+    text = _WINDOWS_LOCAL_PATH_RE.sub('<local path>', text)
+    text = _POSIX_LOCAL_PATH_RE.sub('<local path>', text)
+
+    text = _replace_private_names(text, hosts, '<host name>')
+    text = _replace_private_names(text, users, '<user name>')
+    text = re.sub(
+        r'(?im)^(\s*(?:host(?:name)?|computer name)\s*[:=]\s*)\S+',
+        r'\1<host name>',
+        text,
+    )
+    return text
 
 
 def default_report_context() -> dict:
@@ -232,7 +375,7 @@ def format_bug_report(
     if 'user_notes' in included_keys:
         add_section('User Input', user_notes or '(not provided)')
 
-    return '\n'.join(lines).rstrip() + '\n'
+    return anonymize_bug_report('\n'.join(lines).rstrip() + '\n')
 
 
 class BugReportDialog(QDialog):
@@ -302,7 +445,11 @@ class BugReportDialog(QDialog):
 
         right = QWidget()
         right_layout = QVBoxLayout(right)
-        preview_label = QLabel('Report preview')
+        preview_label = QLabel(
+            'Report preview (local identity, paths, network identifiers, and '
+            'secret values are anonymized automatically)'
+        )
+        preview_label.setWordWrap(True)
         right_layout.addWidget(preview_label)
 
         self.preview_edit = QTextEdit()
@@ -540,6 +687,7 @@ __all__ = [
     'BUG_REPORT_SECTIONS',
     'BugReportDialog',
     'BugReportSection',
+    'anonymize_bug_report',
     'default_report_context',
     'filter_mobipick_docker_images',
     'format_bug_report',

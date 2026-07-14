@@ -7,6 +7,7 @@ from PyQt5.QtWidgets import QApplication
 from mobipick_gui.bug_report import (
     BUG_REPORT_SECTIONS,
     BugReportDialog,
+    anonymize_bug_report,
     filter_mobipick_docker_images,
     format_bug_report,
     workspace_graph_ascii,
@@ -82,6 +83,65 @@ def test_format_bug_report_uses_selected_sections():
     assert 'Docker Compose plugin missing' in report
     assert 'clicked run and saw an error' in report
     assert 'important log line' not in report
+
+
+def test_anonymize_bug_report_removes_local_identity_and_paths():
+    report = anonymize_bug_report(
+        'user=alice host=lab-pc\n'
+        'workspace: /home/alice/MyProject/ros_ws\n'
+        'quoted: "/home/alice/My Project/secret.txt"\n'
+        r'windows: C:\\Users\\alice\\project\\config.yaml' '\n'
+        'uri: file:///home/alice/Downloads/report.txt\n',
+        user_names={'alice'},
+        host_names={'lab-pc'},
+    )
+
+    assert 'alice' not in report
+    assert 'lab-pc' not in report
+    assert 'MyProject' not in report
+    assert 'secret.txt' not in report
+    assert 'config.yaml' not in report
+    assert '<user name>' in report
+    assert '<host name>' in report
+    assert report.count('<local path>') == 4
+
+
+def test_anonymize_bug_report_masks_private_values_with_length_clues():
+    report = anonymize_bug_report(
+        'UID=1001 GID: 42 password=hunter2 token: abc-123\n'
+        'ROS_IP=192.168.12.7 MAC=aa:bb:cc:dd:ee:ff',
+        user_names=set(),
+        host_names=set(),
+    )
+
+    assert '1001' not in report
+    assert 'hunter2' not in report
+    assert '192.168.12.7' not in report
+    assert 'UID=****' in report
+    assert 'GID: **' in report
+    assert 'password=*******' in report
+    assert 'token: ***-***' in report
+    assert 'ROS_IP=***.***.**.*' in report
+    assert 'MAC=**:**:**:**:**:**' in report
+
+
+def test_format_bug_report_anonymizes_all_selected_free_text():
+    report = format_bug_report(
+        {
+            'generated_at': '2026-06-18T10:00:00+02:00',
+            'gui_version': '1.2.3',
+            'setup_diagnostics': 'failed in /home/private-user/ros_ws',
+            'log_tab_text': 'prompt private-user@private-pc:~/ros_ws$',
+        },
+        {'setup_diagnostics', 'log_tab', 'user_notes'},
+        {},
+        'See /tmp/private-user/report.txt\nhostname: private-pc',
+    )
+
+    assert 'private-user' not in report
+    assert 'private-pc' not in report
+    assert 'report.txt' not in report
+    assert report.count('<local path>') >= 3
 
 
 def test_bug_report_dialog_uses_default_checked_sections(monkeypatch):

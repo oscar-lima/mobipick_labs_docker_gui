@@ -395,7 +395,13 @@ the **Install Source** tab.
 
 - **Documentation** opens this user documentation window.
 - **File Bug Report...** opens a diagnostic report builder. Choose which
-  sections to include, add notes, and save or copy the report.
+  sections to include, add notes, and save or copy the report. The preview is
+  automatically anonymized before it can be copied, saved, emailed, or sent to
+  GitHub: local user and PC names, filesystem paths, network identifiers, and
+  common secret values are removed. Stars retain only the length of masked
+  numeric identifiers. Review the preview before submitting it because free-form
+  text can still contain personal information the automatic checks do not
+  recognize.
 - **About** shows the GUI version, maintainer contact, GUI source code
   repository, and Mobipick Labs link.
 

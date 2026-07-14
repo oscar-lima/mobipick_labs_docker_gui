@@ -103,7 +103,10 @@ def test_bug_report_github_issue_uses_quiet_external_link(monkeypatch):
     dialog = BugReportDialog(
         lambda: {
             'gui_version': '1.2.3',
-            'setup_diagnostics': 'docker compose failed',
+            'setup_diagnostics': (
+                'docker compose failed for local-user@local-pc: '
+                '/home/local-user/ros_ws'
+            ),
         },
         initial_checked_keys={'setup_diagnostics'},
     )
@@ -113,6 +116,9 @@ def test_bug_report_github_issue_uses_quiet_external_link(monkeypatch):
     assert opened['url'].startswith(BUG_REPORT_GITHUB_ISSUE_URL)
     assert 'Mobipick%20Labs%20Docker%20GUI%20bug%20report' in opened['url']
     assert 'docker%20compose%20failed' in opened['url']
+    assert 'local-user' not in opened['url']
+    assert 'local-pc' not in opened['url']
+    assert 'ros_ws' not in opened['url']
 
     dialog.deleteLater()
     app.processEvents()

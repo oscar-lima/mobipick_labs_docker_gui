@@ -502,7 +502,11 @@ The bug report dialog collects selected diagnostic sections, including GUI
 version, selected workspace, selected image/workspace match, optional command
 outputs, workspace graph, log tab text, and user notes. Keep new diagnostics
 optional so report generation remains useful on machines without every tool
-installed.
+installed. Report rendering passes every section through the same anonymizer
+before preview, copy, save, email, or GitHub issue creation. It removes local
+user and computer names, filesystem paths, network identifiers, and common
+secret assignments; numeric identifiers are replaced by stars so their digit
+count remains available for diagnosis.
 
 ## User documentation dialog
 
