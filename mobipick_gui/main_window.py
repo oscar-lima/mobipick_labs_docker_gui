@@ -4556,7 +4556,7 @@ class MainWindow(QMainWindow):
         dialog.show()
 
     def _start_setup_simulation_test(self, wizard: ImageSetupWizard) -> bool:
-        """Launch the configured simulation and stream output to the wizard."""
+        """Launch an image-default simulation and stream output to the wizard."""
         if any(
             tab.key == 'setup-wizard-simulation-test' and tab.is_running()
             for tab in self._setup_wizard_process_tabs
@@ -4574,11 +4574,28 @@ class MainWindow(QMainWindow):
         exec_id = uuid.uuid4().hex
         tab.exec_id = exec_id
         tab.container_name = f'mobipick-setup-test-{exec_id[:10]}'
-        selected_image = wizard.selection().default_image
-        test_overrides = {'ROS_MASTER_URI': 'http://mobipick:11311'}
+        selected_image = self._setup_simulation_test_image(
+            wizard.selection().default_image
+        )
+        workspace_env = self._workspace_runtime_env(workspace_name='')
+        test_overrides = {
+            **workspace_env,
+            **self._image_runtime_env(
+                workspace_env,
+                image_ref=selected_image,
+            ),
+            'MOBIPICK_CONTAINER_USER': 'root',
+            'ROS_MASTER_URI': 'http://mobipick:11311',
+        }
         if selected_image:
             test_overrides['MOBIPICK_IMAGE'] = selected_image
-            tab.environment_overrides['MOBIPICK_IMAGE'] = selected_image
+        tab.set_environment_overrides(test_overrides)
+        wizard.simulation_test_output.enqueue(
+            False,
+            'Setup smoke test image: '
+            f'{selected_image or "Docker Compose default"}\n'
+            'Host workspace mounting is disabled for this test.\n',
+        )
         self._ensure_network(log_key='log')
         self._claim_xhost(tab, 'setup-wizard-simulation-test', log_key='log')
         args = [
@@ -4590,7 +4607,7 @@ class MainWindow(QMainWindow):
                 container_name=tab.container_name,
             ),
             'mobipick', 'bash', '-lc',
-            self._wrap_line_buffered(self._workspace_sim_command()),
+            self._wrap_line_buffered(DEFAULT_BUTTON_COMMANDS['sim']),
         ]
 
         def finished(code: int, _status) -> None:
@@ -4603,6 +4620,30 @@ class MainWindow(QMainWindow):
             self._release_xhost(tab, log_key='log')
             return False
         return True
+
+    def _setup_simulation_test_image(self, default_image: str) -> str:
+        """Choose the simplest locally available image for the smoke test."""
+        repository_priority = (
+            'mobipick_labs',
+            'x_mobipick_labs',
+        )
+        available_images = list(
+            dict.fromkeys(getattr(self, '_image_choices', []))
+        )
+        portable_images = [
+            image
+            for image in available_images
+            if (
+                self._image_container_user(image) == 'root'
+                and not self._image_supports_host_workspaces(image)
+            )
+        ]
+        for repository_name in repository_priority:
+            for image in portable_images:
+                repository, _tag = self._split_image_ref(image)
+                if repository.rsplit('/', 1)[-1] == repository_name:
+                    return image
+        return str(default_image or '').strip()
 
     def _stop_setup_simulation_test(self) -> None:
         """Stop any simulation visibility test started by the wizard."""

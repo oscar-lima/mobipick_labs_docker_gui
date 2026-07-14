@@ -367,9 +367,15 @@ pull public images on the host PC with streamed output, pause for a manual pull
 confirmation, choose a default image, build a host-user development image, and
 clone/build `DFKI-NI/mobipick_labs` from source in a host-mounted workspace.
 Each optional wizard page has a skip button.
-The summary page can launch the configured Docker Compose simulation as a
-display smoke test and capture its combined terminal output. If Gazebo is not
-visible, **I Cannot See the Simulation** stops the test and opens a
+The summary page can launch the stock Docker Compose simulation as an isolated
+display smoke test and capture its combined terminal output. It disables host
+workspace mounting, runs as root against the workspace baked into the image,
+and prefers the simplest locally available public image in this order:
+`mobipick_labs`, then `x_mobipick_labs`. If neither family is available
+locally, it uses the Docker image selected as the wizard default.
+This keeps private workspace commands and host-user image settings out of the
+basic display test. If Gazebo is not visible, **I Cannot See the Simulation**
+stops the test and opens a
 privacy-scrubbed bug report with the output and relevant host, GPU, image,
 workspace, and GUI diagnostics selected for a GitHub issue.
 It does not enable `docker cp` paths by default; configure any copy rules later

@@ -343,13 +343,17 @@ The tab search is separate from the documentation window search.
   on, where **N** is the number of automatic steps that will run. The manual
   pull option pauses setup until you confirm that the command has finished.
   Each optional wizard page has **Skip This Step**.
-  On the final summary page, **Test Simulation** launches the configured
-  Mobipick Docker simulation and captures its combined terminal output. Press
-  **I Can See the Simulation** to stop a successful smoke test. If Gazebo does
-  not appear, press **I Cannot See the Simulation** to stop the test and open
-  a privacy-scrubbed bug report with the captured output and relevant host,
-  GPU, image, workspace, and GUI diagnostics. From there you can preview,
-  copy, save, email, or create a prefilled GitHub issue.
+  On the final summary page, **Test Simulation** launches the stock Mobipick
+  Docker simulation and captures its combined terminal output. This basic test
+  disables host workspace mounting, runs as root with the workspace baked into
+  the image, and automatically prefers a locally available `mobipick_labs`
+  image, then `x_mobipick_labs`. If neither family is available locally, it
+  uses the wizard's default image. Press **I Can See the Simulation** to stop a
+  successful smoke test. If Gazebo does not appear, press **I Cannot See the
+  Simulation** to stop the test and open a privacy-scrubbed bug report with the
+  captured output and relevant host, GPU, image, workspace, and GUI diagnostics.
+  From there you can preview, copy, save, email, or create a prefilled GitHub
+  issue.
   Docker cp paths are not configured by default; add them later from
   **Tools > Docker > Configure Docker cp Paths** when a workflow needs file
   copies.

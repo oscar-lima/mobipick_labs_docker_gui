@@ -628,6 +628,145 @@ def test_wizard_simulation_visibility_failure_packages_output(tmp_path):
     app.processEvents()
 
 
+def test_setup_simulation_test_prefers_simplest_portable_local_image():
+    window = MainWindow.__new__(MainWindow)
+    window._images_cfg = copy.deepcopy(CONFIG['images'])
+    window._image_profiles = window._normalize_image_profiles(
+        window._images_cfg['profiles']
+    )
+    default_image = 'ozkrelo/x_mobipick_labs:noetic-v1.2'
+    custom_image = 'ozkrelo/x_mobipick_labs:test_user_from_1.2'
+    x_image = 'ozkrelo/x_mobipick_labs:noetic-v1.1'
+    labs_image = 'ozkrelo/mobipick_labs:noetic'
+    unsupported_image = 'ozkrelo/mobipick:noetic-v1.1'
+    window._image_choices = [
+        custom_image,
+        x_image,
+        labs_image,
+        unsupported_image,
+    ]
+
+    assert window._setup_simulation_test_image(default_image) == labs_image
+
+    window._image_choices.remove(labs_image)
+    assert window._setup_simulation_test_image(default_image) == x_image
+
+    window._image_choices.clear()
+    assert window._setup_simulation_test_image(default_image) == default_image
+
+
+def test_setup_simulation_test_disables_host_workspace_and_uses_root(
+    monkeypatch,
+):
+    started = {}
+
+    class FakeSignal:
+        def connect(self, callback):
+            started['finished_callback'] = callback
+
+    class FakeProcess:
+        finished = FakeSignal()
+
+        @staticmethod
+        def waitForStarted(_timeout):
+            return True
+
+    class FakeProcessTab:
+        def __init__(self, key, _label, _parent, **_kwargs):
+            self.key = key
+            self.proc = FakeProcess()
+            self.environment_overrides = {}
+            self.exec_id = ''
+            self.container_name = ''
+            started['tab'] = self
+
+        @staticmethod
+        def is_running():
+            return False
+
+        def set_environment_overrides(self, values):
+            self.environment_overrides = dict(values)
+
+        def start_program(self, program, args):
+            started['program'] = program
+            started['args'] = args
+
+    class FakeOutput:
+        def enqueue(self, _is_html, message):
+            started.setdefault('output', []).append(message)
+
+    class FakeWizard:
+        simulation_test_output = FakeOutput()
+
+        @staticmethod
+        def selection():
+            return type(
+                'Selection',
+                (),
+                {'default_image': 'ozkrelo/x_mobipick_labs:noetic-v1.2'},
+            )()
+
+    basic_image = 'ozkrelo/mobipick_labs:noetic'
+    workspace_env = {
+        'MOBIPICK_WORKSPACE_ENABLED': '0',
+        'MOBIPICK_WORKSPACE_NAME': '',
+        'MOBIPICK_WORKSPACE_PATH': '',
+        'MOBIPICK_WORKSPACE_SETUP': '',
+        'MOBIPICK_WORKSPACE_DEVEL_PATHS': '',
+        'MOBIPICK_WORKSPACE_BUILT': '0',
+        'MOBIPICK_ROS_PACKAGE_PATH': '',
+        'ROS_WORKSPACE': '',
+        'MOBIPICK_WORKSPACE_MOUNT_SOURCE': '/tmp/empty-workspace',
+        'MOBIPICK_WORKSPACE_MOUNT_TARGET': '/tmp/empty-workspace',
+    }
+    window = MainWindow.__new__(MainWindow)
+    window._setup_wizard_process_tabs = []
+    monkeypatch.setattr(main_window_module, 'ProcessTab', FakeProcessTab)
+    monkeypatch.setattr(
+        window,
+        '_setup_simulation_test_image',
+        lambda _default: basic_image,
+    )
+    monkeypatch.setattr(
+        window,
+        '_workspace_runtime_env',
+        lambda workspace_name=None: dict(workspace_env),
+    )
+    monkeypatch.setattr(
+        window,
+        '_image_runtime_env',
+        lambda _workspace_env, image_ref=None: {
+            'MOBIPICK_CONTAINER_USER': 'testuser',
+            'MOBIPICK_CONTAINER_ENTRYPOINT': '/entrypoint.sh',
+            'MOBIPICK_CONTAINER_WORKDIR': '/tmp',
+        },
+    )
+    monkeypatch.setattr(window, '_ensure_network', lambda **_kwargs: True)
+    monkeypatch.setattr(window, '_claim_xhost', lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(window, '_release_xhost', lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(window, '_wrap_line_buffered', lambda command: command)
+
+    def compose_env_args(overrides, **_kwargs):
+        started['compose_overrides'] = dict(overrides)
+        return ['--env', 'captured=1']
+
+    monkeypatch.setattr(window, '_compose_env_args', compose_env_args)
+
+    assert window._start_setup_simulation_test(FakeWizard())
+
+    overrides = started['compose_overrides']
+    assert overrides['MOBIPICK_IMAGE'] == basic_image
+    assert overrides['MOBIPICK_CONTAINER_USER'] == 'root'
+    assert overrides['MOBIPICK_WORKSPACE_ENABLED'] == '0'
+    assert overrides['MOBIPICK_WORKSPACE_NAME'] == ''
+    assert overrides['MOBIPICK_WORKSPACE_PATH'] == ''
+    assert started['tab'].environment_overrides == overrides
+    assert started['program'] == 'docker'
+    assert started['args'][-1] == main_window_module.DEFAULT_BUTTON_COMMANDS['sim']
+    assert basic_image in ''.join(started['output'])
+    assert 'Host workspace mounting is disabled' in ''.join(started['output'])
+
+
 def test_setup_wizard_progress_labels_selected_step_count(tmp_path, monkeypatch):
     app = QApplication.instance() or QApplication([])
     wizard = ImageSetupWizard(
