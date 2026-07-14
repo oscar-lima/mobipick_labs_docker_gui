@@ -141,16 +141,29 @@ class ImageSetupWizard(QWizard):
         self.remember_completion.setChecked(True)
 
         hardware_page = QWizardPage()
-        hardware_page.setTitle('Hardware Requirements')
+        hardware_page.setTitle('System Compatibility')
         hardware_layout = QVBoxLayout(hardware_page)
         hardware_warning = QLabel(
-            '<h2>Powerful NVIDIA GPU hardware is required</h2>'
-            '<p>Mobipick Labs runs a robotics simulator and GPU-accelerated '
-            'applications. Use a capable NVIDIA graphics card with a '
-            'supported proprietary driver and enough CPU, memory, and disk '
-            'capacity before installing the software.</p>'
-            '<p>If this PC does not have suitable NVIDIA hardware, setup may '
-            'finish but the labs will not run correctly.</p>'
+            '<h2>Check operating system and hardware compatibility</h2>'
+            '<p>Mobipick Labs runs containerized robotics simulation and GPU '
+            'accelerated applications.</p>'
+            '<p>The system has been tested on Ubuntu 22.04 LTS and Ubuntu '
+            '24.04 LTS. Other Linux distributions may work because most '
+            'components run in Docker, but they have not been tested and are '
+            'not officially supported.</p>'
+            '<p>A dedicated, CUDA capable NVIDIA GPU with a supported '
+            'proprietary driver is required. GPU memory usage depends on the '
+            'simulator configuration, scene complexity, enabled sensors, and '
+            'other applications running on the system. As a reference, a '
+            'basic tested setup using Gazebo and RViz consumed about 500 MiB '
+            'of GPU memory for gzclient, gzserver, and RViz combined. This is '
+            'an example, not a guaranteed minimum or maximum.</p>'
+            '<p>The tested system uses an NVIDIA Quadro RTX 4000. Comparable '
+            'CUDA capable NVIDIA GPUs may also work, but have not necessarily '
+            'been validated.</p>'
+            '<p>Setup can continue on an untested or unsupported system, but '
+            'the labs may run slowly, fail, or require manual configuration.'
+            '</p>'
         )
         hardware_warning.setWordWrap(True)
         hardware_layout.addWidget(hardware_warning)
@@ -439,7 +452,7 @@ class ImageSetupWizard(QWizard):
         summary_page.setFinalPage(True)
         self._summary_page_id = self.addPage(summary_page)
         self._setup_page_titles = [
-            (self._hardware_page_id, 'Hardware Requirements'),
+            (self._hardware_page_id, 'System Compatibility'),
             (self._dependency_page_id, 'Host Dependencies'),
             (self._nvidia_page_id, 'NVIDIA Container Toolkit'),
             (self._intro_page_id, 'Setup Guide'),

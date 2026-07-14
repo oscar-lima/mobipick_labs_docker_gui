@@ -306,11 +306,12 @@ The tab search is separate from the documentation window search.
   are fixed buttons and cannot be edited from this profile. Use **Load
   Profile** or **Export Profile** in the editor to import or save a complete
   button configuration as one YAML file.
-- **Setup Wizard** opens the setup flow. The first page clearly warns that
-  Mobipick Labs requires powerful hardware and a capable NVIDIA GPU. The next
-  page checks common Ubuntu host dependencies, and each wizard page title is
-  numbered as **Step 1/N**, **Step 2/N**, and so on as you move through the
-  flow. The host dependency
+- **Setup Wizard** opens the setup flow. The first page explains operating
+  system and hardware compatibility, including the tested Ubuntu releases,
+  the dedicated CUDA-capable NVIDIA GPU requirement, and reference GPU memory
+  usage. The next page checks common Ubuntu host dependencies, and each wizard
+  page title is numbered as **Step 1/N**, **Step 2/N**, and so on as you move
+  through the flow. The host dependency
   page lets you choose packages, copy an install script to the clipboard, run
   it in a terminal, and click **Run Checks**. The script asks for confirmation
   before each major installation, service, permission, and test step as

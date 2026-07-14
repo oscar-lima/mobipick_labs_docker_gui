@@ -135,7 +135,7 @@ def test_wizard_page_titles_show_step_position(tmp_path):
         source_image='ozkrelo/x_mobipick_labs:host_user_from_1.2',
     )
     expected_titles = [
-        'Step 1/9: Hardware Requirements',
+        'Step 1/9: System Compatibility',
         'Step 2/9: Host Dependencies',
         'Step 3/9: NVIDIA Container Toolkit',
         'Step 4/9: Setup Guide',
@@ -162,7 +162,7 @@ def test_wizard_page_titles_show_step_position(tmp_path):
     app.processEvents()
 
 
-def test_wizard_warns_about_gpu_and_provides_nvidia_setup_actions(tmp_path):
+def test_wizard_describes_compatibility_and_provides_nvidia_actions(tmp_path):
     app = QApplication.instance() or QApplication([])
     wizard = ImageSetupWizard(
         public_images=['ozkrelo/x_mobipick_labs:noetic-v1.2'],
@@ -181,7 +181,12 @@ def test_wizard_warns_about_gpu_and_provides_nvidia_setup_actions(tmp_path):
             wizard._hardware_page_id
         ).findChildren(QLabel)
     )
-    assert 'Powerful NVIDIA GPU hardware is required' in warning_text
+    assert 'Check operating system and hardware compatibility' in warning_text
+    assert 'Ubuntu 22.04 LTS and Ubuntu 24.04 LTS' in warning_text
+    assert 'dedicated, CUDA capable NVIDIA GPU' in warning_text
+    assert 'about 500 MiB of GPU memory' in warning_text
+    assert 'NVIDIA Quadro RTX 4000' in warning_text
+    assert 'untested or unsupported system' in warning_text
     assert wizard.NVIDIA_TOOLKIT_URL == wizard.nvidia_url_edit.text()
     assert wizard.NVIDIA_TEST_COMMAND == wizard.nvidia_test_command_edit.text()
 

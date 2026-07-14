@@ -350,10 +350,12 @@ Image behavior is controlled by `images` in `gui_settings.yaml`.
   workspace support, compatible workspaces, working directory, entrypoint, and
   tooltip description.
 
-The setup wizard first warns that Mobipick Labs needs powerful hardware and a
-capable NVIDIA GPU. It then checks common Ubuntu host dependencies and shows
-one checkbox per package so users can copy a selected `apt` command into a
-terminal, install the tools themselves, and mark the step done. The following
+The setup wizard first explains operating system and hardware compatibility,
+including the tested Ubuntu releases, the dedicated CUDA-capable NVIDIA GPU
+requirement, and reference GPU memory usage. It then checks common Ubuntu host
+dependencies and shows one checkbox per package so users can copy a selected
+`apt` command into a terminal, install the tools themselves, and mark the step
+done. The following
 NVIDIA Container Toolkit page links to the official installation guide, can
 copy the guide URL or the elevated terminal test command, and runs a
 non-blocking current-user Docker GPU test. That test passes only when the
