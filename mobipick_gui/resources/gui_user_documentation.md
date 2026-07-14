@@ -304,9 +304,11 @@ The tab search is separate from the documentation window search.
   are fixed buttons and cannot be edited from this profile. Use **Load
   Profile** or **Export Profile** in the editor to import or save a complete
   button configuration as one YAML file.
-- **Setup Wizard** opens the setup flow. The first page checks common Ubuntu
-  host dependencies, and each wizard page title is numbered as **Step 1/N**,
-  **Step 2/N**, and so on as you move through the flow. The host dependency
+- **Setup Wizard** opens the setup flow. The first page clearly warns that
+  Mobipick Labs requires powerful hardware and a capable NVIDIA GPU. The next
+  page checks common Ubuntu host dependencies, and each wizard page title is
+  numbered as **Step 1/N**, **Step 2/N**, and so on as you move through the
+  flow. The host dependency
   page lets you choose packages, copy an install script to the clipboard, run
   it in a terminal, and click **Run Checks**. The script asks for confirmation
   before each major installation, service, permission, and test step as
@@ -317,6 +319,16 @@ The tab search is separate from the documentation window search.
   dependency. If a check still fails, **Open Bug Report** prepares the
   standard diagnostics so you can copy, save, email, or open a prefilled
   GitHub issue.
+  After the host dependencies, the **NVIDIA Container Toolkit** page links to
+  NVIDIA's official installation guide and provides buttons to open the guide,
+  copy its URL, and copy the terminal test command. Complete the guide before
+  pressing **Run GPU Test**. The GUI runs an equivalent current-user Docker
+  test without `sudo` so it cannot become stuck at an invisible password
+  prompt. The test passes only when the container exits successfully and its
+  output contains NVIDIA-SMI, driver, CUDA, and GPU-table evidence. If Docker
+  still requires elevated access, use **Copy Test Command** and run the shown
+  `sudo docker run --rm --runtime=nvidia --gpus all ubuntu nvidia-smi` command
+  in a terminal, then retry after fixing current-user Docker access.
   The setup guide page includes **Learn More About These Choices**, which opens
   a separate explanation window for the public-image pull, host-user image
   build, source workspace install, and startup reminder checkboxes.

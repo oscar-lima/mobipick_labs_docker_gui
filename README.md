@@ -346,9 +346,15 @@ Image behavior is controlled by `images` in `gui_settings.yaml`.
   workspace support, compatible workspaces, working directory, entrypoint, and
   tooltip description.
 
-The setup wizard first checks common Ubuntu host dependencies and shows one
-checkbox per package so users can copy a selected `apt` command into a
-terminal, install the tools themselves, and mark the step done. It can then
+The setup wizard first warns that Mobipick Labs needs powerful hardware and a
+capable NVIDIA GPU. It then checks common Ubuntu host dependencies and shows
+one checkbox per package so users can copy a selected `apt` command into a
+terminal, install the tools themselves, and mark the step done. The following
+NVIDIA Container Toolkit page links to the official installation guide, can
+copy the guide URL or the elevated terminal test command, and runs a
+non-blocking current-user Docker GPU test. That test passes only when the
+container exits successfully and reports NVIDIA-SMI, driver, CUDA, and GPU
+table evidence. The wizard can then
 pull public images on the host PC with streamed output, pause for a manual pull
 confirmation, choose a default image, build a host-user development image, and
 clone/build `DFKI-NI/mobipick_labs` from source in a host-mounted workspace.

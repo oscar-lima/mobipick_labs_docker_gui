@@ -4,7 +4,7 @@ import os
 os.environ['QT_QPA_PLATFORM'] = 'offscreen'
 
 import pytest
-from PyQt5.QtWidgets import QApplication, QDialog, QTextEdit, QWizard
+from PyQt5.QtWidgets import QApplication, QDialog, QLabel, QTextEdit, QWizard
 
 from mobipick_gui.config import CONFIG
 import mobipick_gui.main_window as main_window_module
@@ -135,11 +135,13 @@ def test_wizard_page_titles_show_step_position(tmp_path):
         source_image='ozkrelo/x_mobipick_labs:host_user_from_1.2',
     )
     expected_titles = [
-        'Step 1/7: Host Dependencies',
-        'Step 2/7: Setup Guide',
-        'Step 3/7: Public Images',
-        'Step 4/7: Development Image',
-        'Step 5/7: Source Workspace',
+        'Step 1/9: Hardware Requirements',
+        'Step 2/9: Host Dependencies',
+        'Step 3/9: NVIDIA Container Toolkit',
+        'Step 4/9: Setup Guide',
+        'Step 5/9: Public Images',
+        'Step 6/9: Development Image',
+        'Step 7/9: Source Workspace',
     ]
 
     wizard.show()
@@ -150,14 +152,60 @@ def test_wizard_page_titles_show_step_position(tmp_path):
             wizard.next()
             app.processEvents()
 
-    assert wizard.page(wizard._progress_page_id).title() == 'Step 6/7: Run Setup'
+    assert wizard.page(wizard._progress_page_id).title() == 'Step 8/9: Run Setup'
     assert (
         wizard.page(wizard._summary_page_id).title()
-        == 'Step 7/7: Setup Summary'
+        == 'Step 9/9: Setup Summary'
     )
 
     wizard.deleteLater()
     app.processEvents()
+
+
+def test_wizard_warns_about_gpu_and_provides_nvidia_setup_actions(tmp_path):
+    app = QApplication.instance() or QApplication([])
+    wizard = ImageSetupWizard(
+        public_images=['ozkrelo/x_mobipick_labs:noetic-v1.2'],
+        default_image='ozkrelo/x_mobipick_labs:noetic-v1.2',
+        host_user='testuser',
+        host_uid='1001',
+        host_gid='1001',
+        base_image='ozkrelo/x_mobipick_labs:noetic-v1.2',
+        target_image='ozkrelo/x_mobipick_labs:host_user_from_1.2',
+        workspace_names=[],
+        source_master_folder=str(tmp_path / 'master'),
+    )
+
+    warning_text = ' '.join(
+        label.text() for label in wizard.page(
+            wizard._hardware_page_id
+        ).findChildren(QLabel)
+    )
+    assert 'Powerful NVIDIA GPU hardware is required' in warning_text
+    assert wizard.NVIDIA_TOOLKIT_URL == wizard.nvidia_url_edit.text()
+    assert wizard.NVIDIA_TEST_COMMAND == wizard.nvidia_test_command_edit.text()
+
+    wizard._copy_nvidia_url()
+    assert QApplication.clipboard().text() == wizard.NVIDIA_TOOLKIT_URL
+    wizard._copy_nvidia_test_command()
+    assert QApplication.clipboard().text() == wizard.NVIDIA_TEST_COMMAND
+
+    wizard.deleteLater()
+    app.processEvents()
+
+
+def test_nvidia_gpu_test_requires_driver_cuda_and_gpu_evidence():
+    output = '''
+NVIDIA-SMI 535.86.10    Driver Version: 535.86.10    CUDA Version: 12.2
+|   0  Tesla T4            On   | 00000000:00:1E.0 Off |
+'''
+
+    assert ImageSetupWizard._nvidia_test_passed(0, output)
+    assert not ImageSetupWizard._nvidia_test_passed(1, output)
+    assert not ImageSetupWizard._nvidia_test_passed(
+        0,
+        'NVIDIA-SMI 535.86.10 Driver Version: 535.86.10',
+    )
 
 
 def test_wizard_dependency_page_builds_copyable_install_command(tmp_path):

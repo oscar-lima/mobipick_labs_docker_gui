@@ -7,6 +7,7 @@ import shlex
 from dataclasses import dataclass, field
 from typing import Callable, Iterable
 
+from PyQt5.QtCore import QProcess
 from PyQt5.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -23,6 +24,7 @@ from PyQt5.QtWidgets import (
     QWizardPage,
 )
 
+from .external_links import open_external_url
 from .log_widget import LogTextEdit
 from .window_utils import (
     MaximizableDialog as QDialog,
@@ -72,6 +74,14 @@ class HostDependency:
 class ImageSetupWizard(QWizard):
     """Collect initial Docker image setup choices."""
 
+    NVIDIA_TOOLKIT_URL = (
+        'https://docs.nvidia.com/datacenter/cloud-native/'
+        'container-toolkit/latest/install-guide.html'
+    )
+    NVIDIA_TEST_COMMAND = (
+        'sudo docker run --rm --runtime=nvidia --gpus all ubuntu nvidia-smi'
+    )
+
     def __init__(
         self,
         *,
@@ -117,6 +127,7 @@ class ImageSetupWizard(QWizard):
         self._last_dependency_report = ''
         self._dependency_details_dialog: QDialog | None = None
         self._setup_options_dialog: QDialog | None = None
+        self._gpu_test_process: QProcess | None = None
 
         self.pull_public_images = QCheckBox('Pull public Mobipick images')
         self.pull_public_images.setChecked(True)
@@ -128,6 +139,23 @@ class ImageSetupWizard(QWizard):
         self.install_source_workspace.setChecked(install_source_default)
         self.remember_completion = QCheckBox('Do not show this wizard on startup again')
         self.remember_completion.setChecked(True)
+
+        hardware_page = QWizardPage()
+        hardware_page.setTitle('Hardware Requirements')
+        hardware_layout = QVBoxLayout(hardware_page)
+        hardware_warning = QLabel(
+            '<h2>Powerful NVIDIA GPU hardware is required</h2>'
+            '<p>Mobipick Labs runs a robotics simulator and GPU-accelerated '
+            'applications. Use a capable NVIDIA graphics card with a '
+            'supported proprietary driver and enough CPU, memory, and disk '
+            'capacity before installing the software.</p>'
+            '<p>If this PC does not have suitable NVIDIA hardware, setup may '
+            'finish but the labs will not run correctly.</p>'
+        )
+        hardware_warning.setWordWrap(True)
+        hardware_layout.addWidget(hardware_warning)
+        hardware_layout.addStretch(1)
+        self._hardware_page_id = self.addPage(hardware_page)
 
         dependency_page = QWizardPage()
         dependency_page.setTitle('Host Dependencies')
@@ -184,6 +212,60 @@ class ImageSetupWizard(QWizard):
         dependency_layout.addLayout(dependency_buttons)
         self._dependency_page_id = self.addPage(dependency_page)
         self._update_dependency_command()
+
+        nvidia_page = QWizardPage()
+        nvidia_page.setTitle('NVIDIA Container Toolkit')
+        nvidia_layout = QVBoxLayout(nvidia_page)
+        nvidia_hint = QLabel(
+            'After Docker and the host packages are installed, follow the '
+            'official NVIDIA Container Toolkit installation guide. Return '
+            'here when its configuration steps are complete, then run the '
+            'GPU test. A passing test must find NVIDIA-SMI, driver, CUDA, and '
+            'GPU evidence inside the container.'
+        )
+        nvidia_hint.setWordWrap(True)
+        nvidia_layout.addWidget(nvidia_hint)
+        self.nvidia_url_edit = QLineEdit(self.NVIDIA_TOOLKIT_URL)
+        self.nvidia_url_edit.setReadOnly(True)
+        self.nvidia_url_edit.setMinimumWidth(620)
+        nvidia_layout.addWidget(self.nvidia_url_edit)
+        nvidia_link_buttons = QHBoxLayout()
+        self.open_nvidia_guide_button = QPushButton('Open Installation Guide')
+        self.open_nvidia_guide_button.clicked.connect(
+            lambda: open_external_url(self.NVIDIA_TOOLKIT_URL)
+        )
+        nvidia_link_buttons.addWidget(self.open_nvidia_guide_button)
+        self.copy_nvidia_url_button = QPushButton('Copy Guide URL')
+        self.copy_nvidia_url_button.clicked.connect(self._copy_nvidia_url)
+        nvidia_link_buttons.addWidget(self.copy_nvidia_url_button)
+        nvidia_link_buttons.addStretch(1)
+        nvidia_layout.addLayout(nvidia_link_buttons)
+        self.nvidia_test_command_edit = QLineEdit(self.NVIDIA_TEST_COMMAND)
+        self.nvidia_test_command_edit.setReadOnly(True)
+        self.nvidia_test_command_edit.setMinimumWidth(620)
+        nvidia_layout.addWidget(self.nvidia_test_command_edit)
+        nvidia_test_buttons = QHBoxLayout()
+        self.copy_nvidia_test_button = QPushButton('Copy Test Command')
+        self.copy_nvidia_test_button.clicked.connect(
+            self._copy_nvidia_test_command
+        )
+        nvidia_test_buttons.addWidget(self.copy_nvidia_test_button)
+        self.run_nvidia_test_button = QPushButton('Run GPU Test')
+        self.run_nvidia_test_button.clicked.connect(self._run_nvidia_test)
+        nvidia_test_buttons.addWidget(self.run_nvidia_test_button)
+        nvidia_test_buttons.addStretch(1)
+        nvidia_layout.addLayout(nvidia_test_buttons)
+        self.nvidia_test_result = QLabel(
+            'Not tested yet. Complete the NVIDIA guide before running this test.'
+        )
+        self.nvidia_test_result.setWordWrap(True)
+        nvidia_layout.addWidget(self.nvidia_test_result)
+        self.nvidia_test_output = QTextEdit()
+        self.nvidia_test_output.setAcceptRichText(False)
+        self.nvidia_test_output.setReadOnly(True)
+        self.nvidia_test_output.setMinimumHeight(170)
+        nvidia_layout.addWidget(self.nvidia_test_output)
+        self._nvidia_page_id = self.addPage(nvidia_page)
 
         intro = QWizardPage()
         intro.setTitle('Setup Guide')
@@ -357,7 +439,9 @@ class ImageSetupWizard(QWizard):
         summary_page.setFinalPage(True)
         self._summary_page_id = self.addPage(summary_page)
         self._setup_page_titles = [
+            (self._hardware_page_id, 'Hardware Requirements'),
             (self._dependency_page_id, 'Host Dependencies'),
+            (self._nvidia_page_id, 'NVIDIA Container Toolkit'),
             (self._intro_page_id, 'Setup Guide'),
             (self._image_page_id, 'Public Images'),
             (self._dev_page_id, 'Development Image'),
@@ -369,6 +453,91 @@ class ImageSetupWizard(QWizard):
 
         self.currentIdChanged.connect(self._update_navigation_buttons)
         self._update_navigation_buttons(self.currentId())
+
+    def _copy_nvidia_url(self) -> None:
+        QApplication.clipboard().setText(self.NVIDIA_TOOLKIT_URL)
+
+    def _copy_nvidia_test_command(self) -> None:
+        QApplication.clipboard().setText(self.NVIDIA_TEST_COMMAND)
+
+    def _run_nvidia_test(self) -> None:
+        """Run a GPU-enabled container without blocking the GUI."""
+        if self._gpu_test_process is not None:
+            return
+        self.nvidia_test_output.clear()
+        self.nvidia_test_result.setText(
+            'Running GPU test; the ubuntu image may be downloaded first...'
+        )
+        self.run_nvidia_test_button.setEnabled(False)
+        process = QProcess(self)
+        process.setProcessChannelMode(QProcess.MergedChannels)
+        process.readyReadStandardOutput.connect(self._read_nvidia_test_output)
+        process.finished.connect(self._finish_nvidia_test)
+        process.errorOccurred.connect(self._nvidia_test_error)
+        self._gpu_test_process = process
+        # The dependency check requires current-user Docker access, so sudo is
+        # deliberately omitted here to avoid an invisible password prompt.
+        process.start(
+            'docker',
+            ['run', '--rm', '--runtime=nvidia', '--gpus', 'all',
+             'ubuntu', 'nvidia-smi'],
+        )
+
+    def _read_nvidia_test_output(self) -> None:
+        process = self._gpu_test_process
+        if process is None:
+            return
+        output = bytes(process.readAllStandardOutput()).decode(
+            errors='replace'
+        )
+        if output:
+            self.nvidia_test_output.moveCursor(
+                self.nvidia_test_output.textCursor().End
+            )
+            self.nvidia_test_output.insertPlainText(output)
+
+    @staticmethod
+    def _nvidia_test_passed(exit_code: int, output: str) -> bool:
+        """Require concrete NVIDIA driver, CUDA, and GPU table evidence."""
+        required_patterns = (
+            r'NVIDIA-SMI\s+\d',
+            r'Driver Version:\s*\d',
+            r'CUDA Version:\s*\d',
+            r'\|\s*\d+\s+[^|\n]+\|\s+[0-9A-F]{4,8}:',
+        )
+        return exit_code == 0 and all(
+            re.search(pattern, output, re.IGNORECASE)
+            for pattern in required_patterns
+        )
+
+    def _finish_nvidia_test(self, exit_code: int, _exit_status) -> None:
+        self._read_nvidia_test_output()
+        output = self.nvidia_test_output.toPlainText()
+        if self._nvidia_test_passed(exit_code, output):
+            self.nvidia_test_result.setText(
+                'PASSED: NVIDIA Container Toolkit exposed a GPU, driver, and '
+                'CUDA runtime inside Docker.'
+            )
+        else:
+            self.nvidia_test_result.setText(
+                'FAILED: the container did not provide complete NVIDIA-SMI, '
+                'driver, CUDA, and GPU evidence. Review the guide, then retry. '
+                'If Docker requires sudo in your terminal, copy and run the '
+                'displayed test command there too.'
+            )
+        self._gpu_test_process = None
+        self.run_nvidia_test_button.setEnabled(True)
+
+    def _nvidia_test_error(self, _error) -> None:
+        process = self._gpu_test_process
+        if process is None or process.state() != QProcess.NotRunning:
+            return
+        self.nvidia_test_result.setText(
+            'FAILED: Docker could not be started. Complete the host '
+            'dependency step and try again.'
+        )
+        self._gpu_test_process = None
+        self.run_nvidia_test_button.setEnabled(True)
 
     def _number_setup_page_titles(self) -> None:
         """Prefix wizard page titles with their position in the flow."""
