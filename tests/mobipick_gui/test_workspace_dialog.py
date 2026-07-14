@@ -2,6 +2,7 @@ import os
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
+from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QApplication, QHeaderView
 
 from mobipick_gui.workspace_dialog import WorkspaceManagerDialog
@@ -53,6 +54,24 @@ def test_workspace_dialog_path_column_stretches_with_window(tmp_path):
     assert header.sectionResizeMode(0) == QHeaderView.ResizeToContents
     assert header.sectionResizeMode(1) == QHeaderView.Stretch
     assert header.sectionResizeMode(4) == QHeaderView.ResizeToContents
+
+    dialog.deleteLater()
+    app.processEvents()
+
+
+def test_workspace_dialog_selects_active_workspace_on_open(tmp_path):
+    app = QApplication.instance() or QApplication([])
+    registry = WorkspaceRegistry(tmp_path / 'workspaces.yaml')
+    for name in ('bar_ws', 'foo_ws'):
+        workspace_path = tmp_path / name
+        (workspace_path / 'src').mkdir(parents=True)
+        registry.upsert(RosWorkspace(name=name, path=str(workspace_path)))
+    registry.active = 'foo_ws'
+
+    dialog = WorkspaceManagerDialog(registry)
+
+    assert dialog.tree.currentItem().data(0, Qt.UserRole) == 'foo_ws'
+    assert dialog.path_edit.text() == str(tmp_path / 'foo_ws')
 
     dialog.deleteLater()
     app.processEvents()

@@ -202,7 +202,7 @@ class WorkspaceManagerDialog(QDialog):
         buttons = QDialogButtonBox(QDialogButtonBox.Close)
         buttons.rejected.connect(self.reject)
         root.addWidget(buttons)
-        self.refresh()
+        self.refresh(self.registry.active)
 
     def _connect_editor_dirty_signals(self) -> None:
         for editor in (self.path_edit, self.sim_command_edit):
