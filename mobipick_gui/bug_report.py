@@ -36,6 +36,13 @@ BUG_REPORT_EMAIL = 'mobipick-labs@dfki.de'
 BUG_REPORT_GITHUB_ISSUE_URL = (
     'https://github.com/oscar-lima/mobipick_labs_docker_gui/issues/new'
 )
+MAX_GITHUB_ISSUE_URL_LENGTH = 1950
+GITHUB_TRUNCATION_NOTICE = (
+    '\n\n---\n'
+    '_This report was truncated to keep the GitHub issue URL compatible with '
+    'browsers. In the Bug Report dialog, click **Copy Remaining**, then paste '
+    'the remaining report below this notice._\n\n'
+)
 
 
 @dataclass(frozen=True)
@@ -65,6 +72,41 @@ COMMAND_SECTION_KEYS = {
     'nvidia_smi',
     'docker_images',
 }
+
+
+def build_github_issue_url(
+    subject: str,
+    body: str,
+    max_length: int = MAX_GITHUB_ISSUE_URL_LENGTH,
+) -> tuple[QUrl, str]:
+    """Build a bounded GitHub issue URL and return any omitted report tail."""
+
+    def issue_url(issue_body: str) -> QUrl:
+        return QUrl(
+            f'{BUG_REPORT_GITHUB_ISSUE_URL}'
+            f'?title={quote(subject, safe="")}'
+            f'&body={quote(issue_body, safe="")}'
+        )
+
+    complete_url = issue_url(body)
+    if len(bytes(complete_url.toEncoded())) <= max_length:
+        return complete_url, ''
+
+    low = 0
+    high = len(body)
+    while low < high:
+        midpoint = (low + high + 1) // 2
+        candidate = issue_url(body[:midpoint] + GITHUB_TRUNCATION_NOTICE)
+        if len(bytes(candidate.toEncoded())) <= max_length:
+            low = midpoint
+        else:
+            high = midpoint - 1
+
+    bounded_url = issue_url(body[:low] + GITHUB_TRUNCATION_NOTICE)
+    if len(bytes(bounded_url.toEncoded())) > max_length:
+        raise ValueError('GitHub issue URL limit is too small for its metadata')
+    return bounded_url, body[low:]
+
 
 _SENSITIVE_VALUE_RE = re.compile(
     r'(?i)\b(password|passwd|passphrase|token|secret|api[_-]?key)'
@@ -402,6 +444,7 @@ class BugReportDialog(QDialog):
         }
         self._processes: dict[str, QProcess] = {}
         self._checkboxes: dict[str, QCheckBox] = {}
+        self._github_report_remainder = ''
         initial_checked_keys = set(initial_checked_keys or set())
 
         root = QHBoxLayout(self)
@@ -518,10 +561,22 @@ class BugReportDialog(QDialog):
         self._start_collectors()
 
     def copy_to_clipboard(self) -> None:
-        QApplication.clipboard().setText(self.report_text())
-        self.status_label.setText('Copied to clipboard.')
-        self._copy_button.setText('Copied')
-        QTimer.singleShot(1500, lambda: self._copy_button.setText('Copy'))
+        remainder = self._github_report_remainder
+        QApplication.clipboard().setText(remainder or self.report_text())
+        if remainder:
+            self.status_label.setText(
+                'Remaining report copied. Paste it at the end of the issue.'
+            )
+            self._copy_button.setText('Remaining Copied')
+        else:
+            self.status_label.setText('Copied to clipboard.')
+            self._copy_button.setText('Copied')
+        QTimer.singleShot(
+            1500,
+            lambda: self._copy_button.setText(
+                'Copy Remaining' if self._github_report_remainder else 'Copy'
+            ),
+        )
 
     def save_to_file(self) -> None:
         default_name = (
@@ -562,17 +617,31 @@ class BugReportDialog(QDialog):
     def open_github_issue(self) -> None:
         subject = 'Mobipick Labs Docker GUI bug report'
         body = self.report_text()
-        url = QUrl(
-            f'{BUG_REPORT_GITHUB_ISSUE_URL}'
-            f'?title={quote(subject, safe="")}'
-            f'&body={quote(body, safe="")}'
-        )
+        url, remainder = build_github_issue_url(subject, body)
         if not open_external_url(url):
             QMessageBox.warning(
                 self,
                 'Bug Report',
                 'Unable to open the GitHub issue page.',
             )
+            return
+
+        self._github_report_remainder = remainder
+        if remainder:
+            self._copy_button.setText('Copy Remaining')
+            self.status_label.setText(
+                'GitHub received part of the report; copy and paste the rest.'
+            )
+            QMessageBox.information(
+                self,
+                'Bug Report Too Long',
+                'The complete report would create a URL that is too long for '
+                'some browsers. GitHub has been opened with the first part.\n\n'
+                'Click Copy Remaining in this dialog, then paste that text at '
+                'the end of the GitHub issue before submitting it.',
+            )
+        else:
+            self._copy_button.setText('Copy')
 
     def _included_keys(self) -> set[str]:
         return {
@@ -593,6 +662,10 @@ class BugReportDialog(QDialog):
         self._update_preview()
 
     def _update_preview(self) -> None:
+        self._github_report_remainder = ''
+        if hasattr(self, '_copy_button'):
+            self._copy_button.setText('Copy')
+            self.status_label.setText('')
         self.preview_edit.setPlainText(self.report_text())
 
     def _start_collectors(self) -> None:
@@ -685,9 +758,12 @@ __all__ = [
     'BUG_REPORT_EMAIL',
     'BUG_REPORT_GITHUB_ISSUE_URL',
     'BUG_REPORT_SECTIONS',
+    'GITHUB_TRUNCATION_NOTICE',
+    'MAX_GITHUB_ISSUE_URL_LENGTH',
     'BugReportDialog',
     'BugReportSection',
     'anonymize_bug_report',
+    'build_github_issue_url',
     'default_report_context',
     'filter_mobipick_docker_images',
     'format_bug_report',

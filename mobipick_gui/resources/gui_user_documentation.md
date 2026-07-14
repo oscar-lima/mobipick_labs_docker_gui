@@ -402,6 +402,9 @@ the **Install Source** tab.
   numeric identifiers. Review the preview before submitting it because free-form
   text can still contain personal information the automatic checks do not
   recognize.
+  If the report is too large for a broadly compatible GitHub issue link, the
+  GUI opens the issue with the first part and explains how to use **Copy
+  Remaining** to paste the rest into GitHub before submitting.
 - **About** shows the GUI version, maintainer contact, GUI source code
   repository, and Mobipick Labs link.
 

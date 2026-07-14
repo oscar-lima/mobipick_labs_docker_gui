@@ -508,6 +508,11 @@ user and computer names, filesystem paths, network identifiers, and common
 secret assignments; numeric identifiers are replaced by stars so their digit
 count remains available for diagnosis.
 
+GitHub issue links are kept below 2,000 encoded characters for broad browser
+compatibility. If a report is too large, the dialog opens GitHub with the
+largest safe first part, explains the truncation, and changes **Copy** to
+**Copy Remaining** so the user can paste the omitted tail into the issue.
+
 ## User documentation dialog
 
 The Help documentation window renders
