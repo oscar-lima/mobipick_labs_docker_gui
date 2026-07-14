@@ -354,8 +354,10 @@ The setup wizard first explains operating system and hardware compatibility,
 including the tested Ubuntu releases, the dedicated CUDA-capable NVIDIA GPU
 requirement, and reference GPU memory usage. It then checks common Ubuntu host
 dependencies and shows one checkbox per package so users can copy a selected
-`apt` command into a terminal, install the tools themselves, and mark the step
-done. The following
+set of short, commented `apt` commands into a terminal, install the tools
+themselves, and mark the step done. Docker setup uses explicit repository,
+package installation, and user-group commands without wrapping them in an
+interactive Bash script. The following
 NVIDIA Container Toolkit page links to the official installation guide, can
 copy the guide URL or the elevated terminal test command, and runs a
 non-blocking current-user Docker GPU test. That test passes only when the

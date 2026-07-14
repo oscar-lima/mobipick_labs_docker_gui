@@ -312,10 +312,11 @@ The tab search is separate from the documentation window search.
   usage. The next page checks common Ubuntu host dependencies, and each wizard
   page title is numbered as **Step 1/N**, **Step 2/N**, and so on as you move
   through the flow. The host dependency
-  page lets you choose packages, copy an install script to the clipboard, run
-  it in a terminal, and click **Run Checks**. The script asks for confirmation
-  before each major installation, service, permission, and test step as
-  **Step 1/N**, **Step 2/N**, and so on. **Run Checks** opens a details
+  page lets you choose packages, copy short, commented terminal commands to
+  the clipboard, run them in a terminal, and click **Run Checks**. The commands
+  plainly show each package update, installation, Docker repository, and
+  user-group change without an interactive script around them. **Run Checks**
+  opens a details
   window with a color-coded
   summary, each check's purpose, and the evidence used for the result. A
   black command section lists the exact Bash probe commands used for each host

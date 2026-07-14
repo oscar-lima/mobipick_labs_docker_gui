@@ -286,26 +286,21 @@ def test_wizard_dependency_page_builds_copyable_install_command(tmp_path):
         host_dependency_refresher=refresh_dependencies,
     )
     command = wizard.dependency_command_edit.toPlainText()
-    assert command.startswith("bash <<'MOBIPICK_DOCKER_INSTALL'")
-    assert 'confirm_step()' in command
-    assert 'SETUP_STEP_TOTAL=7' in command
-    assert 'Run ${step_label}? [y/N]' in command
-    assert '==> ${step_label}: ${title}' in command
+    assert command.startswith(
+        "# Install the tools needed to add Docker's package repository."
+    )
+    assert "bash <<" not in command
+    assert 'confirm_step' not in command
+    assert 'SETUP_STEP_' not in command
     assert 'https://download.docker.com/linux/ubuntu' in command
-    assert 'sudo apt install -y ca-certificates curl gnupg' in command
-    assert 'sudo gpg --dearmor --yes -o /etc/apt/keyrings/docker.gpg' in command
-    assert 'signed-by=/etc/apt/keyrings/docker.gpg' in command
-    assert '/etc/apt/keyrings/docker.asc' in command
-    assert 'apt-cache policy "${docker_packages[@]}"' in command
-    assert 'has no apt candidate' in command
+    assert 'sudo apt install -y ca-certificates curl' in command
+    assert 'signed-by=/etc/apt/keyrings/docker.asc' in command
     assert 'docker-ce docker-ce-cli containerd.io' in command
     assert 'docker-buildx-plugin docker-compose-plugin' in command
-    assert 'support_packages=(wmctrl)' in command
-    assert 'sudo apt install -y "${support_packages[@]}"' in command
+    assert 'sudo apt install -y wmctrl' in command
     assert 'ffmpeg' not in command
-    assert 'sudo systemctl restart containerd' in command
-    assert 'sudo systemctl restart docker' in command
-    assert 'sudo docker images' in command
+    assert 'sudo usermod -aG docker "$USER"' in command
+    assert wizard.copy_dependency_command_button.text() == 'Copy Commands'
     assert wizard.dependency_done_button.text() == 'Run Checks'
 
     wizard._dependency_checkboxes['wmctrl'].setChecked(False)
@@ -318,10 +313,14 @@ def test_wizard_dependency_page_builds_copyable_install_command(tmp_path):
     assert refreshed == [True]
     assert not wizard._dependency_checkboxes['docker'].isChecked()
     assert wizard._dependency_checkboxes['wmctrl'].isChecked()
-    assert 'sudo apt install -y "${host_packages[@]}"' in wizard.dependency_command_edit.toPlainText()
-    assert 'SETUP_STEP_TOTAL=2' in wizard.dependency_command_edit.toPlainText()
-    assert 'Run ${step_label}? [y/N]' in wizard.dependency_command_edit.toPlainText()
-    assert 'download.docker.com' not in wizard.dependency_command_edit.toPlainText()
+    refreshed_command = wizard.dependency_command_edit.toPlainText()
+    assert refreshed_command == (
+        '# Refresh Ubuntu package information.\n'
+        'sudo apt update\n\n'
+        '# Install the selected host tools.\n'
+        'sudo apt install -y wmctrl'
+    )
+    assert 'download.docker.com' not in refreshed_command
 
     wizard.close()
     wizard.deleteLater()

@@ -176,7 +176,7 @@ class ImageSetupWizard(QWizard):
         dependency_hint = QLabel(
             'Install missing Ubuntu host packages before using Docker, window '
             'layout capture, workspace graphs, or screen recording. The GUI '
-            'only copies a terminal command; you choose what to run.'
+            'only copies short terminal commands; you choose what to run.'
         )
         dependency_hint.setWordWrap(True)
         dependency_layout.addWidget(dependency_hint)
@@ -205,7 +205,7 @@ class ImageSetupWizard(QWizard):
         self.dependency_result_label.setWordWrap(True)
         dependency_layout.addWidget(self.dependency_result_label)
         dependency_buttons = QHBoxLayout()
-        self.copy_dependency_command_button = QPushButton('Copy Command')
+        self.copy_dependency_command_button = QPushButton('Copy Commands')
         self.copy_dependency_command_button.clicked.connect(
             self._copy_dependency_command
         )
@@ -676,221 +676,62 @@ class ImageSetupWizard(QWizard):
         return '\n'.join(lines)
 
     @staticmethod
-    def _script_array(name: str, values: list[str]) -> str:
-        quoted = ' '.join(shlex.quote(value) for value in values)
-        return f'{name}=({quoted})'
-
-    @staticmethod
-    def _script_confirmation_helpers() -> list[str]:
-        return [
-            'SETUP_STEP_NUMBER=0',
-            'SETUP_STEP_TOTAL=0',
-            '',
-            'confirm_step() {',
-            '  local title="$1"',
-            '  local why="$2"',
-            '  shift 2',
-            '  SETUP_STEP_NUMBER=$((SETUP_STEP_NUMBER + 1))',
-            '  local step_label="Step ${SETUP_STEP_NUMBER}/${SETUP_STEP_TOTAL}"',
-            '  echo',
-            '  echo "==> ${step_label}: ${title}"',
-            '  echo "Why: ${why}"',
-            '  echo "Commands to run:"',
-            '  printf "  %s\\n" "$@"',
-            '  local answer',
-            '  read -r -p "Run ${step_label}? [y/N] " answer',
-            '  case "${answer}" in',
-            '    y|Y|yes|YES|Yes) ;;',
-            '    *) echo "Stopped before ${step_label}: ${title}"; exit 130 ;;',
-            '  esac',
-            '}',
-        ]
+    def _apt_install_command(packages: list[str]) -> str:
+        quoted = ' '.join(shlex.quote(package) for package in packages)
+        return f'sudo apt install -y {quoted}'
 
     @classmethod
     def _host_packages_install_command(cls, packages: list[str]) -> list[str]:
         return [
-            "bash <<'MOBIPICK_HOST_PACKAGE_INSTALL'",
-            'set -Eeuo pipefail',
-            '',
-            *cls._script_confirmation_helpers(),
-            '',
-            'SETUP_STEP_TOTAL=2',
-            cls._script_array('host_packages', packages),
-            '',
-            'confirm_step \\',
-            '  "Refresh Ubuntu package indexes" \\',
-            '  "apt needs current indexes before installing selected host tools." \\',
-            '  "sudo apt update"',
+            '# Refresh Ubuntu package information.',
             'sudo apt update',
             '',
-            'confirm_step \\',
-            '  "Install selected host tools" \\',
-            '  "These optional tools enable GUI features such as window layouts, graphs, or recording." \\',
-            '  "sudo apt install -y ${host_packages[*]}"',
-            'sudo apt install -y "${host_packages[@]}"',
-            '',
-            'echo "Selected host tool installation finished."',
-            'MOBIPICK_HOST_PACKAGE_INSTALL',
+            '# Install the selected host tools.',
+            cls._apt_install_command(packages),
         ]
 
     @classmethod
     def _docker_official_install_command(cls, support_packages: list[str]) -> list[str]:
-        return [
-            "bash <<'MOBIPICK_DOCKER_INSTALL'",
-            'set -Eeuo pipefail',
-            '',
-            'fail() { echo "ERROR: $*" >&2; exit 1; }',
-            'warn() { echo "WARNING: $*" >&2; }',
-            *cls._script_confirmation_helpers(),
-            '',
-            'if [[ ! -r /etc/os-release ]]; then',
-            '  fail "/etc/os-release is missing; cannot detect Ubuntu release."',
-            'fi',
-            '. /etc/os-release',
-            'if [[ "${ID:-}" != "ubuntu" ]]; then',
-            '  warn "This script is intended for Ubuntu; detected ${PRETTY_NAME:-unknown}."',
-            'fi',
-            'codename="${UBUNTU_CODENAME:-${VERSION_CODENAME:-}}"',
-            'if [[ -z "${codename}" ]]; then',
-            '  fail "Could not determine Ubuntu codename from /etc/os-release."',
-            'fi',
-            'arch="$(dpkg --print-architecture)"',
-            'case "${arch}" in',
-            '  amd64|arm64|armhf|s390x) ;;',
-            '  *) warn "Architecture ${arch} may not be supported by Docker packages." ;;',
-            'esac',
-            '',
-            'if command -v snap >/dev/null 2>&1 && snap list docker >/dev/null 2>&1; then',
-            '  warn "Snap Docker is installed. If apt Docker fails, remove it with: sudo snap remove docker"',
-            'fi',
-            '',
-            'docker_packages=(docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin)',
-            cls._script_array('support_packages', support_packages),
-            'SETUP_STEP_TOTAL=7',
-            'if (( ${#support_packages[@]} > 0 )); then',
-            '  SETUP_STEP_TOTAL=$((SETUP_STEP_TOTAL + 1))',
-            'fi',
-            'if [[ "$(ps -p 1 -o comm= 2>/dev/null || true)" == "systemd" ]]; then',
-            '  SETUP_MANAGE_SYSTEMD=1',
-            '  SETUP_STEP_TOTAL=$((SETUP_STEP_TOTAL + 1))',
-            'else',
-            '  SETUP_MANAGE_SYSTEMD=0',
-            'fi',
-            '',
-            'confirm_step \\',
-            '  "Install apt prerequisites" \\',
-            '  "Docker\'s official apt repository needs ca-certificates, curl, and gnupg to download and install the repository signing key." \\',
-            '  "sudo apt update" \\',
-            '  "sudo apt install -y ca-certificates curl gnupg"',
-            'sudo apt update',
-            'sudo apt install -y ca-certificates curl gnupg',
-            '',
-            'tmp_key="$(mktemp)"',
-            'trap \'rm -f "${tmp_key}"\' EXIT',
-            'confirm_step \\',
-            '  "Replace Docker apt repository key and source file" \\',
-            '  "This removes stale Docker repository files, downloads Docker\'s current GPG key, and writes the apt source for this Ubuntu release." \\',
-            '  "sudo rm -f /etc/apt/keyrings/docker.gpg /etc/apt/keyrings/docker.asc /etc/apt/sources.list.d/docker.list" \\',
-            '  "curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o ${tmp_key}" \\',
-            '  "sudo gpg --dearmor --yes -o /etc/apt/keyrings/docker.gpg ${tmp_key}" \\',
-            '  "write /etc/apt/sources.list.d/docker.list"',
-            'sudo install -m 0755 -d /etc/apt/keyrings',
-            'sudo rm -f /etc/apt/keyrings/docker.gpg /etc/apt/keyrings/docker.asc /etc/apt/sources.list.d/docker.list',
-            'curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o "${tmp_key}"',
-            'sudo gpg --dearmor --yes -o /etc/apt/keyrings/docker.gpg "${tmp_key}"',
-            'sudo chmod a+r /etc/apt/keyrings/docker.gpg',
-            '',
-            'repo_line="deb [arch=${arch} signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu ${codename} stable"',
-            'echo "${repo_line}" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null',
-            'echo "==> Docker repo file:"',
-            'cat /etc/apt/sources.list.d/docker.list',
-            '',
-            'confirm_step \\',
-            '  "Update apt indexes and verify Docker package candidates" \\',
-            '  "This proves apt can see Docker\'s repository before any Docker packages are installed." \\',
-            '  "sudo apt update" \\',
-            '  "apt-cache policy ${docker_packages[*]}"',
-            'sudo apt update',
-            '',
-            'echo "==> Checking Docker package candidates"',
-            'apt-cache policy "${docker_packages[@]}"',
-            'for package in "${docker_packages[@]}"; do',
-            '  candidate="$(apt-cache policy "${package}" | awk \'/Candidate:/ {print $2; exit}\')"',
-            '  if [[ -z "${candidate}" || "${candidate}" == "(none)" ]]; then',
-            '    fail "${package} has no apt candidate. Check the Docker repository output above."',
-            '  fi',
-            'done',
-            '',
-            'confirm_step \\',
-            '  "Install Docker Engine and Compose plugin" \\',
-            '  "This installs Docker Engine, containerd, buildx, and the Docker Compose plugin from Docker\'s official repository." \\',
-            '  "sudo apt install -y ${docker_packages[*]}"',
-            'sudo apt install -y "${docker_packages[@]}"',
-            '',
-            'if (( ${#support_packages[@]} > 0 )); then',
-            '  confirm_step \\',
-            '    "Install selected optional host tools" \\',
-            '    "These packages enable optional GUI features such as window layout replay, workspace graphs, or screen recording." \\',
-            '    "sudo apt install -y ${support_packages[*]}"',
-            '  sudo apt install -y "${support_packages[@]}"',
-            'fi',
-            '',
-            'if [[ "${SETUP_MANAGE_SYSTEMD}" == "1" ]]; then',
-            '  confirm_step \\',
-            '    "Enable and restart Docker services" \\',
-            '    "Docker needs containerd and the docker daemon running before the GUI can launch containers." \\',
-            '    "sudo systemctl daemon-reload" \\',
-            '    "sudo systemctl enable containerd || true" \\',
-            '    "sudo systemctl restart containerd" \\',
-            '    "sudo systemctl enable docker || true" \\',
-            '    "sudo systemctl restart docker"',
-            '  sudo systemctl daemon-reload',
-            '  sudo systemctl enable containerd || true',
-            '  sudo systemctl restart containerd',
-            '  sudo systemctl enable docker || true',
-            '  sudo systemctl restart docker',
-            'else',
-            '  warn "systemd is not PID 1; skipping systemctl service management."',
-            'fi',
-            '',
-            'confirm_step \\',
-            '  "Configure docker group access" \\',
-            '  "This lets the current user run Docker without sudo after group membership is refreshed; it also normalizes the Docker socket group if present." \\',
-            '  "sudo groupadd -f docker" \\',
-            '  "sudo usermod -aG docker $USER" \\',
-            '  "sudo chgrp docker /var/run/docker.sock || true" \\',
-            '  "sudo chmod 660 /var/run/docker.sock || true"',
-            'sudo groupadd -f docker',
-            'sudo usermod -aG docker "$USER"',
-            'if [[ -S /var/run/docker.sock ]]; then',
-            '  sudo chgrp docker /var/run/docker.sock || true',
-            '  sudo chmod 660 /var/run/docker.sock || true',
-            'fi',
-            '',
-            'confirm_step \\',
-            '  "Test Docker with sudo" \\',
-            '  "This checks whether the daemon and Compose plugin work independently of current-user group membership." \\',
-            '  "sudo docker images" \\',
-            '  "sudo docker compose version"',
-            'sudo docker images',
-            'sudo docker compose version',
-            '',
-            'confirm_step \\',
-            '  "Test Docker as current user" \\',
-            '  "This checks whether the current shell can access Docker without sudo; if it fails, a logout/login or newgrp docker is usually needed." \\',
-            '  "docker images" \\',
-            '  "docker compose version"',
-            'if docker images >/dev/null 2>&1; then',
-            '  docker images',
-            'else',
-            '  warn "Plain docker still cannot access the daemon in this shell."',
-            '  warn "Log out and back in, or run: newgrp docker"',
-            'fi',
-            'docker compose version',
-            '',
-            'echo "Docker installation checks finished."',
-            'MOBIPICK_DOCKER_INSTALL',
+        docker_packages = [
+            'docker-ce',
+            'docker-ce-cli',
+            'containerd.io',
+            'docker-buildx-plugin',
+            'docker-compose-plugin',
         ]
+        lines = [
+            '# Install the tools needed to add Docker\'s package repository.',
+            'sudo apt update',
+            'sudo apt install -y ca-certificates curl',
+            '',
+            '# Add Docker\'s official signing key and Ubuntu repository.',
+            'sudo install -m 0755 -d /etc/apt/keyrings',
+            'sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg '
+            '-o /etc/apt/keyrings/docker.asc',
+            'sudo chmod a+r /etc/apt/keyrings/docker.asc',
+            'echo "deb [arch=$(dpkg --print-architecture) '
+            'signed-by=/etc/apt/keyrings/docker.asc] '
+            'https://download.docker.com/linux/ubuntu '
+            '$(. /etc/os-release && echo '
+            '\"${UBUNTU_CODENAME:-$VERSION_CODENAME}\") stable" | '
+            'sudo tee /etc/apt/sources.list.d/docker.list > /dev/null',
+            '',
+            '# Install Docker Engine and the Docker Compose plugin.',
+            'sudo apt update',
+            cls._apt_install_command(docker_packages),
+        ]
+        if support_packages:
+            lines.extend([
+                '',
+                '# Install the other selected host tools.',
+                cls._apt_install_command(support_packages),
+            ])
+        lines.extend([
+            '',
+            '# Let your user run Docker. Log out and back in afterwards.',
+            'sudo usermod -aG docker "$USER"',
+        ])
+        return lines
 
     @staticmethod
     def _dependency_status_text(dep: HostDependency) -> str:
