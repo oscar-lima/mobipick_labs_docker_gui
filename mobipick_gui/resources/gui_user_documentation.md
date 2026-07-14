@@ -38,6 +38,8 @@ workspaces.
 ## Configure Workspaces
 
 The workspace manager is used to prepare ROS 1 workspaces for the GUI.
+It opens as an independent, non-modal window, so it can be minimized without
+minimizing the main GUI and does not block access to the main log tabs.
 
 - **Choose Master Folder** selects the folder that contains your workspace
   folders.

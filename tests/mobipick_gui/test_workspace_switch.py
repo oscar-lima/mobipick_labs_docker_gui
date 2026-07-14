@@ -1,13 +1,37 @@
 import copy
 import os
+from unittest.mock import MagicMock
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
 from PyQt5.QtWidgets import QApplication, QMessageBox
 
 from mobipick_gui.config import CONFIG
+import mobipick_gui.main_window as main_window_module
 from mobipick_gui.main_window import MainWindow
 from mobipick_gui.workspaces import RosWorkspace, WorkspaceRegistry
+
+
+def test_workspace_manager_opens_detached_from_main_window(monkeypatch):
+    dialog_class = MagicMock()
+    dialog = dialog_class.return_value
+    window = MagicMock()
+    window._workspace_dialog = None
+    window._workspace_registry = MagicMock()
+    window._image_choices = []
+    window._selected_image = 'example/image:tag'
+    window._image_workdir.return_value = '/root/ros_ws'
+    monkeypatch.setattr(
+        main_window_module,
+        'WorkspaceManagerDialog',
+        dialog_class,
+    )
+
+    MainWindow._open_workspace_manager(window)
+
+    assert dialog_class.call_args.args[1] is None
+    assert window._workspace_dialog is dialog
+    dialog.show.assert_called_once_with()
 
 
 def test_workspace_switch_requires_confirmation_and_rebuilds_tabs(

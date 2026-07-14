@@ -328,6 +328,10 @@ takes precedence.
 - exporting/importing portable GUI settings;
 - rendering the workspace graph.
 
+The main window keeps the workspace manager alive as an independent non-modal
+top-level window, allowing it and the main log window to be minimized or used
+separately.
+
 Builds use `catkin build` inside the selected development image. Public root
 images are configured as image-default only and do not mount host workspaces.
 

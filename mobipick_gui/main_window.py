@@ -3996,7 +3996,10 @@ class MainWindow(QMainWindow):
             return
         dialog = WorkspaceManagerDialog(
             self._workspace_registry,
-            self,
+            # Keep this as an independent top-level window. Giving the dialog
+            # a parent makes many window managers keep it above, or minimize
+            # it together with, the main log window.
+            None,
             replace_allowed=lambda: not self._workspace_processes_running(),
             image_choices=self._image_choices,
             image_workspace_path=self._image_workdir(self._selected_image),

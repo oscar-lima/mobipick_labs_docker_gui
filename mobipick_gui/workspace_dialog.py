@@ -70,6 +70,7 @@ class WorkspaceManagerDialog(QDialog):
         self._loading_editor = False
         self._editor_snapshot: dict[str, str] | None = None
         self.setWindowTitle('ROS 1 Workspace Manager')
+        self.setWindowModality(Qt.NonModal)
         self.resize(1000, 650)
 
         root = QVBoxLayout(self)

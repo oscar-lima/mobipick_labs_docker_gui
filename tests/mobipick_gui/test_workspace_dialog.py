@@ -59,6 +59,28 @@ def test_workspace_dialog_path_column_stretches_with_window(tmp_path):
     app.processEvents()
 
 
+def test_workspace_dialog_is_non_modal(tmp_path):
+    app, dialog, _registry = _dialog_with_workspace(tmp_path)
+
+    assert dialog.windowModality() == Qt.NonModal
+
+    dialog.deleteLater()
+    app.processEvents()
+
+
+def test_workspace_dialog_can_be_a_detached_top_level_window(tmp_path):
+    app = QApplication.instance() or QApplication([])
+    registry = WorkspaceRegistry(tmp_path / 'workspaces.yaml')
+    dialog = WorkspaceManagerDialog(registry, None)
+
+    assert dialog.parentWidget() is None
+    assert dialog.isWindow()
+    assert dialog.windowFlags() & Qt.WindowMinimizeButtonHint
+
+    dialog.deleteLater()
+    app.processEvents()
+
+
 def test_workspace_dialog_selects_active_workspace_on_open(tmp_path):
     app = QApplication.instance() or QApplication([])
     registry = WorkspaceRegistry(tmp_path / 'workspaces.yaml')
