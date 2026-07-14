@@ -585,6 +585,49 @@ def test_wizard_start_setup_shows_progress_then_summary(tmp_path):
     app.processEvents()
 
 
+def test_wizard_simulation_visibility_failure_packages_output(tmp_path):
+    app = QApplication.instance() or QApplication([])
+    started = []
+    stopped = []
+    reports = []
+    wizard = ImageSetupWizard(
+        public_images=['ozkrelo/x_mobipick_labs:noetic-v1.2'],
+        default_image='ozkrelo/x_mobipick_labs:noetic-v1.2',
+        host_user='testuser',
+        host_uid='1001',
+        host_gid='1001',
+        base_image='ozkrelo/x_mobipick_labs:noetic-v1.2',
+        target_image='ozkrelo/x_mobipick_labs:host_user_from_1.2',
+        workspace_names=[],
+        source_master_folder=str(tmp_path / 'master'),
+        simulation_test_start_handler=lambda: started.append(True) or True,
+        simulation_test_stop_handler=lambda: stopped.append(True),
+        simulation_test_report_handler=reports.append,
+    )
+
+    wizard.run_simulation_test_button.click()
+    wizard.simulation_test_output.enqueue(
+        False,
+        'Gazebo transport error: cannot open display :1\n',
+    )
+    wizard.simulation_test_output._flush()
+
+    assert started == [True]
+    assert not wizard.run_simulation_test_button.isEnabled()
+    assert wizard.simulation_not_visible_button.isEnabled()
+
+    wizard.simulation_not_visible_button.click()
+
+    assert stopped == [True]
+    assert len(reports) == 1
+    assert 'User result: no Gazebo simulation window was visible' in reports[0]
+    assert 'Gazebo transport error: cannot open display :1' in reports[0]
+    assert 'still running or stopped by the user' in reports[0]
+
+    wizard.deleteLater()
+    app.processEvents()
+
+
 def test_setup_wizard_progress_labels_selected_step_count(tmp_path, monkeypatch):
     app = QApplication.instance() or QApplication([])
     wizard = ImageSetupWizard(

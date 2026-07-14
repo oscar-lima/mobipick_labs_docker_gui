@@ -367,6 +367,11 @@ pull public images on the host PC with streamed output, pause for a manual pull
 confirmation, choose a default image, build a host-user development image, and
 clone/build `DFKI-NI/mobipick_labs` from source in a host-mounted workspace.
 Each optional wizard page has a skip button.
+The summary page can launch the configured Docker Compose simulation as a
+display smoke test and capture its combined terminal output. If Gazebo is not
+visible, **I Cannot See the Simulation** stops the test and opens a
+privacy-scrubbed bug report with the output and relevant host, GPU, image,
+workspace, and GUI diagnostics selected for a GitHub issue.
 It does not enable `docker cp` paths by default; configure any copy rules later
 from **Tools > Docker > Configure Docker cp Paths**.
 The custom image builder writes a Docker build context under the per-user data

@@ -106,6 +106,9 @@ class ImageSetupWizard(QWizard):
         host_dependencies: Iterable[HostDependency] = (),
         host_dependency_refresher: Callable[[], Iterable[HostDependency]] | None = None,
         host_dependency_report_handler: Callable[[str], None] | None = None,
+        simulation_test_start_handler: Callable[[], bool] | None = None,
+        simulation_test_stop_handler: Callable[[], None] | None = None,
+        simulation_test_report_handler: Callable[[str], None] | None = None,
         parent=None,
     ):
         super().__init__(parent)
@@ -122,12 +125,18 @@ class ImageSetupWizard(QWizard):
         self._host_dependencies: list[HostDependency] = list(host_dependencies)
         self._host_dependency_refresher = host_dependency_refresher
         self._host_dependency_report_handler = host_dependency_report_handler
+        self._simulation_test_start_handler = simulation_test_start_handler
+        self._simulation_test_stop_handler = simulation_test_stop_handler
+        self._simulation_test_report_handler = simulation_test_report_handler
         self._dependency_checkboxes: dict[str, QCheckBox] = {}
         self._dependency_status_labels: dict[str, QLabel] = {}
         self._last_dependency_report = ''
         self._dependency_details_dialog: QDialog | None = None
         self._setup_options_dialog: QDialog | None = None
         self._gpu_test_process: QProcess | None = None
+        self._simulation_test_running = False
+        self._simulation_test_answered = False
+        self._simulation_test_exit_code: int | None = None
 
         self.pull_public_images = QCheckBox('Pull public Mobipick images')
         self.pull_public_images.setChecked(True)
@@ -449,6 +458,45 @@ class ImageSetupWizard(QWizard):
         self.summary_edit.setReadOnly(True)
         self.summary_edit.setMinimumHeight(260)
         summary_layout.addWidget(self.summary_edit)
+        simulation_test_hint = QLabel(
+            'Test the complete Docker display path. A Gazebo simulation should '
+            'open in a separate window; its terminal output is captured below.'
+        )
+        simulation_test_hint.setWordWrap(True)
+        summary_layout.addWidget(simulation_test_hint)
+        simulation_test_buttons = QHBoxLayout()
+        self.run_simulation_test_button = QPushButton('Test Simulation')
+        self.run_simulation_test_button.clicked.connect(
+            self._run_simulation_test
+        )
+        self.run_simulation_test_button.setEnabled(
+            self._simulation_test_start_handler is not None
+        )
+        simulation_test_buttons.addWidget(self.run_simulation_test_button)
+        self.simulation_visible_button = QPushButton(
+            'I Can See the Simulation'
+        )
+        self.simulation_visible_button.clicked.connect(
+            self._confirm_simulation_visible
+        )
+        self.simulation_visible_button.setEnabled(False)
+        simulation_test_buttons.addWidget(self.simulation_visible_button)
+        self.simulation_not_visible_button = QPushButton(
+            'I Cannot See the Simulation'
+        )
+        self.simulation_not_visible_button.clicked.connect(
+            self._report_simulation_not_visible
+        )
+        self.simulation_not_visible_button.setEnabled(False)
+        simulation_test_buttons.addWidget(self.simulation_not_visible_button)
+        simulation_test_buttons.addStretch(1)
+        summary_layout.addLayout(simulation_test_buttons)
+        self.simulation_test_result = QLabel('Simulation test not run yet.')
+        self.simulation_test_result.setWordWrap(True)
+        summary_layout.addWidget(self.simulation_test_result)
+        self.simulation_test_output = LogTextEdit()
+        self.simulation_test_output.setMinimumHeight(180)
+        summary_layout.addWidget(self.simulation_test_output)
         summary_page.setFinalPage(True)
         self._summary_page_id = self.addPage(summary_page)
         self._setup_page_titles = [
@@ -466,6 +514,101 @@ class ImageSetupWizard(QWizard):
 
         self.currentIdChanged.connect(self._update_navigation_buttons)
         self._update_navigation_buttons(self.currentId())
+
+    def _run_simulation_test(self) -> None:
+        """Start the final Docker simulation visibility test."""
+        if self._simulation_test_running:
+            return
+        self.simulation_test_output.clear()
+        self._simulation_test_answered = False
+        self._simulation_test_exit_code = None
+        self.simulation_test_result.setText(
+            'Starting the simulation. Wait for the Gazebo window to appear...'
+        )
+        self._simulation_test_running = True
+        if (
+            self._simulation_test_start_handler is None
+            or not self._simulation_test_start_handler()
+        ):
+            self._simulation_test_running = False
+            self.simulation_test_result.setText(
+                'The simulation test could not be started.'
+            )
+            return
+        self.run_simulation_test_button.setEnabled(
+            not self._simulation_test_running
+        )
+        self.simulation_visible_button.setEnabled(True)
+        self.simulation_not_visible_button.setEnabled(True)
+
+    def simulation_test_finished(self, exit_code: int) -> None:
+        """Update final-page controls when the test process exits."""
+        self._simulation_test_running = False
+        self._simulation_test_exit_code = exit_code
+        if self._simulation_test_answered:
+            return
+        self.run_simulation_test_button.setEnabled(
+            self._simulation_test_start_handler is not None
+        )
+        self.simulation_visible_button.setEnabled(True)
+        self.simulation_not_visible_button.setEnabled(True)
+        if exit_code == 0:
+            self.simulation_test_result.setText(
+                'The simulation command exited successfully. Confirm whether '
+                'you saw the Gazebo window.'
+            )
+        else:
+            self.simulation_test_result.setText(
+                f'The simulation command exited with code {exit_code}. You can '
+                'package its output in a bug report.'
+            )
+
+    def _stop_simulation_test(self) -> None:
+        if self._simulation_test_stop_handler is not None:
+            self._simulation_test_stop_handler()
+        self._simulation_test_running = False
+        self.run_simulation_test_button.setEnabled(
+            self._simulation_test_start_handler is not None
+        )
+
+    def _confirm_simulation_visible(self) -> None:
+        self._simulation_test_answered = True
+        self._stop_simulation_test()
+        self.simulation_test_result.setText(
+            'PASSED: the Docker simulation window was visible.'
+        )
+        self.simulation_visible_button.setEnabled(False)
+        self.simulation_not_visible_button.setEnabled(False)
+
+    def _report_simulation_not_visible(self) -> None:
+        self._simulation_test_answered = True
+        self._stop_simulation_test()
+        self.simulation_test_result.setText(
+            'FAILED: no simulation window was visible. Preparing a bug report '
+            'with the captured terminal output.'
+        )
+        self.simulation_visible_button.setEnabled(False)
+        self.simulation_not_visible_button.setEnabled(False)
+        if self._simulation_test_report_handler is not None:
+            self._simulation_test_report_handler(
+                self.simulation_test_diagnostics()
+            )
+
+    def simulation_test_diagnostics(self) -> str:
+        """Return the captured visibility-test evidence for a bug report."""
+        if self._simulation_test_exit_code is None:
+            exit_result = 'still running or stopped by the user'
+        else:
+            exit_result = str(self._simulation_test_exit_code)
+        output = self.simulation_test_output.toPlainText().strip()
+        return '\n'.join([
+            'Docker simulation visibility test',
+            'User result: no Gazebo simulation window was visible',
+            f'Process exit code: {exit_result}',
+            '',
+            'Captured terminal output:',
+            output or '(No terminal output was captured.)',
+        ])
 
     def _copy_nvidia_url(self) -> None:
         QApplication.clipboard().setText(self.NVIDIA_TOOLKIT_URL)

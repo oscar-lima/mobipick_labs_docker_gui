@@ -4480,6 +4480,13 @@ class MainWindow(QMainWindow):
             host_dependency_report_handler=(
                 self._open_setup_dependency_report
             ),
+            simulation_test_start_handler=lambda: (
+                self._start_setup_simulation_test(wizard)
+            ),
+            simulation_test_stop_handler=self._stop_setup_simulation_test,
+            simulation_test_report_handler=(
+                self._open_setup_simulation_report
+            ),
             parent=self,
         )
         wizard.set_setup_start_handler(
@@ -4515,6 +4522,102 @@ class MainWindow(QMainWindow):
         dialog.finished.connect(self._on_bug_report_dialog_closed)
         self._bug_report_dialog = dialog
         dialog.show()
+
+    def _open_setup_simulation_report(self, setup_diagnostics: str) -> None:
+        """Open a prefilled report for a failed final visibility test."""
+        def _context() -> dict:
+            context = self._build_bug_report_context()
+            context['setup_diagnostics'] = setup_diagnostics
+            return context
+
+        if self._bug_report_dialog:
+            self._bug_report_dialog.close()
+        dialog = BugReportDialog(
+            _context,
+            self,
+            initial_notes=(
+                'The setup wizard simulation test ran, but no Gazebo window '
+                'was visible.'
+            ),
+            initial_checked_keys={
+                'ubuntu_version',
+                'nvidia_smi',
+                'gui_version',
+                'docker_images',
+                'selected_workspace',
+                'selected_image_match',
+                'setup_diagnostics',
+                'log_tab',
+                'user_notes',
+            },
+        )
+        dialog.finished.connect(self._on_bug_report_dialog_closed)
+        self._bug_report_dialog = dialog
+        dialog.show()
+
+    def _start_setup_simulation_test(self, wizard: ImageSetupWizard) -> bool:
+        """Launch the configured simulation and stream output to the wizard."""
+        if any(
+            tab.key == 'setup-wizard-simulation-test' and tab.is_running()
+            for tab in self._setup_wizard_process_tabs
+        ):
+            return False
+        tab = ProcessTab(
+            'setup-wizard-simulation-test',
+            'Simulation Test',
+            self,
+            closable=False,
+            output=wizard.simulation_test_output,
+            notify_parent_finished=False,
+        )
+        self._setup_wizard_process_tabs.append(tab)
+        exec_id = uuid.uuid4().hex
+        tab.exec_id = exec_id
+        tab.container_name = f'mobipick-setup-test-{exec_id[:10]}'
+        selected_image = wizard.selection().default_image
+        test_overrides = {'ROS_MASTER_URI': 'http://mobipick:11311'}
+        if selected_image:
+            test_overrides['MOBIPICK_IMAGE'] = selected_image
+            tab.environment_overrides['MOBIPICK_IMAGE'] = selected_image
+        self._ensure_network(log_key='log')
+        self._claim_xhost(tab, 'setup-wizard-simulation-test', log_key='log')
+        args = [
+            'compose', 'run', '--rm', '--name', tab.container_name,
+            '--label', f'mobipick.exec={exec_id}',
+            '--label', 'mobipick.tab=setup-wizard-simulation-test',
+            *self._compose_env_args(
+                test_overrides,
+                container_name=tab.container_name,
+            ),
+            'mobipick', 'bash', '-lc',
+            self._wrap_line_buffered(self._workspace_sim_command()),
+        ]
+
+        def finished(code: int, _status) -> None:
+            self._release_xhost(tab, log_key='log')
+            wizard.simulation_test_finished(code)
+
+        tab.proc.finished.connect(finished)
+        tab.start_program('docker', args)
+        if not tab.proc.waitForStarted(1000):
+            self._release_xhost(tab, log_key='log')
+            return False
+        return True
+
+    def _stop_setup_simulation_test(self) -> None:
+        """Stop any simulation visibility test started by the wizard."""
+        for tab in self._setup_wizard_process_tabs:
+            if tab.key != 'setup-wizard-simulation-test':
+                continue
+            if tab.is_running():
+                tab.proc.terminate()
+                commands = self._docker_stop_if_exists(
+                    tab.container_name,
+                    exec_id=tab.exec_id,
+                )
+                if commands:
+                    self._run_command_sequence(commands, log_key='log')
+            self._release_xhost(tab, log_key='log')
 
     def _default_source_master_folder(self) -> str:
         if self._workspace_registry.master_folder:
