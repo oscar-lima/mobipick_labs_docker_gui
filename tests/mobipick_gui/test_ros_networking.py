@@ -48,6 +48,22 @@ def test_terminal_rc_restores_ros_shell_functions():
     assert 'mobipick_pin_catkin_build_workspace' in terminal_rc
 
 
+def test_terminal_rc_enables_colored_ls_before_user_aliases():
+    terminal_rc = (
+        Path(__file__).parents[2]
+        / 'mobipick_gui'
+        / 'resources'
+        / 'scripts'
+        / 'terminal.bashrc'
+    ).read_text(encoding='utf-8')
+
+    dircolors_index = terminal_rc.index('command -v dircolors')
+    color_alias_index = terminal_rc.index("alias ls='ls --color=auto'")
+    user_aliases_index = terminal_rc.index('source "${HOME}/.bash_aliases"')
+
+    assert dircolors_index < color_alias_index < user_aliases_index
+
+
 def test_terminal_rc_loads_image_helpers_but_skips_ros1(tmp_path):
     scripts = tmp_path / 'scripts'
     personal_config = scripts / 'personal_config'

@@ -4,6 +4,15 @@ if [ -r /etc/bash.bashrc ]; then
     source /etc/bash.bashrc
 fi
 
+if command -v dircolors >/dev/null 2>&1; then
+    if [ -r "${HOME}/.dircolors" ]; then
+        eval "$(dircolors -b "${HOME}/.dircolors")"
+    else
+        eval "$(dircolors -b)"
+    fi
+    alias ls='ls --color=auto'
+fi
+
 if [ -r "${HOME}/.bash_aliases" ]; then
     # shellcheck disable=SC1090
     source "${HOME}/.bash_aliases"
