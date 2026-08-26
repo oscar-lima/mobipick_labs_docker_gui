@@ -75,6 +75,30 @@ def test_auto_launch_stop_waits_for_roscore_shutdown_to_finalize():
     assert harness._auto_launch_active_keys == []
 
 
+def test_roscore_auto_launch_stop_preserves_host_commands():
+    harness, events = _auto_launch_harness()
+    harness._auto_launch_active_keys = ['litellm', 'sim', 'roscore']
+    harness._auto_launch_shutdown_order = lambda: [
+        'litellm',
+        'sim',
+        'roscore',
+    ]
+    harness._config_buttons = {
+        'litellm': {'kind': 'command', 'host': True},
+        'sim': {'kind': 'builtin', 'host': False},
+    }
+    harness._config_runs_on_host = MainWindow._config_runs_on_host
+    harness._trigger_auto_launch_step = lambda key, *, target_running: (
+        events.append(('trigger', key, target_running))
+    )
+
+    harness._stop_auto_launch_stack(preserve_host_commands=True)
+
+    assert ('trigger', 'litellm', False) not in events
+    assert ('trigger', 'sim', False) in events
+    assert ('trigger', 'roscore', False) in events
+
+
 def test_record_auto_launch_uncheck_stops_active_recording():
     events = []
     harness = SimpleNamespace(
@@ -246,6 +270,44 @@ def test_reset_config_button_visuals_restores_idle_labels():
     ]
 
 
+def test_reset_config_button_visuals_preserves_running_host_command():
+    events = []
+    harness = SimpleNamespace(
+        _config_button_order=['litellm', 'demo'],
+        _config_buttons={
+            'litellm': {
+                'key': 'litellm',
+                'label': 'LiteLLM',
+                'kind': 'command',
+                'host': True,
+            },
+            'demo': {'key': 'demo', 'label': 'Demo'},
+        },
+        tasks={
+            'litellm': SimpleNamespace(is_running=lambda: True),
+            'demo': SimpleNamespace(is_running=lambda: False),
+        },
+        _set_config_visual=lambda cfg, state, text, enabled: events.append(
+            (cfg.get('key'), state, text, enabled)
+        ),
+    )
+    harness._config_label = MethodType(MainWindow._config_label, harness)
+    harness._config_runs_on_host = MainWindow._config_runs_on_host
+    harness._reset_config_button_visuals = MethodType(
+        MainWindow._reset_config_button_visuals,
+        harness,
+    )
+
+    harness._reset_config_button_visuals(
+        preserve_running_host_commands=True,
+    )
+
+    assert events == [
+        ('litellm', 'green', 'Stop LiteLLM', True),
+        ('demo', 'red', 'Start Demo', True),
+    ]
+
+
 def test_roscore_shutdown_finalizer_resets_config_buttons(monkeypatch):
     events = []
 
@@ -284,6 +346,7 @@ def test_roscore_shutdown_finalizer_resets_config_buttons(monkeypatch):
         _cleanup_done=False,
         _config_button_order=['demo'],
         _config_buttons={'demo': {'key': 'demo', 'label': 'Demo'}},
+        _config_runs_on_host=MainWindow._config_runs_on_host,
         _timers_cfg={'custom_tab_sigint_delay_ms': 0},
         tasks={
             'roscore': roscore_tab,
@@ -292,7 +355,9 @@ def test_roscore_shutdown_finalizer_resets_config_buttons(monkeypatch):
             'rviz': SimpleNamespace(is_running=lambda: False),
             'rqt': SimpleNamespace(is_running=lambda: False),
         },
-        _stop_auto_launch_stack=lambda: events.append('stop_auto_launch'),
+        _stop_auto_launch_stack=lambda **kwargs: events.append(
+            ('stop_auto_launch', kwargs)
+        ),
         _log_info=lambda message: events.append(('log', message)),
         set_roscore_visual=_record_visual('roscore'),
         _disable_toggle_preserving_visual=lambda key, button: events.append(
@@ -312,7 +377,9 @@ def test_roscore_shutdown_finalizer_resets_config_buttons(monkeypatch):
         set_tables_visual=_record_visual('tables'),
         set_rviz_visual=_record_visual('rviz'),
         set_rqt_visual=_record_visual('rqt'),
-        _reset_config_button_visuals=lambda: events.append('reset_config_buttons'),
+        _reset_config_button_visuals=lambda **kwargs: events.append(
+            ('reset_config_buttons', kwargs)
+        ),
         set_script_visual=_record_visual('script'),
         set_terminal_visual=_record_visual('terminal'),
         _update_stop_custom_enabled=lambda: events.append('update_stop_custom'),
@@ -327,8 +394,12 @@ def test_roscore_shutdown_finalizer_resets_config_buttons(monkeypatch):
 
     harness.shutdown_roscore()
 
-    assert 'reset_config_buttons' in events
-    assert events.index('reset_config_buttons') > events.index(
+    reset_event = (
+        'reset_config_buttons',
+        {'preserve_running_host_commands': True},
+    )
+    assert reset_event in events
+    assert events.index(reset_event) > events.index(
         ('rqt', 'red', 'Start RQt Tables', True)
     )
     assert harness._roscore_stopping is False

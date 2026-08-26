@@ -424,7 +424,8 @@ the GUI editor.
 
 Check **Host** in the editor to run a command directly on the host and save
 `host: true` in the button profile. Unchecked commands continue to run in the
-configured Mobipick Docker service.
+configured Mobipick Docker service. Stopping Roscore shuts down the dependent
+Docker stack but leaves running host commands alive.
 
 Command entries can declare:
 

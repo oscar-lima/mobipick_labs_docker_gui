@@ -5768,6 +5768,11 @@ CMD ["bash"]
     def _config_label(self, config: dict) -> str:
         return str(config.get('label') or config.get('key') or 'Command')
 
+    @staticmethod
+    def _config_runs_on_host(config: dict) -> bool:
+        kind = str(config.get('kind') or 'builtin').lower()
+        return kind == 'command' and bool(config.get('host'))
+
     def _set_config_visual(self, config: dict, state: str, text: str, enabled: bool):
         key = str(config.get('key'))
         if key == 'sim':
@@ -5775,10 +5780,27 @@ CMD ["bash"]
             return
         self._set_toggle_state(key, self._get_button_widget(key), state, text, enabled)
 
-    def _reset_config_button_visuals(self):
+    def _reset_config_button_visuals(
+        self,
+        *,
+        preserve_running_host_commands: bool = False,
+    ):
         for key in self._config_button_order:
             config = self._config_buttons.get(key, {})
             label = self._config_label(config)
+            if (
+                preserve_running_host_commands
+                and self._config_runs_on_host(config)
+                and (tab := self.tasks.get(key)) is not None
+                and tab.is_running()
+            ):
+                self._set_config_visual(
+                    config,
+                    'green',
+                    f'Stop {label}',
+                    True,
+                )
+                continue
             self._set_config_visual(config, 'red', f'Start {label}', True)
 
     @staticmethod
@@ -8261,13 +8283,25 @@ CMD ["bash"]
         self.set_auto_launch_visual('red', self._auto_launch_start_text(), True)
         self._log_info(f'saved auto launch configuration to {saved_path}')
 
-    def _stop_auto_launch_stack(self):
+    def _stop_auto_launch_stack(
+        self,
+        *,
+        preserve_host_commands: bool = False,
+    ):
         if self._auto_launch_stopping:
             return
         self._auto_launch_stopping = True
         self._cancel_auto_launch_timers()
         self._cancel_recording_schedule()
         order = self._auto_launch_shutdown_order()
+        if preserve_host_commands:
+            order = [
+                key
+                for key in order
+                if not self._config_runs_on_host(
+                    self._config_buttons.get(key, {})
+                )
+            ]
         self._auto_launch_running = False
         if order:
             self.set_auto_launch_visual('yellow', 'Stopping Auto Launch...', False)
@@ -9016,7 +9050,7 @@ CMD ["bash"]
         if self._roscore_stopping:
             return
         self._roscore_stopping = True
-        self._stop_auto_launch_stack()
+        self._stop_auto_launch_stack(preserve_host_commands=True)
         self._log_info('stopping roscore master')
         self.set_roscore_visual('yellow', 'Shutting down...', enabled=False)
 
@@ -9060,6 +9094,8 @@ CMD ["bash"]
 
         for cfg_key in self._config_button_order:
             cfg = self._config_buttons.get(cfg_key, {})
+            if self._config_runs_on_host(cfg):
+                continue
             tab_obj = self.tasks.get(cfg_key)
             running = bool(tab_obj and tab_obj.is_running())
             button = self._get_button_widget(cfg_key)
@@ -9110,7 +9146,9 @@ CMD ["bash"]
                 self.set_tables_visual('red', 'Run Tables Demo', True)
                 self.set_rviz_visual('red', 'Start RViz', True)
                 self.set_rqt_visual('red', 'Start RQt Tables', True)
-                self._reset_config_button_visuals()
+                self._reset_config_button_visuals(
+                    preserve_running_host_commands=True,
+                )
                 self._script_active_tab_key = None
                 self.set_script_visual('red', 'Run Script', bool(self._script_choices))
                 self._terminal_stopping = False
