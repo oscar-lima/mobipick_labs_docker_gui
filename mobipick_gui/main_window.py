@@ -154,12 +154,13 @@ def _about_details_html() -> str:
 class ButtonProfileTable(QTableWidget):
     """Toolbar button editor table with priority-based column sizing."""
 
-    FIELD_ORDER = ['key', 'label', 'command', 'service', 'tooltip']
+    FIELD_ORDER = ['key', 'label', 'command', 'service', 'host', 'tooltip']
     MIN_WIDTHS = {
         'key': 96,
         'label': 132,
         'command': 280,
         'service': 112,
+        'host': 64,
         'tooltip': 72,
     }
     MAX_DESIRED_WIDTHS = {
@@ -167,6 +168,7 @@ class ButtonProfileTable(QTableWidget):
         'label': 280,
         'command': 760,
         'service': 180,
+        'host': 80,
         'tooltip': 240,
     }
     EXPAND_WEIGHTS = {
@@ -174,6 +176,7 @@ class ButtonProfileTable(QTableWidget):
         'label': 2,
         'command': 7,
         'service': 1,
+        'host': 0,
         'tooltip': 0,
     }
 
@@ -532,9 +535,10 @@ class ButtonProfileDialog(QDialog):
         ('label', 'Label'),
         ('command', 'Command'),
         ('service', 'Service'),
+        ('host', 'Host'),
         ('tooltip', 'Tooltip'),
     ]
-    BOOL_FIELDS: set[str] = set()
+    BOOL_FIELDS: set[str] = {'host'}
     REQUIRED_KEYS = {'sim', 'rviz'}
     RESERVED_KEYS = {'roscore', 'terminal'}
     KEY_RE = re.compile(r'^[A-Za-z0-9_.-]+$')

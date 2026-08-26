@@ -3,6 +3,7 @@ from pathlib import Path
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
+from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QApplication, QDialog, QHeaderView, QSizePolicy
 
 from mobipick_gui.config import (
@@ -81,6 +82,41 @@ def test_button_profile_dialog_saves_command_service(tmp_path):
     save_button_layout(target, dialog.button_layout())
 
     assert 'service: mobipick' in target.read_text(encoding='utf-8')
+
+    dialog.deleteLater()
+    app.processEvents()
+
+
+def test_button_profile_dialog_saves_host_checkbox(tmp_path):
+    app = QApplication.instance() or QApplication([])
+    target = tmp_path / 'target.yaml'
+    dialog = ButtonProfileDialog(
+        [
+            {
+                'key': 'litellm',
+                'label': 'LiteLLM',
+                'kind': 'command',
+                'command': 'docker run --rm litellm',
+                'host': False,
+            },
+        ],
+        Path(tmp_path / 'source.yaml'),
+        target,
+    )
+
+    host_column = next(
+        index
+        for index, (field, _label) in enumerate(dialog.COLUMNS)
+        if field == 'host'
+    )
+    host_item = dialog.table.item(0, host_column)
+    assert host_item.flags() & Qt.ItemIsUserCheckable
+    assert host_item.checkState() == Qt.Unchecked
+
+    host_item.setCheckState(Qt.Checked)
+    save_button_layout(target, dialog.button_layout())
+
+    assert 'host: true' in target.read_text(encoding='utf-8')
 
     dialog.deleteLater()
     app.processEvents()
