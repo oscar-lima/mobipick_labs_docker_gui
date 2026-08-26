@@ -5921,7 +5921,7 @@ CMD ["bash"]
             self._set_config_visual(config, 'green', f'Stop {label}', True)
 
         self._set_config_visual(config, 'yellow', f'Starting {label}...', False)
-        if config.get('requires_roscore', True):
+        if not run_on_host and config.get('requires_roscore', True):
             self._ensure_roscore_ready(_run_command)
         else:
             _run_command()

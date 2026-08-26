@@ -308,6 +308,60 @@ def test_reset_config_button_visuals_preserves_running_host_command():
     ]
 
 
+def test_host_config_command_does_not_start_roscore():
+    events = []
+
+    class FakeTab:
+        container_name = 'old-container'
+        exec_id = 'old-exec'
+
+        def is_running(self):
+            return False
+
+        def start_program(self, program, args):
+            events.append(('start_program', program, args))
+
+    harness = SimpleNamespace(
+        _get_button_widget=lambda key: f'{key}-button',
+        _guard_toggle_action=lambda key, button: True,
+        _ensure_tab=lambda key, label, closable=False: FakeTab(),
+        _current_master_uri=lambda: '',
+        _log_info=lambda message: events.append(('log', message)),
+        _neutralize_compose_ignore=MainWindow._neutralize_compose_ignore,
+        _focus_tab=lambda key: events.append(('focus', key)),
+        _update_stop_custom_enabled=lambda: events.append('update_stop_custom'),
+        _set_config_visual=lambda cfg, state, text, enabled: events.append(
+            ('visual', state, text, enabled)
+        ),
+        _ensure_roscore_ready=lambda callback: events.append(
+            'ensure_roscore_ready'
+        ),
+    )
+    harness._config_label = MethodType(MainWindow._config_label, harness)
+    harness._run_config_command = MethodType(
+        MainWindow._run_config_command,
+        harness,
+    )
+
+    harness._run_config_command(
+        {
+            'key': 'litellm',
+            'label': 'LiteLLM',
+            'kind': 'command',
+            'command': 'docker run --rm litellm',
+            'host': True,
+            'requires_roscore': True,
+        }
+    )
+
+    assert 'ensure_roscore_ready' not in events
+    assert any(
+        event[:2] == ('start_program', 'bash')
+        for event in events
+        if isinstance(event, tuple)
+    )
+
+
 def test_roscore_shutdown_finalizer_resets_config_buttons(monkeypatch):
     events = []
 

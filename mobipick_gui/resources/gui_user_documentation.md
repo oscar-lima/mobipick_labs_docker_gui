@@ -304,6 +304,7 @@ The tab search is separate from the documentation window search.
   labels, commands, compose services, host execution, and tooltips. Check
   **Host** to run that button's command directly on the host instead of inside
   a Mobipick Docker container; saving writes this choice to the button profile.
+  Host commands do not check or automatically start Roscore.
   **Stop Roscore** leaves running Host commands alive; stop them with their own
   toolbar buttons when needed.
   **Sim** and **RViz** cannot be removed, but their commands can be changed.
