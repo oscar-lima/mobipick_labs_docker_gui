@@ -400,8 +400,11 @@ Use **Tools > Configure Toolbar Buttons** to edit the active profile from the
 GUI. Workspace edits are saved as writable per-user copies named for the active
 workspace, and that workspace is updated to point at its copy. Packaged global
 profiles are also copied before saving. The dialog shows the editable button
-key, label, command, compose service, and tooltip; other execution fields are
-preserved when saving.
+key, label, command, stop command, compose service, host execution, and
+tooltip; other execution fields are preserved when saving. The stop-command
+column is shown only when at least one button uses host execution. Its cells
+are enabled only for host command buttons, and the command runs after the GUI
+sends SIGINT to the original command process.
 
 Use **Load Profile** and **Export Profile** in that dialog to move complete
 button configurations as one YAML file. The automatic save location is the

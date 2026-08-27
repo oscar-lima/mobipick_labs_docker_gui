@@ -38,6 +38,8 @@ def test_button_profile_dialog_prioritizes_command_columns(tmp_path):
                 'label': 'Demo Tool',
                 'kind': 'command',
                 'command': 'rosrun demo_package very_long_command_name --flag value',
+                'stop_command': 'rosrun demo_package stop_tool --flag value',
+                'host': True,
                 'tooltip': (
                     'This tooltip is intentionally much longer than the '
                     'other fields and should not dominate the visible width.'
@@ -56,8 +58,88 @@ def test_button_profile_dialog_prioritizes_command_columns(tmp_path):
     }
 
     assert widths['command'] > widths['tooltip']
+    assert widths['stop_command'] > widths['tooltip']
     assert widths['label'] > widths['tooltip']
     assert widths['key'] >= 96
+
+    dialog.deleteLater()
+    app.processEvents()
+
+
+def test_button_profile_dialog_edits_and_saves_stop_command(tmp_path):
+    app = QApplication.instance() or QApplication([])
+    target = tmp_path / 'target.yaml'
+    dialog = ButtonProfileDialog(
+        [
+            {
+                'key': 'ollama',
+                'label': 'Ollama',
+                'kind': 'command',
+                'command': 'manage_ollama.sh start',
+                'stop_command': 'manage_ollama.sh old-stop',
+                'host': True,
+            },
+        ],
+        Path(tmp_path / 'source.yaml'),
+        target,
+    )
+
+    stop_column = next(
+        index
+        for index, (field, _label) in enumerate(dialog.COLUMNS)
+        if field == 'stop_command'
+    )
+    stop_item = dialog.table.item(0, stop_column)
+    assert stop_item.flags() & Qt.ItemIsEditable
+    stop_item.setText('manage_ollama.sh stop')
+
+    save_button_layout(target, dialog.button_layout())
+
+    assert 'stop_command: manage_ollama.sh stop' in target.read_text(
+        encoding='utf-8'
+    )
+
+    dialog.deleteLater()
+    app.processEvents()
+
+
+def test_button_profile_dialog_hides_and_disables_stop_for_non_host(tmp_path):
+    app = QApplication.instance() or QApplication([])
+    target = tmp_path / 'target.yaml'
+    dialog = ButtonProfileDialog(
+        [
+            {
+                'key': 'ollama',
+                'label': 'Ollama',
+                'kind': 'command',
+                'command': 'manage_ollama.sh start',
+                'stop_command': 'manage_ollama.sh stop',
+                'host': False,
+            },
+        ],
+        Path(tmp_path / 'source.yaml'),
+        target,
+    )
+    stop_column = dialog._field_column('stop_command')
+    host_column = dialog._field_column('host')
+    stop_item = dialog.table.item(0, stop_column)
+
+    assert dialog.table.isColumnHidden(stop_column)
+    assert stop_item.text() == ''
+    assert not stop_item.flags() & Qt.ItemIsEditable
+    assert dialog.button_layout()[0]['stop_command'] == ''
+
+    dialog.table.item(0, host_column).setCheckState(Qt.Checked)
+
+    assert not dialog.table.isColumnHidden(stop_column)
+    assert stop_item.text() == 'manage_ollama.sh stop'
+    assert stop_item.flags() & Qt.ItemIsEditable
+
+    dialog.table.item(0, host_column).setCheckState(Qt.Unchecked)
+    save_button_layout(target, dialog.button_layout())
+
+    assert dialog.table.isColumnHidden(stop_column)
+    assert 'stop_command:' not in target.read_text(encoding='utf-8')
 
     dialog.deleteLater()
     app.processEvents()

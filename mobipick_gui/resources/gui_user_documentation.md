@@ -312,7 +312,10 @@ The tab search is separate from the documentation window search.
 
 - **Configure Toolbar Buttons** edits the active workspace toolbar button
   profile in a separate window. You can add, remove, reorder, and edit button
-  labels, commands, compose services, host execution, and tooltips. Check
+  labels, commands, stop commands, compose services, host execution, and
+  tooltips. The **Stop Command** column appears when at least one button has
+  **Host** checked; only Host rows can edit it. The stop command runs when you
+  stop the button, after the GUI signals the original process. Check
   **Host** to run that button's command directly on the host instead of inside
   a Mobipick Docker container; saving writes this choice to the button profile.
   Host commands do not check or automatically start Roscore.

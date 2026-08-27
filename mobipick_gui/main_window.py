@@ -155,11 +155,20 @@ def _about_details_html() -> str:
 class ButtonProfileTable(QTableWidget):
     """Toolbar button editor table with priority-based column sizing."""
 
-    FIELD_ORDER = ['key', 'label', 'command', 'service', 'host', 'tooltip']
+    FIELD_ORDER = [
+        'key',
+        'label',
+        'command',
+        'stop_command',
+        'service',
+        'host',
+        'tooltip',
+    ]
     MIN_WIDTHS = {
         'key': 96,
         'label': 132,
         'command': 280,
+        'stop_command': 240,
         'service': 112,
         'host': 64,
         'tooltip': 72,
@@ -168,6 +177,7 @@ class ButtonProfileTable(QTableWidget):
         'key': 220,
         'label': 280,
         'command': 760,
+        'stop_command': 640,
         'service': 180,
         'host': 80,
         'tooltip': 240,
@@ -176,6 +186,7 @@ class ButtonProfileTable(QTableWidget):
         'key': 1,
         'label': 2,
         'command': 7,
+        'stop_command': 6,
         'service': 1,
         'host': 0,
         'tooltip': 0,
@@ -661,6 +672,7 @@ class ButtonProfileDialog(QDialog):
         ('key', 'Key'),
         ('label', 'Label'),
         ('command', 'Command'),
+        ('stop_command', 'Stop Command'),
         ('service', 'Service'),
         ('host', 'Host'),
         ('tooltip', 'Tooltip'),
@@ -689,7 +701,7 @@ class ButtonProfileDialog(QDialog):
         note = QLabel(
             'Roscore and Terminal are always present and are not editable here. '
             'Every listed button runs its command in its own tab. Sim and RViz '
-            'cannot be removed.'
+            'cannot be removed. Stop Command is used by Host command buttons.'
         )
         note.setWordWrap(True)
         root.addWidget(note)
@@ -707,6 +719,8 @@ class ButtonProfileDialog(QDialog):
 
         for entry in entries:
             self._append_row(entry)
+        self.table.itemChanged.connect(self._on_table_item_changed)
+        self._update_stop_command_column_visibility()
         self.table.apply_column_widths()
 
         actions = QHBoxLayout()
@@ -769,7 +783,64 @@ class ButtonProfileDialog(QDialog):
             if column == 0:
                 item.setData(Qt.UserRole, copy.deepcopy(entry))
             self.table.setItem(row, column, item)
+        self._update_stop_command_availability(row)
         self.table.apply_column_widths()
+
+    def _on_table_item_changed(self, item: QTableWidgetItem) -> None:
+        host_column = self._field_column('host')
+        stop_column = self._field_column('stop_command')
+        if item.column() == stop_column:
+            item.setData(Qt.UserRole, item.text().strip())
+            return
+        if item.column() != host_column:
+            return
+        self._update_stop_command_availability(item.row())
+        self._update_stop_command_column_visibility()
+
+    def _update_stop_command_availability(self, row: int) -> None:
+        host_item = self.table.item(row, self._field_column('host'))
+        stop_item = self.table.item(row, self._field_column('stop_command'))
+        if stop_item is None:
+            return
+        host_enabled = bool(
+            host_item and host_item.checkState() == Qt.Checked
+        )
+        was_blocked = self.table.blockSignals(True)
+        try:
+            if host_enabled:
+                hidden_command = str(stop_item.data(Qt.UserRole) or '')
+                if not stop_item.text() and hidden_command:
+                    stop_item.setText(hidden_command)
+                stop_item.setFlags(
+                    Qt.ItemIsEnabled
+                    | Qt.ItemIsSelectable
+                    | Qt.ItemIsEditable
+                )
+                stop_item.setToolTip('Command to run when this Host button stops')
+            else:
+                if stop_item.text():
+                    stop_item.setData(Qt.UserRole, stop_item.text().strip())
+                stop_item.setText('')
+                stop_item.setFlags(Qt.NoItemFlags)
+                stop_item.setToolTip(
+                    'Enable Host for this button to configure a stop command'
+                )
+        finally:
+            self.table.blockSignals(was_blocked)
+
+    def _update_stop_command_column_visibility(self) -> None:
+        host_column = self._field_column('host')
+        any_host = any(
+            bool(
+                (item := self.table.item(row, host_column))
+                and item.checkState() == Qt.Checked
+            )
+            for row in range(self.table.rowCount())
+        )
+        self.table.setColumnHidden(
+            self._field_column('stop_command'),
+            not any_host,
+        )
 
     def _selected_row(self) -> int:
         indexes = self.table.selectionModel().selectedRows()
@@ -805,6 +876,7 @@ class ButtonProfileDialog(QDialog):
                 'kind': 'command',
                 'action': '',
                 'command': '',
+                'stop_command': '',
                 'requires_roscore': True,
                 'reuse_tab': False,
                 'world_config_required': False,
@@ -829,6 +901,7 @@ class ButtonProfileDialog(QDialog):
         self.table.setRowCount(0)
         for entry in entries:
             self._append_row(entry)
+        self._update_stop_command_column_visibility()
         self.table.apply_column_widths()
 
     def _configure_selected_arguments(self) -> None:
@@ -1013,6 +1086,8 @@ class ButtonProfileDialog(QDialog):
             if column == 0:
                 item.setData(Qt.UserRole, copy.deepcopy(entry))
             self.table.setItem(row, column, item)
+        self._update_stop_command_availability(row)
+        self._update_stop_command_column_visibility()
         self.table.apply_column_widths()
 
     def _row_snapshot(self, row: int) -> dict:
@@ -1025,6 +1100,8 @@ class ButtonProfileDialog(QDialog):
             item = self.table.item(row, column)
             if field in self.BOOL_FIELDS:
                 base[field] = bool(item and item.checkState() == Qt.Checked)
+            elif field == 'stop_command' and not base.get('host'):
+                base[field] = ''
             else:
                 base[field] = item.text().strip() if item else ''
         current_key = str(base.get('key') or '').strip()
