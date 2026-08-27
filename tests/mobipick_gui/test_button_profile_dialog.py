@@ -10,6 +10,7 @@ from PyQt5.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLineEdit,
+    QWIDGETSIZE_MAX,
     QSizePolicy,
     QWidget,
 )
@@ -62,6 +63,33 @@ def test_button_profile_dialog_prioritizes_command_columns(tmp_path):
     assert widths['label'] > widths['tooltip']
     assert widths['key'] >= 96
 
+    dialog.deleteLater()
+    app.processEvents()
+
+
+def test_button_profile_dialog_is_a_maximizable_top_level_window(tmp_path):
+    app = QApplication.instance() or QApplication([])
+    dialog = ButtonProfileDialog(
+        [],
+        Path(tmp_path / 'source.yaml'),
+        Path(tmp_path / 'target.yaml'),
+    )
+
+    flags = dialog.windowFlags()
+
+    assert flags & Qt.WindowMaximizeButtonHint
+    assert (flags & Qt.WindowType_Mask) == Qt.Window
+    assert dialog.maximumWidth() == QWIDGETSIZE_MAX
+    assert dialog.maximumHeight() == QWIDGETSIZE_MAX
+
+    dialog.show()
+    app.processEvents()
+    dialog.showMaximized()
+    app.processEvents()
+
+    assert dialog.isMaximized()
+
+    dialog.close()
     dialog.deleteLater()
     app.processEvents()
 

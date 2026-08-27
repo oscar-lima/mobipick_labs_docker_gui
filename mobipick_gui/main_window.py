@@ -689,9 +689,12 @@ class ButtonProfileDialog(QDialog):
         save_path: Path,
         parent: QWidget | None = None,
     ):
-        super().__init__(None)
+        # Establish the normal top-level window type before
+        # MaximizableDialog adds its window-manager hints. Changing the type
+        # afterwards can leave some window managers treating this as a dialog
+        # whose maximize controls do not act on the window.
+        super().__init__(None, Qt.Window)
         self.setWindowTitle('Configure Toolbar Buttons')
-        self.setWindowFlag(Qt.Window, True)
         self.resize(960, 560)
         self._owner = parent
         self._source_path = source_path
