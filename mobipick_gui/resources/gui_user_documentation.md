@@ -195,6 +195,17 @@ stop.
 The **world_config** selector chooses the Gazebo world setting passed to the
 simulation and RQt tables launch.
 
+A loaded toolbar-button profile can expose up to three additional argument
+combo boxes beside **world_config**. Their labels and selectable options come
+from the profile, and each button profile entry controls which values apply to
+that button. Selected values are appended to applicable commands as ROS
+arguments (`name:=value`).
+When the profile defines no generic argument names, these fields are not shown.
+Use **Tools > Configure Toolbar Buttons**, select a button, and click
+**Configure Arguments...** to edit each slot's argument name, comma-separated
+combo options, and per-button applicability checkbox in a separate dialog.
+This keeps the normal button table focused on commonly edited settings.
+
 The **image** selector chooses the Docker image used by containers. Image labels
 may include:
 

@@ -68,6 +68,7 @@ from .config import (
     CONFIG,
     DEFAULT_BUTTON_COMMANDS,
     DEFAULT_YAML_PATH,
+    GENERIC_BUTTON_ARG_SLOTS,
     PROJECT_ROOT,
     SCRIPT_CLEAN,
     USER_DATA_DIR,
@@ -527,6 +528,132 @@ class ImageBlacklistDialog(QDialog):
             self.preview_table.setItem(row, 3, QTableWidgetItem(matched_pattern))
 
 
+class ButtonArgumentsDialog(QDialog):
+    """Configure the optional generic arguments for one toolbar button."""
+
+    def __init__(
+        self,
+        entry: dict,
+        parent: QWidget | None = None,
+    ):
+        super().__init__(parent)
+        label = str(entry.get('label') or entry.get('key') or 'button')
+        self.setWindowTitle(f'Configure Arguments — {label}')
+        self.setMinimumWidth(720)
+        self._name_inputs: dict[int, QLineEdit] = {}
+        self._options_inputs: dict[int, QLineEdit] = {}
+        self._applies_checks: dict[int, QCheckBox] = {}
+
+        root = QVBoxLayout(self)
+        note = QLabel(
+            'Configure up to three optional ROS arguments. The same slot must '
+            'use the same name on every toolbar button. Enable a slot to append '
+            'its non-empty main-window value to this button as name:=value.'
+        )
+        note.setWordWrap(True)
+        root.addWidget(note)
+
+        form = QFormLayout()
+        for slot in GENERIC_BUTTON_ARG_SLOTS:
+            row_widget = QWidget()
+            row = QVBoxLayout(row_widget)
+            row.setContentsMargins(0, 0, 0, 0)
+            name_row = QHBoxLayout()
+            name_input = QLineEdit(
+                str(entry.get(f'arg_{slot}_name') or '').strip()
+            )
+            name_input.setPlaceholderText('For example: model_profile')
+            name_input.setMinimumWidth(280)
+            name_input.setSizePolicy(
+                QSizePolicy.Expanding,
+                QSizePolicy.Preferred,
+            )
+            applies = QCheckBox('Apply to this button')
+            applies.setChecked(bool(entry.get(f'arg_{slot}_applies')))
+            name_row.addWidget(QLabel('Name:'))
+            name_row.addWidget(name_input, 1)
+            name_row.addWidget(applies)
+            row.addLayout(name_row)
+            options_row = QHBoxLayout()
+            options_input = QLineEdit(', '.join(
+                str(value)
+                for value in entry.get(f'arg_{slot}_options', []) or []
+            ))
+            options_input.setPlaceholderText(
+                'Comma-separated options, for example: thor, panda, mobipick'
+            )
+            options_input.setMinimumWidth(420)
+            options_input.setSizePolicy(
+                QSizePolicy.Expanding,
+                QSizePolicy.Preferred,
+            )
+            options_row.addWidget(QLabel('Combo options:'))
+            options_row.addWidget(options_input, 1)
+            row.addLayout(options_row)
+            form.addRow(f'Argument {slot}:', row_widget)
+            self._name_inputs[slot] = name_input
+            self._options_inputs[slot] = options_input
+            self._applies_checks[slot] = applies
+        root.addLayout(form)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.Save | QDialogButtonBox.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        root.addWidget(buttons)
+
+    def arguments(self) -> dict:
+        """Return argument names and per-button applicability flags."""
+        result = {
+            field: value
+            for slot in GENERIC_BUTTON_ARG_SLOTS
+            for field, value in (
+                (f'arg_{slot}_name', self._name_inputs[slot].text().strip()),
+                (
+                    f'arg_{slot}_options',
+                    list(dict.fromkeys(
+                        value.strip()
+                        for value in self._options_inputs[slot].text().split(',')
+                        if value.strip()
+                    )),
+                ),
+                (
+                    f'arg_{slot}_applies',
+                    self._applies_checks[slot].isChecked(),
+                ),
+            )
+        }
+        return result
+
+    def accept(self) -> None:
+        for slot in GENERIC_BUTTON_ARG_SLOTS:
+            if (
+                self._applies_checks[slot].isChecked()
+                and not self._name_inputs[slot].text().strip()
+            ):
+                QMessageBox.warning(
+                    self,
+                    'Toolbar Button Arguments',
+                    f'Argument {slot} needs a name when it applies.',
+                )
+                return
+            if (
+                self._name_inputs[slot].text().strip()
+                and not any(
+                    value.strip()
+                    for value in self._options_inputs[slot].text().split(',')
+                )
+            ):
+                QMessageBox.warning(
+                    self,
+                    'Toolbar Button Arguments',
+                    f'Argument {slot} needs at least one combo option.',
+                )
+                return
+        super().accept()
+
+
 class ButtonProfileDialog(QDialog):
     """Edit the configurable top-row command buttons."""
 
@@ -595,6 +722,12 @@ class ButtonProfileDialog(QDialog):
         down_button = QPushButton('Move Down')
         down_button.clicked.connect(lambda: self._move_selected_row(1))
         actions.addWidget(down_button)
+        arguments_button = QPushButton('Configure Arguments...')
+        arguments_button.setToolTip(
+            'Configure up to three optional arguments for the selected button'
+        )
+        arguments_button.clicked.connect(self._configure_selected_arguments)
+        actions.addWidget(arguments_button)
         load_button = QPushButton('Load Profile')
         load_button.clicked.connect(self._load_profile)
         actions.addWidget(load_button)
@@ -679,6 +812,15 @@ class ButtonProfileDialog(QDialog):
                 'host': False,
                 'pass_ros_master_uri': False,
                 'service': '',
+                **{
+                    field: value
+                    for slot in GENERIC_BUTTON_ARG_SLOTS
+                    for field, value in (
+                        (f'arg_{slot}_name', ''),
+                        (f'arg_{slot}_options', []),
+                        (f'arg_{slot}_applies', False),
+                    )
+                },
             }
         )
         self.table.selectRow(self.table.rowCount() - 1)
@@ -688,6 +830,64 @@ class ButtonProfileDialog(QDialog):
         for entry in entries:
             self._append_row(entry)
         self.table.apply_column_widths()
+
+    def _configure_selected_arguments(self) -> None:
+        row = self._selected_row()
+        if row < 0:
+            QMessageBox.information(
+                self,
+                'Toolbar Button Arguments',
+                'Select a toolbar button first.',
+            )
+            return
+        entries = self.button_layout()
+        entry = entries[row]
+        for slot in GENERIC_BUTTON_ARG_SLOTS:
+            name_field = f'arg_{slot}_name'
+            options_field = f'arg_{slot}_options'
+            if not entry.get(name_field):
+                entry[name_field] = next(
+                    (
+                        candidate.get(name_field)
+                        for candidate in entries
+                        if candidate.get(name_field)
+                    ),
+                    '',
+                )
+            if not entry.get(options_field):
+                entry[options_field] = next(
+                    (
+                        list(candidate.get(options_field) or [])
+                        for candidate in entries
+                        if candidate.get(options_field)
+                    ),
+                    [],
+                )
+        dialog = ButtonArgumentsDialog(entry, self)
+        if dialog.exec_() != QDialog.Accepted:
+            return
+        configured = dialog.arguments()
+        for target_row, target in enumerate(entries):
+            for slot in GENERIC_BUTTON_ARG_SLOTS:
+                name_field = f'arg_{slot}_name'
+                options_field = f'arg_{slot}_options'
+                applies_field = f'arg_{slot}_applies'
+                target[name_field] = configured[name_field]
+                target[options_field] = configured[options_field]
+                if target_row == row:
+                    target[applies_field] = configured[applies_field]
+                elif not configured[name_field]:
+                    target[applies_field] = False
+                else:
+                    target[applies_field] = bool(
+                        target.get(applies_field, False)
+                    )
+            key_item = self.table.item(
+                target_row,
+                self._field_column('key'),
+            )
+            if key_item is not None:
+                key_item.setData(Qt.UserRole, target)
 
     def _profile_dialog_start_dir(self) -> str:
         for path in (self._save_path, self._source_path):
@@ -846,6 +1046,8 @@ class ButtonProfileDialog(QDialog):
 
     def _validation_error(self, entries: list[dict]) -> str:
         keys: list[str] = []
+        slot_names: dict[int, str] = {}
+        slot_options: dict[int, list[str]] = {}
         for entry in entries:
             key = str(entry.get('key') or '').strip()
             if not key:
@@ -869,6 +1071,33 @@ class ButtonProfileDialog(QDialog):
                 entry['action'] = required_action
             if not str(entry.get('command') or '').strip():
                 return f'Button "{key}" needs a command.'
+            for slot in GENERIC_BUTTON_ARG_SLOTS:
+                field = f'arg_{slot}_name'
+                name = str(entry.get(field) or '').strip()
+                if name:
+                    previous = slot_names.setdefault(slot, name)
+                    if previous != name:
+                        return (
+                            f'Argument slot {slot} must use one name across '
+                            f'the profile ("{previous}" or "{name}").'
+                        )
+                options = list(entry.get(f'arg_{slot}_options') or [])
+                if options:
+                    previous_options = slot_options.setdefault(slot, options)
+                    if previous_options != options:
+                        return (
+                            f'Argument slot {slot} must use one option list '
+                            'across the profile.'
+                        )
+                if entry.get(f'arg_{slot}_applies') and not name:
+                    return (
+                        f'Button "{key}" uses argument slot {slot}, so its '
+                        'argument name cannot be empty.'
+                    )
+                if name and not options:
+                    return (
+                        f'Argument slot {slot} needs at least one combo option.'
+                    )
         missing = sorted(self.REQUIRED_KEYS - set(keys))
         if missing:
             return f'Missing required button(s): {", ".join(missing)}.'
@@ -2131,6 +2360,15 @@ class MainWindow(QMainWindow):
         self.world_combo = QComboBox()
         actions.addWidget(self.world_combo)
         self.world_combo.currentIndexChanged.connect(self._on_world_changed)
+
+        self.generic_arg_controls = QWidget()
+        self._generic_arg_controls_layout = QHBoxLayout(
+            self.generic_arg_controls
+        )
+        self._generic_arg_controls_layout.setContentsMargins(0, 0, 0, 0)
+        self._generic_arg_inputs: dict[int, QComboBox] = {}
+        actions.addWidget(self.generic_arg_controls)
+        self._refresh_generic_arg_controls()
 
         self.image_label = QLabel('image:')
         actions.addWidget(self.image_label)
@@ -3983,6 +4221,7 @@ class MainWindow(QMainWindow):
             self._top_controls_layout,
             insert_at=terminal_index,
         )
+        self._refresh_generic_arg_controls()
         self._auto_launch_base_tooltip = str(
             self._launch_plan.get('button', {}).get('tooltip') or ''
         )
@@ -5663,10 +5902,12 @@ CMD ["bash"]
             and workspace
             and workspace.sim_command
         ):
-            return command
-        if workspace and workspace.sim_command:
-            return workspace.sim_command
-        return DEFAULT_BUTTON_COMMANDS['sim']
+            selected = command
+        elif workspace and workspace.sim_command:
+            selected = workspace.sim_command
+        else:
+            selected = DEFAULT_BUTTON_COMMANDS['sim']
+        return MainWindow._command_with_generic_args(self, selected, sim_cfg)
 
     def _rviz_command(self) -> str:
         command = self._profile_button_command('rviz')
@@ -5684,7 +5925,97 @@ CMD ["bash"]
 
     def _profile_button_command(self, key: str) -> str:
         cfg = getattr(self, '_config_buttons', {}).get(key, {})
-        return str(cfg.get('command') or '').strip()
+        command = str(cfg.get('command') or '').strip()
+        return MainWindow._command_with_generic_args(self, command, cfg)
+
+    def _refresh_generic_arg_controls(self) -> None:
+        """Show inputs only for generic argument slots named by the profile."""
+        controls = getattr(self, 'generic_arg_controls', None)
+        layout = getattr(self, '_generic_arg_controls_layout', None)
+        if controls is None or layout is None:
+            return
+        previous = {
+            slot: widget.currentText()
+            for slot, widget in getattr(
+                self,
+                '_generic_arg_inputs',
+                {},
+            ).items()
+        }
+        previous_names = getattr(self, '_generic_arg_names_by_slot', {})
+        names = {
+            slot: next(
+                (
+                    str(entry.get(f'arg_{slot}_name') or '').strip()
+                    for entry in self._button_layout
+                    if isinstance(entry, dict)
+                    and str(entry.get(f'arg_{slot}_name') or '').strip()
+                ),
+                '',
+            )
+            for slot in GENERIC_BUTTON_ARG_SLOTS
+        }
+        options = {
+            slot: next(
+                (
+                    list(entry.get(f'arg_{slot}_options') or [])
+                    for entry in self._button_layout
+                    if isinstance(entry, dict)
+                    and entry.get(f'arg_{slot}_options')
+                ),
+                [],
+            )
+            for slot in GENERIC_BUTTON_ARG_SLOTS
+        }
+        while layout.count():
+            item = layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+
+        inputs: dict[int, QComboBox] = {}
+        for slot in GENERIC_BUTTON_ARG_SLOTS:
+            name = names[slot]
+            if not name:
+                continue
+            layout.addWidget(QLabel(f'{name}:'))
+            previous_value = (
+                previous.get(slot, '')
+                if previous_names.get(slot) == name
+                else ''
+            )
+            value_input = QComboBox()
+            value_input.addItems(options[slot])
+            if previous_value in options[slot]:
+                value_input.setCurrentIndex(options[slot].index(previous_value))
+            value_input.setMinimumWidth(140)
+            value_input.setSizePolicy(
+                QSizePolicy.Expanding,
+                QSizePolicy.Preferred,
+            )
+            layout.addWidget(value_input)
+            inputs[slot] = value_input
+        self._generic_arg_inputs = inputs
+        self._generic_arg_names_by_slot = {
+            slot: names[slot] for slot in inputs
+        }
+        controls.setVisible(bool(inputs))
+
+    def _command_with_generic_args(self, command: str, config: dict) -> str:
+        """Append configured, non-empty generic ROS arguments to a command."""
+        full_command = str(command or '').strip()
+        if not full_command:
+            return ''
+        inputs = getattr(self, '_generic_arg_inputs', {})
+        for slot in GENERIC_BUTTON_ARG_SLOTS:
+            if not config.get(f'arg_{slot}_applies'):
+                continue
+            name = str(config.get(f'arg_{slot}_name') or '').strip()
+            widget = inputs.get(slot)
+            value = widget.currentText().strip() if widget is not None else ''
+            if name and value:
+                full_command += f' {name}:={self._sh_quote(value)}'
+        return full_command
 
     def _get_button_widget(self, key: str) -> QPushButton | None:
         return self._button_widgets.get(key)
@@ -5736,6 +6067,16 @@ CMD ["bash"]
                 'pass_ros_master_uri': entry.get('pass_ros_master_uri', False),
                 'service': entry.get('service') or '',
             }
+            for slot in GENERIC_BUTTON_ARG_SLOTS:
+                normalized[f'arg_{slot}_name'] = str(
+                    entry.get(f'arg_{slot}_name') or ''
+                ).strip()
+                normalized[f'arg_{slot}_options'] = list(
+                    entry.get(f'arg_{slot}_options') or []
+                )
+                normalized[f'arg_{slot}_applies'] = bool(
+                    entry.get(f'arg_{slot}_applies', False)
+                )
             self._config_buttons[key] = normalized
             self._config_button_order.append(key)
             button = QPushButton(normalized['label'])
@@ -5872,7 +6213,11 @@ CMD ["bash"]
 
         def _run_command():
             key_label = config.get('key', 'button')
-            full_command = command
+            full_command = MainWindow._command_with_generic_args(
+                self,
+                command,
+                config,
+            )
             if config.get('world_config_required'):
                 arg_name = str(config.get('world_arg_name') or 'world_config')
                 world = self._current_world()

@@ -4,7 +4,15 @@ from pathlib import Path
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
 from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QApplication, QDialog, QHeaderView, QSizePolicy
+from PyQt5.QtWidgets import (
+    QApplication,
+    QDialog,
+    QHBoxLayout,
+    QHeaderView,
+    QLineEdit,
+    QSizePolicy,
+    QWidget,
+)
 
 from mobipick_gui.config import (
     load_docker_cp_config,
@@ -119,6 +127,119 @@ def test_button_profile_dialog_saves_host_checkbox(tmp_path):
     assert 'host: true' in target.read_text(encoding='utf-8')
 
     dialog.deleteLater()
+    app.processEvents()
+
+
+def test_button_profile_dialog_configures_args_in_popup(monkeypatch, tmp_path):
+    app = QApplication.instance() or QApplication([])
+    target = tmp_path / 'target.yaml'
+    dialog = ButtonProfileDialog(
+        [
+            {
+                'key': 'demo',
+                'label': 'Demo',
+                'kind': 'command',
+                'command': 'roslaunch demo run.launch',
+            },
+            {
+                'key': 'monitor',
+                'label': 'Monitor',
+                'kind': 'command',
+                'command': 'rosrun demo monitor.py',
+            },
+        ],
+        Path(tmp_path / 'source.yaml'),
+        target,
+    )
+    class FakeArgumentsDialog:
+        def __init__(self, entry, parent):
+            assert entry['key'] == 'demo'
+            assert parent is dialog
+
+        def exec_(self):
+            return QDialog.Accepted
+
+        def arguments(self):
+            return {
+                'arg_1_name': 'model_profile',
+                'arg_1_options': ['thor', 'panda'],
+                'arg_1_applies': True,
+                'arg_2_name': '',
+                'arg_2_options': [],
+                'arg_2_applies': False,
+                'arg_3_name': '',
+                'arg_3_options': [],
+                'arg_3_applies': False,
+            }
+
+    monkeypatch.setattr(
+        main_window_module,
+        'ButtonArgumentsDialog',
+        FakeArgumentsDialog,
+    )
+    assert all(
+        not field.startswith('arg_') for field, _label in dialog.COLUMNS
+    )
+    dialog.table.selectRow(0)
+    dialog._configure_selected_arguments()
+    other_entry = dialog.button_layout()[1]
+    assert other_entry['arg_1_name'] == 'model_profile'
+    assert other_entry['arg_1_options'] == ['thor', 'panda']
+    assert other_entry['arg_1_applies'] is False
+    save_button_layout(target, dialog.button_layout())
+
+    text = target.read_text(encoding='utf-8')
+    assert 'arg_1_name: model_profile' in text
+    assert 'arg_1_options:' in text
+    assert '- thor' in text
+    assert '- panda' in text
+    assert 'arg_1_applies: true' in text
+
+    dialog.deleteLater()
+    app.processEvents()
+
+
+def test_generic_arg_controls_are_hidden_without_config_and_append_values():
+    app = QApplication.instance() or QApplication([])
+    harness = QWidget()
+    harness.generic_arg_controls = QWidget(harness)
+    harness._generic_arg_controls_layout = QHBoxLayout(
+        harness.generic_arg_controls
+    )
+    harness._generic_arg_inputs = {}
+    harness._button_layout = []
+    harness._refresh_generic_arg_controls = (
+        main_window_module.MainWindow._refresh_generic_arg_controls.__get__(
+            harness
+        )
+    )
+    harness._refresh_generic_arg_controls()
+
+    assert harness.generic_arg_controls.isHidden()
+    assert harness._generic_arg_inputs == {}
+
+    harness._button_layout = [{
+        'arg_1_name': 'robot',
+        'arg_1_options': ['thor', 'mobipick 1'],
+        'arg_1_applies': True,
+    }]
+    harness._refresh_generic_arg_controls()
+    harness._generic_arg_inputs[1].setCurrentText('mobipick 1')
+    harness._sh_quote = main_window_module.MainWindow._sh_quote
+    command = main_window_module.MainWindow._command_with_generic_args(
+        harness,
+        'roslaunch demo run.launch',
+        {
+            'arg_1_name': 'robot',
+            'arg_1_options': ['thor', 'mobipick 1'],
+            'arg_1_applies': True,
+        },
+    )
+
+    assert not harness.generic_arg_controls.isHidden()
+    assert command == "roslaunch demo run.launch robot:='mobipick 1'"
+
+    harness.deleteLater()
     app.processEvents()
 
 

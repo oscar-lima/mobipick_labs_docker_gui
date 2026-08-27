@@ -442,6 +442,19 @@ Command entries can declare:
   Leave it empty for the normal tool service, or use `mobipick` for launch
   files that start Gazebo themselves and need the simulator service identity.
 
+Profiles can also define as many as three generic ROS arguments on each button.
+For slot 1, set `arg_1_name` to the argument name, provide the dropdown values
+in `arg_1_options`, and set `arg_1_applies: true` on every button that should
+receive it; slots 2 and 3 use the corresponding `arg_2_*` and `arg_3_*` fields.
+A slot must use the same name and option list throughout one profile. Named
+slots appear as combo boxes in the main GUI, and an enabled button command
+receives the selected `name:=value`. If no slot has a name, no generic argument
+controls are shown. Select a
+button in **Configure Toolbar Buttons**, then use **Configure Arguments...** to
+edit the names, comma-separated combo options, and per-button flags in a
+separate dialog. Argument details remain out of the main profile table and
+travel with loaded or exported profiles.
+
 The GUI normalizes all entries and creates matching process tabs and
 start/stop visual state.
 

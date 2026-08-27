@@ -418,6 +418,8 @@ BUTTON_CONFIG_DEFAULTS = [
     },
 ]
 
+GENERIC_BUTTON_ARG_SLOTS = range(1, 4)
+
 REQUIRED_BUTTON_KEYS = ('sim', 'rviz')
 
 
@@ -565,7 +567,7 @@ def _normalize_button_entry(item: dict) -> dict | None:
     command = raw_command
     if command_is_default:
         command = _default_button_command(key, action)
-    return {
+    normalized = {
         'key': key,
         'label': item.get('label') or item.get('text') or key,
         'kind': item.get('kind') or item.get('type') or 'builtin',
@@ -584,6 +586,24 @@ def _normalize_button_entry(item: dict) -> dict | None:
         'pass_ros_master_uri': item.get('pass_ros_master_uri', False),
         'service': item.get('service') or '',
     }
+    for slot in GENERIC_BUTTON_ARG_SLOTS:
+        normalized[f'arg_{slot}_name'] = str(
+            item.get(f'arg_{slot}_name') or ''
+        ).strip()
+        raw_options = item.get(f'arg_{slot}_options') or []
+        if isinstance(raw_options, str):
+            raw_options = raw_options.split(',')
+        if not isinstance(raw_options, (list, tuple)):
+            raw_options = []
+        normalized[f'arg_{slot}_options'] = list(dict.fromkeys(
+            str(value).strip()
+            for value in raw_options
+            if str(value).strip()
+        ))
+        normalized[f'arg_{slot}_applies'] = bool(
+            item.get(f'arg_{slot}_applies', False)
+        )
+    return normalized
 
 
 def ensure_required_button_layout(entries: list[dict]) -> list[dict]:
@@ -701,6 +721,23 @@ def _button_entry_for_save(entry: dict) -> dict:
         saved['host'] = True
     if bool(entry.get('pass_ros_master_uri')):
         saved['pass_ros_master_uri'] = True
+    for slot in GENERIC_BUTTON_ARG_SLOTS:
+        arg_name = str(entry.get(f'arg_{slot}_name') or '').strip()
+        if arg_name:
+            saved[f'arg_{slot}_name'] = arg_name
+        options = entry.get(f'arg_{slot}_options') or []
+        if isinstance(options, str):
+            options = options.split(',')
+        if isinstance(options, (list, tuple)):
+            normalized_options = list(dict.fromkeys(
+                str(value).strip()
+                for value in options
+                if str(value).strip()
+            ))
+            if normalized_options:
+                saved[f'arg_{slot}_options'] = normalized_options
+        if bool(entry.get(f'arg_{slot}_applies')):
+            saved[f'arg_{slot}_applies'] = True
     return saved
 
 

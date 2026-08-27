@@ -293,6 +293,53 @@ def test_button_layout_save_load_round_trip_single_file(tmp_path):
     assert by_key['rviz']['command'] == 'rviz -d /tmp/custom.rviz'
 
 
+def test_button_layout_round_trips_three_optional_generic_args(tmp_path):
+    target = tmp_path / 'generic_args.yaml'
+    save_button_layout(
+        target,
+        [
+            {
+                'key': 'sim',
+                'label': 'Sim',
+                'kind': 'builtin',
+                'action': 'sim',
+                'command': 'roslaunch demo sim.launch',
+                'arg_1_name': 'robot',
+                'arg_1_options': ['thor', 'panda'],
+                'arg_1_applies': True,
+                'arg_2_name': 'map_file',
+                'arg_2_options': ['/tmp/a.yaml', '/tmp/b.yaml'],
+                'arg_2_applies': False,
+                'arg_3_name': 'mode',
+                'arg_3_options': ['demo', 'live'],
+                'arg_3_applies': True,
+            },
+            {
+                'key': 'rviz',
+                'label': 'RViz',
+                'kind': 'builtin',
+                'action': 'rviz',
+                'command': 'rviz',
+            },
+        ],
+    )
+
+    loaded = {entry['key']: entry for entry in load_button_layout(target)}
+
+    assert loaded['sim']['arg_1_name'] == 'robot'
+    assert loaded['sim']['arg_1_options'] == ['thor', 'panda']
+    assert loaded['sim']['arg_1_applies'] is True
+    assert loaded['sim']['arg_2_name'] == 'map_file'
+    assert loaded['sim']['arg_2_options'] == [
+        '/tmp/a.yaml',
+        '/tmp/b.yaml',
+    ]
+    assert loaded['sim']['arg_2_applies'] is False
+    assert loaded['sim']['arg_3_name'] == 'mode'
+    assert loaded['sim']['arg_3_options'] == ['demo', 'live']
+    assert loaded['sim']['arg_3_applies'] is True
+
+
 def test_writable_button_config_path_avoids_packaged_resources(
     monkeypatch,
     tmp_path,
