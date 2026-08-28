@@ -6231,6 +6231,19 @@ CMD ["bash"]
             return cmd
         return f'COMPOSE_IGNORE_ORPHANS= {cmd}'
 
+    def _prepared_config_stop_command(self, config: dict) -> str:
+        """Return a toolbar stop command with its configured environment."""
+        command = str(config.get('stop_command') or '').strip()
+        if not command:
+            return ''
+        if config.get('pass_ros_master_uri'):
+            master = self._current_master_uri()
+            if master:
+                command = f"ROS_MASTER_URI={self._sh_quote(master)} {command}"
+        if self._config_runs_on_host(config):
+            command = self._neutralize_compose_ignore(command)
+        return command
+
     def _dispatch_builtin_action(self, config: dict):
         action = str(config.get('action') or config.get('key') or '').strip().lower()
         button = self._get_button_widget(config.get('key', ''))
@@ -6266,7 +6279,6 @@ CMD ["bash"]
             return
         setup = str(config.get('setup') or '').strip()
         run_on_host = bool(config.get('host'))
-        stop_command = str(config.get('stop_command') or '').strip()
         log_command = str(config.get('log_command') or '').strip()
         pass_master = bool(config.get('pass_ros_master_uri'))
         label = self._config_label(config)
@@ -6275,9 +6287,10 @@ CMD ["bash"]
             self._set_config_visual(config, 'yellow', f'Stopping {label}...', False)
             def _done():
                 self._set_config_visual(config, 'red', f'Start {label}', True)
-            stop_cmd_for_running = stop_command if run_on_host else None
-            if run_on_host and stop_cmd_for_running:
-                stop_cmd_for_running = self._neutralize_compose_ignore(stop_cmd_for_running)
+            stop_cmd_for_running = (
+                self._prepared_config_stop_command(config)
+                if run_on_host else None
+            )
             self._stop_custom_tab(tab, on_stopped=_done, stop_command=stop_cmd_for_running)
             return
         if not run_on_host and not self._confirm_workspace_mismatch_warning(label):
@@ -6309,12 +6322,9 @@ CMD ["bash"]
                 composed = f'{setup} && {full_command}'
                 full_command = f"bash -lc {self._sh_quote(composed)}"
             full_command = _apply_env(full_command)
-            stop_command_full = _apply_env(stop_command) if stop_command else ''
             log_command_full = _apply_env(log_command) if log_command else ''
             if run_on_host:
                 full_command = self._neutralize_compose_ignore(full_command)
-                if stop_command_full:
-                    stop_command_full = self._neutralize_compose_ignore(stop_command_full)
                 if log_command_full:
                     log_command_full = self._neutralize_compose_ignore(log_command_full)
             self._log_info(f'running configured command ({key_label}): {full_command}')
@@ -9733,6 +9743,11 @@ CMD ["bash"]
 
     def _collect_exit_commands(self) -> list[list[str]]:
         commands: list[list[str]] = []
+        for key in reversed(self._config_button_order):
+            config = self._config_buttons.get(key, {})
+            stop_command = self._prepared_config_stop_command(config)
+            if stop_command:
+                commands.append(['bash', '-lc', stop_command])
         commands += self._collect_container_commands(self._sim_container_name, log_key='log')
         commands += self._stop_all_related(None)
         if not self._cleanup_done and self._cleanup_script_available():

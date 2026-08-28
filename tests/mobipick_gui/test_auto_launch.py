@@ -328,6 +328,7 @@ def test_host_config_command_does_not_start_roscore():
         _current_master_uri=lambda: '',
         _log_info=lambda message: events.append(('log', message)),
         _neutralize_compose_ignore=MainWindow._neutralize_compose_ignore,
+        _config_runs_on_host=MainWindow._config_runs_on_host,
         _focus_tab=lambda key: events.append(('focus', key)),
         _update_stop_custom_enabled=lambda: events.append('update_stop_custom'),
         _set_config_visual=lambda cfg, state, text, enabled: events.append(
@@ -338,6 +339,10 @@ def test_host_config_command_does_not_start_roscore():
         ),
     )
     harness._config_label = MethodType(MainWindow._config_label, harness)
+    harness._prepared_config_stop_command = MethodType(
+        MainWindow._prepared_config_stop_command,
+        harness,
+    )
     harness._run_config_command = MethodType(
         MainWindow._run_config_command,
         harness,
