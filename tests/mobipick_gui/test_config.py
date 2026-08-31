@@ -407,6 +407,45 @@ def test_launch_sequence_persists_recording_start_delay(tmp_path):
     assert plan['recording_start_delay_seconds'] == 3.25
 
 
+def test_legacy_launch_sequence_loads_in_legacy_mode(tmp_path):
+    launches = tmp_path / 'legacy.yaml'
+    launches.write_text(
+        'timeline:\n  - button: sim\n    at_seconds: 2\n',
+        encoding='utf-8',
+    )
+
+    plan = load_launch_sequence_plan(None, launches)
+
+    assert plan['mode'] == 'legacy'
+    assert plan['processes'] == []
+    assert plan['timeline'] == [{'button': 'sim', 'at_seconds': 2.0}]
+
+
+def test_advanced_launch_sequence_round_trip(tmp_path):
+    launches = tmp_path / 'advanced.yaml'
+    processes = [
+        {
+            'button': 'sim',
+            'duration_seconds': 20.0,
+            'depends_on': 'roscore',
+            'dependency_type': 'soft',
+            'ready_percentage': 30.0,
+        }
+    ]
+
+    save_launch_sequence_plan(
+        launches,
+        [],
+        ['sim'],
+        mode='advanced',
+        processes=processes,
+    )
+    plan = load_launch_sequence_plan(None, launches)
+
+    assert plan['mode'] == 'advanced'
+    assert plan['processes'] == processes
+
+
 def test_relative_launch_config_can_load_user_config_fallback(monkeypatch, tmp_path):
     launch_dir = tmp_path / 'launch_sequences'
     monkeypatch.setattr(config_module, 'LAUNCH_SEQUENCE_DIR', launch_dir)

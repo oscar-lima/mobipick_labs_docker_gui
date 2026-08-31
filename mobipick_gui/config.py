@@ -783,6 +783,59 @@ def load_launch_sequence_plan(
         normalized.sort(key=lambda e: (e['at_seconds'], e['button']))
         return normalized
 
+    def _normalize_processes(entries) -> list[dict]:
+        """Normalize dependency-aware auto-launch process definitions."""
+        if not isinstance(entries, list):
+            return []
+        normalized: list[dict] = []
+        for item in entries:
+            if not isinstance(item, dict):
+                continue
+            key = str(item.get('button') or item.get('key') or '').strip()
+            if not key:
+                continue
+            try:
+                duration = max(
+                    0.0,
+                    float(item.get('duration_seconds', item.get('duration', 0)) or 0),
+                )
+            except (TypeError, ValueError):
+                duration = 0.0
+            depends_on = str(
+                item.get('depends_on') or item.get('dependency') or ''
+            ).strip()
+            dependency_type = str(
+                item.get('dependency_type') or item.get('type') or 'hard'
+            ).strip().lower()
+            if dependency_type not in {'hard', 'soft'}:
+                dependency_type = 'hard'
+            try:
+                ready_percentage = min(
+                    100.0,
+                    max(
+                        0.0,
+                        float(
+                            item.get(
+                                'ready_percentage',
+                                item.get('soft_ready_percentage', 30),
+                            )
+                            or 0
+                        ),
+                    ),
+                )
+            except (TypeError, ValueError):
+                ready_percentage = 30.0
+            normalized.append(
+                {
+                    'button': key,
+                    'duration_seconds': duration,
+                    'depends_on': depends_on,
+                    'dependency_type': dependency_type,
+                    'ready_percentage': ready_percentage,
+                }
+            )
+        return normalized
+
     cfg = CONFIG.get('launch_sequence', {})
     button_defaults = {
         'label': cfg.get('label', 'Auto Launch') or 'Auto Launch',
@@ -860,6 +913,8 @@ def load_launch_sequence_plan(
         path = LAUNCH_SEQUENCE_DIR / 'launch_sequence.yaml'
 
     timeline: list[dict] = []
+    processes: list[dict] = []
+    mode = 'legacy'
     shutdown_order: list[str] = []
     button_cfg = dict(button_defaults)
     shutdown_skip: list[str] = []
@@ -869,6 +924,12 @@ def load_launch_sequence_plan(
                 data = yaml.safe_load(handle) or {}
             if isinstance(data, dict):
                 timeline = _normalize_timeline(data.get('timeline', []))
+                processes = _normalize_processes(
+                    data.get('processes', data.get('advanced', []))
+                )
+                raw_mode = str(data.get('mode') or '').strip().lower()
+                if processes and raw_mode != 'legacy':
+                    mode = 'advanced'
                 shutdown_section = data.get('shutdown') or {}
                 raw_order = []
                 if isinstance(shutdown_section, dict):
@@ -906,11 +967,16 @@ def load_launch_sequence_plan(
         print(f'Warning: failed to load auto launch configuration from {path}: {exc}', file=sys.stderr)
 
     if not shutdown_order:
-        shutdown_order = list(dict.fromkeys(entry['button'] for entry in reversed(timeline)))
+        source_entries = processes if mode == 'advanced' else timeline
+        shutdown_order = list(
+            dict.fromkeys(entry['button'] for entry in reversed(source_entries))
+        )
 
     return {
         'source': str(path),
         'timeline': timeline,
+        'mode': mode,
+        'processes': processes,
         'shutdown_order': shutdown_order,
         'shutdown_skip': shutdown_skip,
         'button': button_cfg,
@@ -939,16 +1005,22 @@ def save_launch_sequence_plan(
     shutdown_order: list[str],
     button: dict | None = None,
     recording_start_delay_seconds: float = 0.0,
+    *,
+    mode: str = 'legacy',
+    processes: list[dict] | None = None,
 ) -> Path:
     """Persist an auto-launch sequence to a user-writable YAML file."""
     destination = Path(path).expanduser()
     destination.parent.mkdir(parents=True, exist_ok=True)
     data: dict = {
+        'mode': 'advanced' if mode == 'advanced' else 'legacy',
         'timeline': timeline,
         'shutdown': {
             'order': shutdown_order,
         },
     }
+    if mode == 'advanced':
+        data['processes'] = list(processes or [])
     if button:
         data['button'] = {
             key: value

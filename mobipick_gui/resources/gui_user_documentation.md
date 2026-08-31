@@ -182,7 +182,30 @@ Controls**.
   Recording window appears.
 - The resolution selector chooses the screen size passed to the recorder.
 
-Recording starts after the Auto Launch timeline and window layout delay finish.
+Recording starts after the Auto Launch plan and window layout delay finish.
+
+The **Configure Auto Launch** window has two modes. **Legacy** preserves the
+fixed delays used by older profiles. **Advanced** gives every enabled process a
+readiness duration and an optional dependency. A hard dependency waits for the
+dependency's full duration. A soft dependency starts after the selected
+percentage of that duration (for example, 30%). If a dependency is already
+running when Auto Launch begins, it is treated as ready immediately. Advanced
+profiles are saved with `mode: advanced` and a `processes` list; existing YAML
+files without those fields continue to load in Legacy mode.
+
+To measure a readiness duration experimentally, stop the process first and
+click **Measure** in its Advanced row. The GUI launches that process immediately
+and enables **Ready**. Click **Ready** as soon as the process is usable; the
+elapsed time is rounded upward to one decimal place and copied into **Ready
+after**. For example, 5.65 seconds becomes 5.7 seconds. The measured process is
+left running so you can verify it normally.
+
+When you start Auto Launch, an always-on-top progress window shows the time
+remaining until the demo is ready. Legacy profiles use the latest configured
+start delay. Advanced profiles use the full dependency and readiness schedule,
+while processes that were already running add no wait. At completion the window
+shows **Demo ready** and disappears automatically after one second. Stopping
+Auto Launch dismisses it immediately.
 It stops when you uncheck **Record Auto Launch**, press **Stop Recording**, stop
 Auto Launch, stop Roscore, or exit the GUI.
 

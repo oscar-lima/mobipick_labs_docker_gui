@@ -1,9 +1,161 @@
+from pathlib import Path
 from types import MethodType, SimpleNamespace
 
 from PyQt5.QtCore import QProcess
+from PyQt5.QtWidgets import QApplication, QHeaderView
 
 import mobipick_gui.main_window as main_window_module
-from mobipick_gui.main_window import MainWindow
+from mobipick_gui.main_window import (
+    AutoLaunchProgressWindow,
+    AutoLaunchWizard,
+    MainWindow,
+    dependency_launch_schedule,
+)
+
+
+def test_auto_launch_progress_counts_down_and_hides_after_ready():
+    app = QApplication.instance() or QApplication([])
+    now = {'ns': 0}
+    progress = AutoLaunchProgressWindow()
+    progress._clock = lambda: now['ns']
+
+    progress.start_countdown(5.7)
+    assert progress.isVisible()
+    assert progress.status_label.text() == 'Demo ready in 5.7 s'
+
+    now['ns'] = 2_810_000_000
+    progress._update_progress()
+    assert progress.status_label.text() == 'Demo ready in 2.9 s'
+    assert 490 <= progress.progress_bar.value() <= 494
+
+    now['ns'] = 5_700_000_000
+    progress._update_progress()
+    assert progress.progress_bar.value() == 1000
+    assert progress.status_label.text() == 'Demo ready'
+    assert progress._hide_timer.isActive()
+    assert progress._hide_timer.interval() == 1000
+    progress.dismiss()
+    app.processEvents()
+
+
+def test_auto_launch_wizard_opens_advanced_profile():
+    app = QApplication.instance() or QApplication([])
+    launched = []
+    dialog = AutoLaunchWizard(
+        [('roscore', 'Roscore'), ('sim', 'Simulation')],
+        [],
+        Path('/tmp/auto_launch_test.yaml'),
+        processes=[
+            {
+                'button': 'sim',
+                'duration_seconds': 12,
+                'depends_on': 'roscore',
+                'dependency_type': 'soft',
+                'ready_percentage': 30,
+            }
+        ],
+        mode='advanced',
+        measurement_launcher=lambda key: launched.append(key) or True,
+    )
+
+    assert dialog.mode() == 'advanced'
+    assert dialog.processes() == [
+        {
+            'button': 'sim',
+            'duration_seconds': 12.0,
+            'depends_on': 'roscore',
+            'dependency_type': 'soft',
+            'ready_percentage': 30.0,
+        }
+    ]
+    assert (
+        dialog._advanced_table.horizontalHeader().sectionResizeMode(1)
+        == QHeaderView.Stretch
+    )
+    clock_values = iter([0, 5_650_000_000])
+    dialog._measurement_clock = lambda: next(clock_values)
+    sim_row = dialog._advanced_rows[1]
+    sim_row['measure'].click()
+    sim_row['ready'].click()
+    assert launched == ['sim']
+    assert sim_row['duration'].value() == 5.7
+    dialog.close()
+    app.processEvents()
+
+
+def test_dependency_schedule_supports_hard_and_soft_dependencies():
+    schedule = dependency_launch_schedule(
+        [
+            {'button': 'roscore', 'duration_seconds': 10},
+            {
+                'button': 'sim',
+                'duration_seconds': 20,
+                'depends_on': 'roscore',
+                'dependency_type': 'hard',
+            },
+            {
+                'button': 'rviz',
+                'duration_seconds': 4,
+                'depends_on': 'sim',
+                'dependency_type': 'soft',
+                'ready_percentage': 30,
+            },
+        ]
+    )
+
+    assert schedule['roscore'] == (0.0, 10.0, False)
+    assert schedule['sim'] == (10.0, 30.0, False)
+    assert schedule['rviz'] == (16.0, 20.0, False)
+
+
+def test_dependency_schedule_does_not_wait_for_running_process():
+    schedule = dependency_launch_schedule(
+        [
+            {'button': 'roscore', 'duration_seconds': 10},
+            {
+                'button': 'sim',
+                'duration_seconds': 20,
+                'depends_on': 'roscore',
+                'dependency_type': 'hard',
+            },
+        ],
+        {'roscore'},
+    )
+
+    assert schedule['roscore'] == (0.0, 0.0, True)
+    assert schedule['sim'] == (0.0, 20.0, False)
+
+
+def test_dependency_schedule_rejects_cycles():
+    processes = [
+        {'button': 'sim', 'depends_on': 'rviz'},
+        {'button': 'rviz', 'depends_on': 'sim'},
+    ]
+
+    try:
+        dependency_launch_schedule(processes)
+    except ValueError as exc:
+        assert 'cycle' in str(exc)
+    else:
+        raise AssertionError('cycle was accepted')
+
+
+def test_advanced_shutdown_does_not_stop_preexisting_processes():
+    harness = SimpleNamespace(
+        _launch_plan={
+            'mode': 'advanced',
+            'processes': [{'button': 'roscore'}],
+            'shutdown_order': ['roscore'],
+            'shutdown_skip': [],
+        },
+        _auto_launch_active_keys=[],
+    )
+    harness._auto_launch_shutdown_order = MethodType(
+        MainWindow._auto_launch_shutdown_order,
+        harness,
+    )
+
+    assert harness._auto_launch_shutdown_order() == []
 
 
 def _auto_launch_harness():

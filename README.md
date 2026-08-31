@@ -475,15 +475,31 @@ the active button profile.
 
 The saved format stores:
 
-- `timeline`: button key plus `at_seconds`;
+- `mode`: `legacy` or `advanced`;
+- `timeline`: legacy button key plus fixed `at_seconds`;
+- `processes`: advanced button definitions with `duration_seconds`, optional
+  `depends_on`, `dependency_type` (`hard` or `soft`), and
+  `ready_percentage`;
 - `shutdown.order`: reverse or custom stop order;
 - optional `shutdown.skip`;
 - optional button text/tooltip metadata;
 - `recording.start_delay_seconds`.
 
-`AutoLaunchWizard` edits the timeline and saves it to a writable per-user path
-when the source is a packaged resource. Auto Launch can also coordinate window
-layout replay and delayed recording startup.
+`AutoLaunchWizard` keeps the fixed-delay editor in its Legacy tab and provides
+a dependency-aware Advanced tab. Old YAML without `mode` or `processes` is
+loaded as Legacy. In Advanced mode, hard dependents wait for the dependency's
+full readiness duration, while soft dependents wait for the configured
+percentage. Processes already running at the start are ready immediately.
+Each Advanced row also has an interactive readiness measurement: **Measure**
+launches the process at time zero, and **Ready** records the user's confirmation
+into `duration_seconds`, rounded upward to one decimal place.
+Starting Auto Launch displays an always-on-top readiness progress window. Its
+duration is the latest legacy timeline offset or the effective advanced
+dependency schedule (including already-running process shortcuts). It reports
+completion for one second and then hides automatically.
+Profiles are saved to a writable per-user path when the source is a packaged
+resource. Auto Launch can also coordinate window layout replay and delayed
+recording startup.
 
 ## Recording and window layout
 

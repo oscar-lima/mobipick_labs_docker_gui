@@ -48,9 +48,11 @@ from PyQt5.QtWidgets import (
     QMainWindow,
     QMenu,
     QMessageBox,
+    QProgressBar,
     QPushButton,
     QScrollArea,
     QSizePolicy,
+    QSpinBox,
     QTabBar,
     QTableWidget,
     QTableWidgetItem,
@@ -125,6 +127,69 @@ def _text_width(font_metrics, text: str) -> int:
     if hasattr(font_metrics, 'horizontalAdvance'):
         return font_metrics.horizontalAdvance(text)
     return font_metrics.width(text)
+
+
+def dependency_launch_schedule(
+    processes: list[dict],
+    already_running: set[str] | None = None,
+) -> dict[str, tuple[float, float, bool]]:
+    """Return button -> (launch time, ready time, was already running)."""
+    by_key = {
+        str(entry.get('button')): entry
+        for entry in processes
+        if isinstance(entry, dict) and entry.get('button')
+    }
+    running = set(already_running or set())
+    schedule: dict[str, tuple[float, float, bool]] = {}
+    visiting: set[str] = set()
+
+    def _visit(key: str) -> tuple[float, float, bool]:
+        if key in schedule:
+            return schedule[key]
+        if key in visiting:
+            raise ValueError('Auto-launch dependencies contain a cycle')
+        visiting.add(key)
+        entry = by_key[key]
+        duration = max(0.0, float(entry.get('duration_seconds', 0) or 0))
+        if key in running:
+            result = (0.0, 0.0, True)
+        else:
+            dependency = str(entry.get('depends_on') or '').strip()
+            launch_at = 0.0
+            if dependency and dependency in by_key:
+                dependency_launch, dependency_ready, dependency_running = (
+                    _visit(dependency)
+                )
+                if not dependency_running:
+                    if entry.get('dependency_type') == 'soft':
+                        percentage = min(
+                            100.0,
+                            max(
+                                0.0,
+                                float(entry.get('ready_percentage', 30) or 0),
+                            ),
+                        )
+                        dependency_duration = max(
+                            0.0,
+                            float(
+                                by_key[dependency].get('duration_seconds', 0)
+                                or 0
+                            ),
+                        )
+                        launch_at = (
+                            dependency_launch
+                            + dependency_duration * percentage / 100.0
+                        )
+                    else:
+                        launch_at = dependency_ready
+            result = (launch_at, launch_at + duration, False)
+        visiting.remove(key)
+        schedule[key] = result
+        return result
+
+    for process_key in by_key:
+        _visit(process_key)
+    return schedule
 
 
 def _configure_expanding_toolbar_button(button: QPushButton) -> None:
@@ -1192,8 +1257,87 @@ class ButtonProfileDialog(QDialog):
         super().accept()
 
 
+class AutoLaunchProgressWindow(QWidget):
+    """Always-on-top countdown showing when an Auto Launch will be ready."""
+
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent, Qt.Tool | Qt.WindowStaysOnTopHint)
+        self.setWindowTitle('Auto Launch Progress')
+        self.setMinimumWidth(420)
+        self._total_seconds = 0.0
+        self._started_at_ns: int | None = None
+        self._clock = time.monotonic_ns
+
+        layout = QVBoxLayout(self)
+        self.status_label = QLabel('Preparing demo...')
+        self.status_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self.status_label)
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 1000)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setFormat('%p%')
+        layout.addWidget(self.progress_bar)
+
+        self._update_timer = QTimer(self)
+        self._update_timer.setInterval(100)
+        self._update_timer.timeout.connect(self._update_progress)
+        self._hide_timer = QTimer(self)
+        self._hide_timer.setSingleShot(True)
+        self._hide_timer.setInterval(1000)
+        self._hide_timer.timeout.connect(self.hide)
+
+    def start_countdown(self, total_seconds: float) -> None:
+        """Show and start a countdown for the configured readiness time."""
+        self._total_seconds = max(0.0, float(total_seconds or 0))
+        self._started_at_ns = self._clock()
+        self._hide_timer.stop()
+        self.progress_bar.setValue(0)
+        self.status_label.setText(
+            f'Demo ready in {self._total_seconds:.1f} s'
+        )
+        self.adjustSize()
+        screen = self.screen() or QGuiApplication.primaryScreen()
+        if screen:
+            available = screen.availableGeometry()
+            self.move(
+                available.x() + (available.width() - self.width()) // 2,
+                available.y() + 30,
+            )
+        self.show()
+        self.raise_()
+        self._update_progress()
+        if self._total_seconds > 0:
+            self._update_timer.start()
+
+    def dismiss(self) -> None:
+        """Stop the countdown and hide it immediately."""
+        self._update_timer.stop()
+        self._hide_timer.stop()
+        self._started_at_ns = None
+        self.hide()
+
+    def _update_progress(self) -> None:
+        if self._started_at_ns is None:
+            return
+        elapsed = max(0.0, (self._clock() - self._started_at_ns) / 1e9)
+        if self._total_seconds <= 0 or elapsed >= self._total_seconds:
+            self.progress_bar.setValue(1000)
+            self.status_label.setText('Demo ready')
+            self._update_timer.stop()
+            self._hide_timer.start()
+            return
+        fraction = min(1.0, elapsed / self._total_seconds)
+        self.progress_bar.setValue(int(fraction * 1000))
+        remaining_tenths = int(
+            (self._total_seconds - elapsed) * 10 + 0.999999999
+        )
+        self.status_label.setText(
+            f'Demo ready in {remaining_tenths / 10.0:.1f} s'
+        )
+
+
 class AutoLaunchWizard(QDialog):
-    """Collect and persist an auto-launch timeline."""
+    """Collect legacy or dependency-aware auto-launch settings."""
 
     def __init__(
         self,
@@ -1201,11 +1345,17 @@ class AutoLaunchWizard(QDialog):
         timeline: list[dict],
         save_path: Path,
         recording_start_delay_seconds: float = 0.0,
+        processes: list[dict] | None = None,
+        mode: str = 'legacy',
+        measurement_launcher: Callable[[str], bool] | None = None,
         parent: QWidget | None = None,
     ):
         super().__init__(parent)
         self.setWindowTitle('Configure Auto Launch')
         self._rows: list[tuple[str, QCheckBox, QDoubleSpinBox]] = []
+        self._advanced_rows: list[dict] = []
+        self._measurement_launcher = measurement_launcher
+        self._measurement_clock = time.monotonic_ns
 
         existing = {
             str(entry.get('button')): float(entry.get('at_seconds', 0.0))
@@ -1214,7 +1364,14 @@ class AutoLaunchWizard(QDialog):
         }
 
         root = QVBoxLayout(self)
-        root.addWidget(QLabel('Select launch steps and start delays.'))
+        self._tabs = QTabWidget()
+        root.addWidget(self._tabs)
+
+        legacy_tab = QWidget()
+        legacy_root = QVBoxLayout(legacy_tab)
+        legacy_root.addWidget(
+            QLabel('Legacy: start each process at a fixed time after Auto Launch.')
+        )
 
         for index, (key, label) in enumerate(buttons):
             row = QHBoxLayout()
@@ -1237,8 +1394,141 @@ class AutoLaunchWizard(QDialog):
             row.addWidget(checkbox, 1)
             row.addWidget(QLabel('Delay:'))
             row.addWidget(delay)
-            root.addLayout(row)
+            legacy_root.addLayout(row)
             self._rows.append((key, checkbox, delay))
+
+        legacy_root.addStretch(1)
+        self._tabs.addTab(legacy_tab, 'Legacy')
+
+        advanced_tab = QWidget()
+        advanced_root = QVBoxLayout(advanced_tab)
+        advanced_root.addWidget(
+            QLabel(
+                'Advanced: a process becomes ready after its duration. Hard '
+                'dependencies wait for 100%; soft dependencies wait for the '
+                'selected percentage.'
+            )
+        )
+        self._advanced_table = QTableWidget(len(buttons), 8)
+        self._advanced_table.setHorizontalHeaderLabels(
+            [
+                'Use',
+                'Process',
+                'Ready after',
+                'Test',
+                'Ready',
+                'Depends on',
+                'Type',
+                'Wait for',
+            ]
+        )
+        header = self._advanced_table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.Stretch)
+        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(5, QHeaderView.Stretch)
+        header.setSectionResizeMode(6, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(7, QHeaderView.ResizeToContents)
+        advanced_by_key = {
+            str(entry.get('button')): entry
+            for entry in (processes or [])
+            if isinstance(entry, dict) and entry.get('button')
+        }
+        selected_legacy = set(existing)
+        for row_index, (key, label) in enumerate(buttons):
+            current = advanced_by_key.get(key, {})
+            enabled = QCheckBox()
+            enabled.setChecked(
+                key in advanced_by_key
+                or (not advanced_by_key and key in selected_legacy)
+            )
+            self._advanced_table.setCellWidget(row_index, 0, enabled)
+            self._advanced_table.setItem(row_index, 1, QTableWidgetItem(label))
+            duration = QDoubleSpinBox()
+            duration.setRange(0.0, 3600.0)
+            duration.setDecimals(1)
+            duration.setSuffix(' s')
+            duration.setValue(float(current.get('duration_seconds', 10.0)))
+            self._advanced_table.setCellWidget(row_index, 2, duration)
+            measure = QPushButton('Measure')
+            measure.setToolTip(
+                'Launch this process now and begin measuring its startup time.'
+            )
+            self._advanced_table.setCellWidget(row_index, 3, measure)
+            ready = QPushButton('Ready')
+            ready.setToolTip(
+                'Click when the process is usable to fill in Ready after.'
+            )
+            ready.setEnabled(False)
+            self._advanced_table.setCellWidget(row_index, 4, ready)
+            dependency = QComboBox()
+            dependency.addItem('None', '')
+            for dependency_key, dependency_label in buttons:
+                if dependency_key != key:
+                    dependency.addItem(dependency_label, dependency_key)
+            dependency_index = dependency.findData(current.get('depends_on', ''))
+            dependency.setCurrentIndex(max(0, dependency_index))
+            self._advanced_table.setCellWidget(row_index, 5, dependency)
+            dependency_type = QComboBox()
+            dependency_type.addItem('Hard', 'hard')
+            dependency_type.addItem('Soft', 'soft')
+            type_index = dependency_type.findData(
+                current.get('dependency_type', 'hard')
+            )
+            dependency_type.setCurrentIndex(max(0, type_index))
+            self._advanced_table.setCellWidget(row_index, 6, dependency_type)
+            percentage = QSpinBox()
+            percentage.setRange(0, 100)
+            percentage.setSuffix(' %')
+            percentage.setValue(int(current.get('ready_percentage', 30)))
+            self._advanced_table.setCellWidget(row_index, 7, percentage)
+            self._advanced_rows.append(
+                {
+                    'key': key,
+                    'enabled': enabled,
+                    'duration': duration,
+                    'measure': measure,
+                    'ready': ready,
+                    'measurement_started_at': None,
+                    'dependency': dependency,
+                    'dependency_type': dependency_type,
+                    'percentage': percentage,
+                }
+            )
+
+            def _update_row(
+                _value=None,
+                *,
+                row=self._advanced_rows[-1],
+            ):
+                row_enabled = row['enabled'].isChecked()
+                has_dependency = bool(row['dependency'].currentData())
+                is_soft = row['dependency_type'].currentData() == 'soft'
+                for name in ('duration', 'measure', 'dependency'):
+                    row[name].setEnabled(row_enabled)
+                row['dependency_type'].setEnabled(row_enabled and has_dependency)
+                row['percentage'].setEnabled(
+                    row_enabled and has_dependency and is_soft
+                )
+
+            enabled.toggled.connect(_update_row)
+            dependency.currentIndexChanged.connect(_update_row)
+            dependency_type.currentIndexChanged.connect(_update_row)
+            measure.clicked.connect(
+                lambda _checked=False, row=self._advanced_rows[-1]:
+                self._start_ready_measurement(row)
+            )
+            ready.clicked.connect(
+                lambda _checked=False, row=self._advanced_rows[-1]:
+                self._finish_ready_measurement(row)
+            )
+            _update_row()
+        advanced_root.addWidget(self._advanced_table)
+        self._tabs.addTab(advanced_tab, 'Advanced')
+        self._tabs.setCurrentIndex(1 if mode == 'advanced' else 0)
+        self.resize(900, 560)
 
         recording_row = QHBoxLayout()
         recording_row.addWidget(QLabel('Extra recording start delay:'), 1)
@@ -1280,14 +1570,93 @@ class AutoLaunchWizard(QDialog):
         """Return extra delay before recording starts after the launch timeline."""
         return max(0.0, float(self._recording_delay.value()))
 
+    def _start_ready_measurement(self, row: dict) -> None:
+        """Launch one process and begin its interactive readiness timer."""
+        if not self._measurement_launcher:
+            QMessageBox.warning(
+                self,
+                'Measure Ready Time',
+                'Process launching is unavailable in this window.',
+            )
+            return
+        row['measurement_started_at'] = self._measurement_clock()
+        if not self._measurement_launcher(row['key']):
+            row['measurement_started_at'] = None
+            return
+        row['measure'].setEnabled(False)
+        row['ready'].setEnabled(True)
+
+    def _finish_ready_measurement(self, row: dict) -> None:
+        """Store elapsed launch time, rounded upward to one decimal place."""
+        started_at = row.get('measurement_started_at')
+        if started_at is None:
+            return
+        elapsed_ns = max(0, self._measurement_clock() - started_at)
+        tenth_seconds = (
+            elapsed_ns + 100_000_000 - 1
+        ) // 100_000_000
+        measured_seconds = float(tenth_seconds) / 10.0
+        row['duration'].setValue(measured_seconds)
+        row['measurement_started_at'] = None
+        row['ready'].setEnabled(False)
+        row['measure'].setEnabled(row['enabled'].isChecked())
+
+    def mode(self) -> str:
+        """Return the selected launch configuration mode."""
+        return 'advanced' if self._tabs.currentIndex() == 1 else 'legacy'
+
+    def processes(self) -> list[dict]:
+        """Return enabled dependency-aware process definitions."""
+        result = []
+        for row in self._advanced_rows:
+            if not row['enabled'].isChecked():
+                continue
+            result.append(
+                {
+                    'button': row['key'],
+                    'duration_seconds': row['duration'].value(),
+                    'depends_on': str(row['dependency'].currentData() or ''),
+                    'dependency_type': str(
+                        row['dependency_type'].currentData() or 'hard'
+                    ),
+                    'ready_percentage': float(row['percentage'].value()),
+                }
+            )
+        return result
+
+    def _advanced_validation_error(self) -> str:
+        processes = self.processes()
+        selected = {entry['button'] for entry in processes}
+        dependencies = {
+            entry['button']: entry['depends_on'] for entry in processes
+        }
+        for key, dependency in dependencies.items():
+            if dependency and dependency not in selected:
+                return f'Process "{key}" depends on a process that is not enabled.'
+        for start in dependencies:
+            seen = set()
+            key = start
+            while key:
+                if key in seen:
+                    return 'Dependencies contain a cycle. Remove one dependency.'
+                seen.add(key)
+                key = dependencies.get(key, '')
+        return ''
+
     def accept(self):
-        if not self.timeline():
+        entries = self.processes() if self.mode() == 'advanced' else self.timeline()
+        if not entries:
             QMessageBox.warning(
                 self,
                 'Auto Launch',
                 'Select at least one launch step before saving.',
             )
             return
+        if self.mode() == 'advanced':
+            error = self._advanced_validation_error()
+            if error:
+                QMessageBox.warning(self, 'Auto Launch', error)
+                return
         super().accept()
 
 
@@ -2205,6 +2574,9 @@ class MainWindow(QMainWindow):
         self._auto_launch_stopping = False
         self._auto_launch_timers: list[QTimer] = []
         self._auto_launch_active_keys: list[str] = []
+        self._auto_launch_ready_keys: set[str] = set()
+        self._auto_launch_schedule: dict[str, tuple[float, float, bool]] = {}
+        self._auto_launch_progress: AutoLaunchProgressWindow | None = None
         self._auto_launch_run_count = 0
         self._window_layout_cfg = CONFIG.get('window_layout', {})
         raw_auto_apply = self._window_layout_cfg.get('auto_apply', True)
@@ -7500,6 +7872,15 @@ CMD ["bash"]
 
     def _window_layout_delay_from_timeline(self) -> int:
         try:
+            if self._launch_plan.get('mode') == 'advanced':
+                schedule = dependency_launch_schedule(
+                    self._launch_plan.get('processes', [])
+                )
+                max_ready = max(
+                    (ready_at for _, ready_at, _ in schedule.values()),
+                    default=0.0,
+                )
+                return int(max_ready * 1000) + (4000 if max_ready > 0 else 0)
             timeline = self._launch_plan.get('timeline', []) if isinstance(self._launch_plan, dict) else []
             max_at = 0.0
             for entry in timeline:
@@ -8262,12 +8643,26 @@ CMD ["bash"]
     def _recording_start_delay_ms(self) -> int:
         timeline = self._launch_plan.get('timeline') if isinstance(self._launch_plan, dict) else []
         max_at_ms = 0
-        for entry in timeline:
-            try:
-                at_seconds = float(entry.get('at_seconds', 0) or 0)
-            except Exception:
-                continue
-            max_at_ms = max(max_at_ms, int(max(0.0, at_seconds) * 1000))
+        if self._launch_plan.get('mode') == 'advanced':
+            schedule = getattr(self, '_auto_launch_schedule', None) or (
+                dependency_launch_schedule(
+                    self._launch_plan.get('processes', [])
+                )
+            )
+            max_at_ms = int(
+                max(
+                    (ready_at for _, ready_at, _ in schedule.values()),
+                    default=0.0,
+                )
+                * 1000
+            )
+        else:
+            for entry in timeline:
+                try:
+                    at_seconds = float(entry.get('at_seconds', 0) or 0)
+                except Exception:
+                    continue
+                max_at_ms = max(max_at_ms, int(max(0.0, at_seconds) * 1000))
         layout_delay = max(0, int(self._window_layout_delay_ms))
         try:
             extra_delay_ms = int(
@@ -8599,8 +8994,12 @@ CMD ["bash"]
 
     def _start_auto_launch_stack(self):
         self._auto_launch_stopping = False
-        timeline = self._launch_plan.get('timeline') if isinstance(self._launch_plan, dict) else []
-        if not timeline:
+        plan = self._launch_plan if isinstance(self._launch_plan, dict) else {}
+        advanced = plan.get('mode') == 'advanced'
+        timeline = plan.get('timeline') or []
+        processes = plan.get('processes') or []
+        launch_entries = processes if advanced else timeline
+        if not launch_entries:
             message = QMessageBox(self)
             message.setIcon(QMessageBox.Information)
             message.setWindowTitle('Auto Launch')
@@ -8643,12 +9042,30 @@ CMD ["bash"]
 
         self._cancel_auto_launch_timers()
         self._auto_launch_running = True
+        self._auto_launch_ready_keys.clear()
         self._auto_launch_active_keys = [
-            entry.get('button') for entry in timeline if isinstance(entry, dict) and entry.get('button')
+            entry.get('button')
+            for entry in launch_entries
+            if isinstance(entry, dict) and entry.get('button')
         ]
         source = self._launch_plan.get('source', 'configuration')
-        self._log_info(f'starting auto launch timeline from {source}')
+        launch_kind = 'dependency plan' if advanced else 'timeline'
+        self._log_info(f'starting auto launch {launch_kind} from {source}')
         self.set_auto_launch_visual('green', self._auto_launch_stop_text(), True)
+        if advanced:
+            self._start_dependency_launch(processes)
+            self._schedule_recording_after_launch()
+            return
+        total_seconds = 0.0
+        for entry in timeline:
+            try:
+                total_seconds = max(
+                    total_seconds,
+                    max(0.0, float(entry.get('at_seconds', 0) or 0)),
+                )
+            except (AttributeError, TypeError, ValueError):
+                continue
+        self._show_auto_launch_progress(total_seconds)
         for entry in timeline:
             key = entry.get('button') if isinstance(entry, dict) else None
             if not key:
@@ -8663,6 +9080,80 @@ CMD ["bash"]
             else:
                 self._schedule_auto_launch_step(key, delay_ms)
         self._schedule_recording_after_launch()
+
+    def _start_dependency_launch(self, processes: list[dict]) -> None:
+        """Start processes according to readiness-based dependencies."""
+        running = {
+            str(entry.get('button'))
+            for entry in processes
+            if isinstance(entry, dict)
+            and entry.get('button')
+            and self._is_button_running(str(entry.get('button')))
+        }
+        try:
+            schedule = dependency_launch_schedule(processes, running)
+        except (TypeError, ValueError) as exc:
+            self._log_info(f'auto launch: invalid dependency plan ({exc})')
+            self._stop_auto_launch_stack()
+            return
+        self._auto_launch_schedule = schedule
+        self._auto_launch_active_keys = [
+            key for key, (_, _, was_running) in schedule.items() if not was_running
+        ]
+        max_ready = max(
+            (ready_at for _, ready_at, _ in schedule.values()),
+            default=0.0,
+        )
+        self._show_auto_launch_progress(max_ready)
+        raw_layout_delay = self._window_layout_cfg.get('apply_delay_ms', 'auto')
+        if str(raw_layout_delay).strip().lower() in {'', 'auto'}:
+            self._window_layout_delay_ms = int(max_ready * 1000)
+            if max_ready > 0:
+                self._window_layout_delay_ms += 4000
+            if self._window_layout_manager:
+                self._window_layout_manager.set_apply_delay_ms(
+                    self._window_layout_delay_ms
+                )
+                self._window_layout_manager.reset_auto_apply()
+        for key, (launch_at, ready_at, was_running) in schedule.items():
+            if was_running:
+                self._auto_launch_ready_keys.add(key)
+                self._log_info(
+                    f'auto launch: {key} is already running; treating it as ready'
+                )
+                continue
+            launch_ms = int(max(0.0, launch_at) * 1000)
+            if launch_ms:
+                self._schedule_auto_launch_step(key, launch_ms)
+            else:
+                self._trigger_auto_launch_step(key, target_running=True)
+            ready_ms = int(max(0.0, ready_at) * 1000)
+            self._schedule_auto_launch_ready(key, ready_ms)
+
+    def _schedule_auto_launch_ready(self, key: str, delay_ms: int) -> None:
+        """Flag a process as ready when its configured startup time elapses."""
+        timer = QTimer(self)
+        timer.setSingleShot(True)
+
+        def _ready():
+            try:
+                if self._auto_launch_running:
+                    self._auto_launch_ready_keys.add(key)
+                    self._log_info(f'auto launch: {key} is ready')
+            finally:
+                if timer in self._auto_launch_timers:
+                    self._auto_launch_timers.remove(timer)
+                timer.deleteLater()
+
+        timer.timeout.connect(_ready)
+        self._auto_launch_timers.append(timer)
+        timer.start(max(0, int(delay_ms)))
+
+    def _show_auto_launch_progress(self, total_seconds: float) -> None:
+        """Show the always-on-top readiness countdown."""
+        if self._auto_launch_progress is None:
+            self._auto_launch_progress = AutoLaunchProgressWindow(self)
+        self._auto_launch_progress.start_countdown(total_seconds)
 
     def _auto_launch_wizard_buttons(self) -> list[tuple[str, str]]:
         buttons: list[tuple[str, str]] = [('roscore', 'Roscore')]
@@ -8686,13 +9177,20 @@ CMD ["bash"]
             self._launch_plan.get('timeline', []) if isinstance(self._launch_plan, dict) else [],
             save_path,
             recording_start_delay_seconds,
+            self._launch_plan.get('processes', []) if isinstance(self._launch_plan, dict) else [],
+            self._launch_plan.get('mode', 'legacy') if isinstance(self._launch_plan, dict) else 'legacy',
+            self._start_auto_launch_measurement,
             self,
         )
         if dialog.exec_() != QDialog.Accepted:
             return
 
         timeline = dialog.timeline()
-        shutdown_order = [entry['button'] for entry in reversed(timeline)]
+        processes = dialog.processes()
+        selected_entries = processes if dialog.mode() == 'advanced' else timeline
+        shutdown_order = [
+            entry['button'] for entry in reversed(selected_entries)
+        ]
         recording_delay = dialog.recording_start_delay_seconds()
         try:
             saved_path = save_launch_sequence_plan(
@@ -8701,6 +9199,8 @@ CMD ["bash"]
                 shutdown_order,
                 self._auto_launch_button_cfg(),
                 recording_delay,
+                mode=dialog.mode(),
+                processes=processes,
             )
         except OSError as exc:
             QMessageBox.warning(
@@ -8718,6 +9218,33 @@ CMD ["bash"]
         self.set_auto_launch_visual('red', self._auto_launch_start_text(), True)
         self._log_info(f'saved auto launch configuration to {saved_path}')
 
+    def _start_auto_launch_measurement(self, key: str) -> bool:
+        """Launch a process immediately for interactive readiness timing."""
+        if self._auto_launch_running:
+            QMessageBox.warning(
+                self,
+                'Measure Ready Time',
+                'Stop Auto Launch before measuring an individual process.',
+            )
+            return False
+        if self._toggle_states.get(key) == 'yellow':
+            QMessageBox.warning(
+                self,
+                'Measure Ready Time',
+                f'{key} is busy. Wait for it to finish changing state.',
+            )
+            return False
+        if self._is_button_running(key):
+            QMessageBox.warning(
+                self,
+                'Measure Ready Time',
+                f'{key} is already running. Stop it before measuring again.',
+            )
+            return False
+        self._log_info(f'auto launch measurement: starting {key} at time 0')
+        self._ensure_button_state(key, True)
+        return True
+
     def _stop_auto_launch_stack(
         self,
         *,
@@ -8726,6 +9253,9 @@ CMD ["bash"]
         if self._auto_launch_stopping:
             return
         self._auto_launch_stopping = True
+        progress = getattr(self, '_auto_launch_progress', None)
+        if progress is not None:
+            progress.dismiss()
         self._cancel_auto_launch_timers()
         self._cancel_recording_schedule()
         order = self._auto_launch_shutdown_order()
@@ -8753,6 +9283,10 @@ CMD ["bash"]
         self._auto_launch_running = False
         self._auto_launch_stopping = False
         self._auto_launch_active_keys.clear()
+        if hasattr(self, '_auto_launch_ready_keys'):
+            self._auto_launch_ready_keys.clear()
+        if hasattr(self, '_auto_launch_schedule'):
+            self._auto_launch_schedule.clear()
         self.set_auto_launch_visual('red', self._auto_launch_start_text(), True)
 
     def _flush_ui_events(self):
@@ -8767,14 +9301,23 @@ CMD ["bash"]
             if isinstance(raw, list):
                 plan_order = [str(item).strip() for item in raw if str(item).strip()]
             if not plan_order:
+                entries = (
+                    self._launch_plan.get('processes', [])
+                    if self._launch_plan.get('mode') == 'advanced'
+                    else self._launch_plan.get('timeline', [])
+                )
                 plan_order = [
                     entry.get('button')
-                    for entry in self._launch_plan.get('timeline', [])
+                    for entry in entries
                     if isinstance(entry, dict) and entry.get('button')
                 ]
         skip = set(self._launch_plan.get('shutdown_skip', [])) if isinstance(self._launch_plan, dict) else set()
         plan_order = [entry for entry in plan_order if entry and entry not in skip]
-        if not self._auto_launch_active_keys:
+        advanced = (
+            isinstance(self._launch_plan, dict)
+            and self._launch_plan.get('mode') == 'advanced'
+        )
+        if not self._auto_launch_active_keys and not advanced:
             return plan_order
         ordered = [key for key in plan_order if key in self._auto_launch_active_keys and key not in skip]
         remaining = [
