@@ -1258,15 +1258,16 @@ class ButtonProfileDialog(QDialog):
 
 
 class AutoLaunchProgressWindow(QWidget):
-    """Always-on-top countdown showing when an Auto Launch will be ready."""
+    """Centered countdown and per-process Auto Launch progress display."""
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent, Qt.Tool | Qt.WindowStaysOnTopHint)
         self.setWindowTitle('Auto Launch Progress')
-        self.setMinimumWidth(420)
+        self.setMinimumWidth(520)
         self._total_seconds = 0.0
         self._started_at_ns: int | None = None
         self._clock = time.monotonic_ns
+        self._process_rows: list[dict] = []
 
         layout = QVBoxLayout(self)
         self.status_label = QLabel('Preparing demo...')
@@ -1278,36 +1279,128 @@ class AutoLaunchProgressWindow(QWidget):
         self.progress_bar.setFormat('%p%')
         layout.addWidget(self.progress_bar)
 
+        self.processes_widget = QWidget()
+        self.processes_layout = QVBoxLayout(self.processes_widget)
+        self.processes_layout.setContentsMargins(0, 6, 0, 0)
+        self.processes_layout.setSpacing(4)
+        layout.addWidget(self.processes_widget)
+        self.processes_widget.hide()
+
         self._update_timer = QTimer(self)
-        self._update_timer.setInterval(100)
+        self._update_timer.setInterval(250)
         self._update_timer.timeout.connect(self._update_progress)
         self._hide_timer = QTimer(self)
         self._hide_timer.setSingleShot(True)
         self._hide_timer.setInterval(1000)
         self._hide_timer.timeout.connect(self.hide)
 
-    def start_countdown(self, total_seconds: float) -> None:
+    def start_countdown(
+        self,
+        total_seconds: float,
+        processes: list[dict] | None = None,
+    ) -> None:
         """Show and start a countdown for the configured readiness time."""
         self._total_seconds = max(0.0, float(total_seconds or 0))
         self._started_at_ns = self._clock()
         self._hide_timer.stop()
         self.progress_bar.setValue(0)
+        self._set_process_rows(processes or [])
         self.status_label.setText(
             f'Demo ready in {self._total_seconds:.1f} s'
         )
         self.adjustSize()
-        screen = self.screen() or QGuiApplication.primaryScreen()
-        if screen:
-            available = screen.availableGeometry()
+        parent = self.parentWidget()
+        if parent is not None and parent.isVisible():
+            bounds = parent.frameGeometry()
+        else:
+            screen = self.screen() or QGuiApplication.primaryScreen()
+            bounds = screen.availableGeometry() if screen else None
+        if bounds is not None:
             self.move(
-                available.x() + (available.width() - self.width()) // 2,
-                available.y() + 30,
+                bounds.center().x() - self.width() // 2,
+                bounds.center().y() - self.height() // 2,
             )
         self.show()
         self.raise_()
         self._update_progress()
         if self._total_seconds > 0:
             self._update_timer.start()
+
+    def _set_process_rows(self, processes: list[dict]) -> None:
+        """Rebuild the process bars for the current launch schedule."""
+        while self.processes_layout.count():
+            item = self.processes_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        self._process_rows.clear()
+        for process in processes:
+            if not isinstance(process, dict):
+                continue
+            try:
+                launch_at = max(0.0, float(process.get('launch_at', 0) or 0))
+                ready_at = max(
+                    launch_at,
+                    float(process.get('ready_at', launch_at) or 0),
+                )
+            except (TypeError, ValueError):
+                continue
+            row_widget = QWidget()
+            row_layout = QHBoxLayout(row_widget)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            row_layout.setSpacing(8)
+            name = QLabel(
+                str(process.get('label') or process.get('button') or 'Process')
+            )
+            name.setMinimumWidth(120)
+            name.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            bar = QProgressBar()
+            bar.setRange(0, 1000)
+            bar.setValue(0)
+            row_layout.addWidget(name)
+            row_layout.addWidget(bar, 1)
+            self.processes_layout.addWidget(row_widget)
+            self._process_rows.append(
+                {
+                    'bar': bar,
+                    'launch_at': launch_at,
+                    'ready_at': ready_at,
+                    'already_running': bool(process.get('already_running')),
+                    'milestone': ready_at <= launch_at,
+                    'pending_text': str(
+                        process.get('pending_text') or 'Launches in'
+                    ),
+                    'complete_text': str(
+                        process.get('complete_text') or 'Launched'
+                    ),
+                }
+            )
+        self.processes_widget.setVisible(bool(self._process_rows))
+
+    def _update_process_rows(self, elapsed: float) -> None:
+        """Update each process bar from its launch and readiness timestamps."""
+        for row in self._process_rows:
+            bar = row['bar']
+            launch_at = row['launch_at']
+            ready_at = row['ready_at']
+            if row['already_running']:
+                bar.setValue(1000)
+                bar.setFormat('Already running')
+            elif elapsed < launch_at:
+                bar.setValue(0)
+                bar.setFormat(
+                    f'{row["pending_text"]} {launch_at - elapsed:.1f} s'
+                )
+            elif row['milestone']:
+                bar.setValue(1000)
+                bar.setFormat(row['complete_text'])
+            elif elapsed >= ready_at:
+                bar.setValue(1000)
+                bar.setFormat('Ready')
+            else:
+                fraction = (elapsed - launch_at) / (ready_at - launch_at)
+                bar.setValue(int(min(1.0, fraction) * 1000))
+                bar.setFormat(f'Ready in {ready_at - elapsed:.1f} s')
 
     def dismiss(self) -> None:
         """Stop the countdown and hide it immediately."""
@@ -1320,6 +1413,7 @@ class AutoLaunchProgressWindow(QWidget):
         if self._started_at_ns is None:
             return
         elapsed = max(0.0, (self._clock() - self._started_at_ns) / 1e9)
+        self._update_process_rows(elapsed)
         if self._total_seconds <= 0 or elapsed >= self._total_seconds:
             self.progress_bar.setValue(1000)
             self.status_label.setText('Demo ready')
@@ -7880,7 +7974,7 @@ CMD ["bash"]
                     (ready_at for _, ready_at, _ in schedule.values()),
                     default=0.0,
                 )
-                return int(max_ready * 1000) + (4000 if max_ready > 0 else 0)
+                return int(max_ready * 1000) + 1000
             timeline = self._launch_plan.get('timeline', []) if isinstance(self._launch_plan, dict) else []
             max_at = 0.0
             for entry in timeline:
@@ -7888,9 +7982,7 @@ CMD ["bash"]
                     max_at = max(max_at, float(entry.get('at_seconds', 0) or 0))
                 except Exception:
                     continue
-            if max_at <= 0:
-                return 0
-            return int(max_at * 1000) + 4000
+            return int(max_at * 1000) + 1000
         except Exception:
             return 0
 
@@ -9065,7 +9157,30 @@ CMD ["bash"]
                 )
             except (AttributeError, TypeError, ValueError):
                 continue
-        self._show_auto_launch_progress(total_seconds)
+        labels = dict(self._auto_launch_wizard_buttons())
+        progress_processes = []
+        for entry in timeline:
+            if not isinstance(entry, dict) or not entry.get('button'):
+                continue
+            try:
+                launch_at = max(0.0, float(entry.get('at_seconds', 0) or 0))
+            except (TypeError, ValueError):
+                launch_at = 0.0
+            key = str(entry['button'])
+            progress_processes.append(
+                {
+                    'button': key,
+                    'label': labels.get(key, key),
+                    'launch_at': launch_at,
+                    'ready_at': launch_at,
+                }
+            )
+        progress_total = self._add_window_layout_progress(
+            progress_processes,
+            total_seconds,
+        )
+        self._show_auto_launch_progress(progress_total, progress_processes)
+        self._schedule_auto_launch_layout_apply()
         for entry in timeline:
             key = entry.get('button') if isinstance(entry, dict) else None
             if not key:
@@ -9104,17 +9219,31 @@ CMD ["bash"]
             (ready_at for _, ready_at, _ in schedule.values()),
             default=0.0,
         )
-        self._show_auto_launch_progress(max_ready)
+        labels = dict(self._auto_launch_wizard_buttons())
+        progress_processes = [
+            {
+                'button': key,
+                'label': labels.get(key, key),
+                'launch_at': launch_at,
+                'ready_at': ready_at,
+                'already_running': was_running,
+            }
+            for key, (launch_at, ready_at, was_running) in schedule.items()
+        ]
         raw_layout_delay = self._window_layout_cfg.get('apply_delay_ms', 'auto')
         if str(raw_layout_delay).strip().lower() in {'', 'auto'}:
-            self._window_layout_delay_ms = int(max_ready * 1000)
-            if max_ready > 0:
-                self._window_layout_delay_ms += 4000
+            self._window_layout_delay_ms = int(max_ready * 1000) + 1000
             if self._window_layout_manager:
                 self._window_layout_manager.set_apply_delay_ms(
                     self._window_layout_delay_ms
                 )
                 self._window_layout_manager.reset_auto_apply()
+        progress_total = self._add_window_layout_progress(
+            progress_processes,
+            max_ready,
+        )
+        self._show_auto_launch_progress(progress_total, progress_processes)
+        self._schedule_auto_launch_layout_apply()
         for key, (launch_at, ready_at, was_running) in schedule.items():
             if was_running:
                 self._auto_launch_ready_keys.add(key)
@@ -9149,11 +9278,66 @@ CMD ["bash"]
         self._auto_launch_timers.append(timer)
         timer.start(max(0, int(delay_ms)))
 
-    def _show_auto_launch_progress(self, total_seconds: float) -> None:
+    def _add_window_layout_progress(
+        self,
+        processes: list[dict],
+        total_seconds: float,
+    ) -> float:
+        """Add the saved-layout milestone and return the full display time."""
+        manager = self._window_layout_manager
+        if not (
+            self._window_layout_auto_apply
+            and manager
+            and manager.has_saved_layout()
+        ):
+            return total_seconds
+        layout_at = max(0.0, self._window_layout_delay_ms / 1000.0)
+        processes.append(
+            {
+                'label': 'Arrange windows',
+                'launch_at': layout_at,
+                'ready_at': layout_at,
+                'pending_text': 'Runs in',
+                'complete_text': 'Rearranged',
+            }
+        )
+        return max(total_seconds, layout_at)
+
+    def _schedule_auto_launch_layout_apply(self) -> None:
+        """Apply the saved window layout at its exact Auto Launch deadline."""
+        manager = self._window_layout_manager
+        if not (
+            self._window_layout_auto_apply
+            and manager
+            and manager.has_saved_layout()
+        ):
+            return
+        timer = QTimer(self)
+        timer.setSingleShot(True)
+        timer.setTimerType(Qt.PreciseTimer)
+
+        def _apply_layout():
+            try:
+                if self._auto_launch_running:
+                    manager.maybe_apply_saved_layout()
+            finally:
+                if timer in self._auto_launch_timers:
+                    self._auto_launch_timers.remove(timer)
+                timer.deleteLater()
+
+        timer.timeout.connect(_apply_layout)
+        self._auto_launch_timers.append(timer)
+        timer.start(max(0, int(self._window_layout_delay_ms)))
+
+    def _show_auto_launch_progress(
+        self,
+        total_seconds: float,
+        processes: list[dict] | None = None,
+    ) -> None:
         """Show the always-on-top readiness countdown."""
         if self._auto_launch_progress is None:
             self._auto_launch_progress = AutoLaunchProgressWindow(self)
-        self._auto_launch_progress.start_countdown(total_seconds)
+        self._auto_launch_progress.start_countdown(total_seconds, processes)
 
     def _auto_launch_wizard_buttons(self) -> list[tuple[str, str]]:
         buttons: list[tuple[str, str]] = [('roscore', 'Roscore')]

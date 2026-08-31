@@ -200,12 +200,17 @@ elapsed time is rounded upward to one decimal place and copied into **Ready
 after**. For example, 5.65 seconds becomes 5.7 seconds. The measured process is
 left running so you can verify it normally.
 
-When you start Auto Launch, an always-on-top progress window shows the time
-remaining until the demo is ready. Legacy profiles use the latest configured
-start delay. Advanced profiles use the full dependency and readiness schedule,
-while processes that were already running add no wait. At completion the window
-shows **Demo ready** and disappears automatically after one second. Stopping
-Auto Launch dismisses it immediately.
+When you start Auto Launch, an always-on-top progress window opens in the center
+of the main window and shows the time remaining until the demo is ready. A
+separate bar for every configured process shows whether it is waiting to launch,
+starting, ready, or was already running. Legacy profiles show their configured
+launch times as milestones. Advanced profiles use the full dependency and
+readiness schedule, while processes that were already running add no wait. At
+completion the window shows **Demo ready** and disappears automatically after
+one second. When automatic window layout replay is enabled and a saved layout
+exists, an **Arrange windows** bar shows the remaining wait; the default
+`apply_delay_ms: auto` runs `wmctrl` one second after all processes are ready.
+Stopping Auto Launch dismisses the progress window immediately.
 It stops when you uncheck **Record Auto Launch**, press **Stop Recording**, stop
 Auto Launch, stop Roscore, or exit the GUI.
 

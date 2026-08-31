@@ -26,3 +26,11 @@ def test_record_baseline_skips_missing_wmctrl(tmp_path, monkeypatch):
 
     assert warnings == []
     assert manager._auto_apply_done is True
+
+
+def test_has_saved_layout_requires_window_entries(tmp_path):
+    manager = WindowLayoutManager(tmp_path / 'window_layout.yaml')
+
+    assert manager.has_saved_layout() is False
+    manager._layout = {'windows': [{'title': 'RViz'}]}
+    assert manager.has_saved_layout() is True

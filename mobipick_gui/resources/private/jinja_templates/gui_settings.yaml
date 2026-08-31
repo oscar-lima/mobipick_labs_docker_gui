@@ -21,7 +21,7 @@ ros:
 window_layout:
   state_file: "~/.config/mobipick-labs-docker-gui/window_layout.yaml"
   auto_apply: true                                      # when true, apply saved sizes/positions to matching windows after they appear
-  apply_delay_ms: "auto"                                # wait this long before applying layout; "auto" waits until the last auto-launch timeline entry finishes
+  apply_delay_ms: "auto"                                # "auto" applies the layout 1 second after all auto-launch processes are ready
 
 recording:
   enabled_by_default: false             # leave "Record screen" unchecked on startup

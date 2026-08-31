@@ -100,6 +100,15 @@ class WindowLayoutManager:
         """Update the wait time used before auto-applying saved layouts."""
         self._apply_delay_ms = max(0, int(delay_ms or 0))
 
+    def has_saved_layout(self) -> bool:
+        """Return whether a saved layout contains windows to rearrange."""
+        windows = (
+            self._layout.get('windows')
+            if isinstance(self._layout, dict)
+            else []
+        )
+        return bool(windows)
+
     def capture_layout(self, exclude_titles: Iterable[str] | None = None) -> dict | None:
         if not self._wmctrl_available:
             self._warn_missing_tools()

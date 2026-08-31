@@ -2,7 +2,7 @@ from pathlib import Path
 from types import MethodType, SimpleNamespace
 
 from PyQt5.QtCore import QProcess
-from PyQt5.QtWidgets import QApplication, QHeaderView
+from PyQt5.QtWidgets import QApplication, QHeaderView, QWidget
 
 import mobipick_gui.main_window as main_window_module
 from mobipick_gui.main_window import (
@@ -35,6 +35,157 @@ def test_auto_launch_progress_counts_down_and_hides_after_ready():
     assert progress._hide_timer.isActive()
     assert progress._hide_timer.interval() == 1000
     progress.dismiss()
+    app.processEvents()
+
+
+def test_auto_launch_progress_shows_each_process_timeline():
+    app = QApplication.instance() or QApplication([])
+    now = {'ns': 0}
+    progress = AutoLaunchProgressWindow()
+    progress._clock = lambda: now['ns']
+
+    progress.start_countdown(
+        10,
+        [
+            {
+                'label': 'Roscore',
+                'launch_at': 0,
+                'ready_at': 4,
+            },
+            {
+                'label': 'Simulation',
+                'launch_at': 4,
+                'ready_at': 10,
+            },
+            {
+                'label': 'LiteLLM',
+                'already_running': True,
+            },
+        ],
+    )
+
+    assert progress.processes_widget.isVisible()
+    assert progress._update_timer.interval() == 250
+    assert len(progress._process_rows) == 3
+    assert progress._process_rows[0]['bar'].format() == 'Ready in 4.0 s'
+    assert progress._process_rows[1]['bar'].format() == 'Launches in 4.0 s'
+    assert progress._process_rows[2]['bar'].format() == 'Already running'
+
+    now['ns'] = 5_000_000_000
+    progress._update_progress()
+    assert progress._process_rows[0]['bar'].format() == 'Ready'
+    assert progress._process_rows[1]['bar'].format() == 'Ready in 5.0 s'
+    assert 165 <= progress._process_rows[1]['bar'].value() <= 167
+    progress.dismiss()
+    app.processEvents()
+
+
+def test_auto_launch_progress_includes_window_layout_milestone():
+    app = QApplication.instance() or QApplication([])
+    now = {'ns': 0}
+    progress = AutoLaunchProgressWindow()
+    progress._clock = lambda: now['ns']
+
+    progress.start_countdown(
+        6,
+        [
+            {
+                'label': 'Arrange windows',
+                'launch_at': 6,
+                'ready_at': 6,
+                'pending_text': 'Runs in',
+                'complete_text': 'Rearranged',
+            }
+        ],
+    )
+
+    bar = progress._process_rows[0]['bar']
+    assert bar.format() == 'Runs in 6.0 s'
+    now['ns'] = 6_000_000_000
+    progress._update_progress()
+    assert bar.format() == 'Rearranged'
+    progress.dismiss()
+    app.processEvents()
+
+
+def test_auto_window_layout_runs_one_second_after_processes_are_ready():
+    advanced = SimpleNamespace(
+        _launch_plan={
+            'mode': 'advanced',
+            'processes': [
+                {'button': 'roscore', 'duration_seconds': 4.5},
+                {
+                    'button': 'sim',
+                    'duration_seconds': 10,
+                    'depends_on': 'roscore',
+                },
+            ],
+        }
+    )
+    advanced._window_layout_delay_from_timeline = MethodType(
+        MainWindow._window_layout_delay_from_timeline,
+        advanced,
+    )
+    legacy = SimpleNamespace(
+        _launch_plan={
+            'timeline': [
+                {'button': 'roscore', 'at_seconds': 0},
+                {'button': 'sim', 'at_seconds': 4.5},
+            ]
+        }
+    )
+    legacy._window_layout_delay_from_timeline = MethodType(
+        MainWindow._window_layout_delay_from_timeline,
+        legacy,
+    )
+
+    assert advanced._window_layout_delay_from_timeline() == 15_500
+    assert legacy._window_layout_delay_from_timeline() == 5_500
+
+
+def test_auto_launch_adds_saved_window_layout_to_progress():
+    manager = SimpleNamespace(has_saved_layout=lambda: True)
+    harness = SimpleNamespace(
+        _window_layout_auto_apply=True,
+        _window_layout_manager=manager,
+        _window_layout_delay_ms=5500,
+    )
+    harness._add_window_layout_progress = MethodType(
+        MainWindow._add_window_layout_progress,
+        harness,
+    )
+    processes = []
+
+    total = harness._add_window_layout_progress(processes, 4.5)
+
+    assert total == 5.5
+    assert processes == [
+        {
+            'label': 'Arrange windows',
+            'launch_at': 5.5,
+            'ready_at': 5.5,
+            'pending_text': 'Runs in',
+            'complete_text': 'Rearranged',
+        }
+    ]
+
+
+def test_auto_launch_progress_centers_on_parent():
+    app = QApplication.instance() or QApplication([])
+    parent = QWidget()
+    parent.setGeometry(100, 120, 900, 600)
+    parent.show()
+    app.processEvents()
+    progress = AutoLaunchProgressWindow(parent)
+
+    progress.start_countdown(10)
+    app.processEvents()
+
+    offset = progress.frameGeometry().center() - parent.frameGeometry().center()
+    assert abs(offset.x()) <= 2
+    assert abs(offset.y()) <= 2
+    progress.dismiss()
+    parent.close()
     app.processEvents()
 
 

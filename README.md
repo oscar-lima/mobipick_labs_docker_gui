@@ -496,7 +496,10 @@ into `duration_seconds`, rounded upward to one decimal place.
 Starting Auto Launch displays an always-on-top readiness progress window. Its
 duration is the latest legacy timeline offset or the effective advanced
 dependency schedule (including already-running process shortcuts). It reports
-completion for one second and then hides automatically.
+per-process progress, includes saved window-layout replay as a final milestone,
+reports completion for one second, and then hides automatically. With
+`window_layout.apply_delay_ms: auto`, layout replay runs one second after every
+process is ready.
 Profiles are saved to a writable per-user path when the source is a packaged
 resource. Auto Launch can also coordinate window layout replay and delayed
 recording startup.

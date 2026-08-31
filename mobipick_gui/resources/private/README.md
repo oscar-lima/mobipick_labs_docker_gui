@@ -47,6 +47,8 @@ or changing workspace-specific command buttons after migration.
 * `jinja_templates/`
   Directory with Jinja template files.
   All templates here get rendered one directory up from where scripts are run.
+  Its legacy GUI settings template keeps automatic window-layout replay at one
+  second after all Auto Launch processes are ready.
 
 ---
 
