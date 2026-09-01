@@ -209,6 +209,9 @@ CONFIG_DEFAULTS: Dict[str, Dict] = {
         'presets': ['1920x1080', '2560x1440', '3440x1440'],
         'include_detected_resolution': True,
     },
+    'display': {
+        'mode': 'auto',
+    },
     'timers': {
         'poll_ms': 1200,
         'sigint_check_ms': 100,

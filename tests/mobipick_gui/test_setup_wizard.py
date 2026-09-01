@@ -864,6 +864,7 @@ def test_custom_image_dockerfile_creates_host_user_image():
     assert 'ARG USER' in dockerfile
     assert 'useradd --no-log-init -m -u "${UID}"' in dockerfile
     assert 'useradd -m -u "${UID}"' not in dockerfile
+    assert 'qtwayland5 sudo' in dockerfile
     assert 'ENTRYPOINT ["/usr/local/bin/entrypoint_user.sh"]' in dockerfile
 
 

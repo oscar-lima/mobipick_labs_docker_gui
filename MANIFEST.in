@@ -1,4 +1,5 @@
 include README.md
+include doc/wayland-rviz-troubleshooting.md
 include mobipick_gui/resources/clean.bash
 include mobipick_gui/resources/custom_entrypoint.sh
 include mobipick_gui/resources/docker-compose.yml

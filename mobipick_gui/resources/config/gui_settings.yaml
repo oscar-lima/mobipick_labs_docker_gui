@@ -34,6 +34,9 @@ recording:
   presets: ["1920x1080", "2560x1440", "3440x1440"]  # options shown in the resolution dropdown
   include_detected_resolution: true     # when true, add the detected primary monitor resolution as a selectable option
 
+display:
+  mode: "auto"                          # auto prefers X11/XWayland; use x11 or wayland to force one Qt backend
+
 timers:
   poll_ms: 1200                     # interval for the UI poller that updates button state, etc.
   sigint_check_ms: 100              # how often we check for Ctrl+C from the launch terminal

@@ -48,7 +48,9 @@ or changing workspace-specific command buttons after migration.
   Directory with Jinja template files.
   All templates here get rendered one directory up from where scripts are run.
   Its legacy GUI settings template keeps automatic window-layout replay at one
-  second after all Auto Launch processes are ready.
+  second after all Auto Launch processes are ready. Its compose template does
+  not statically mount X11 or `/run/user`; the current GUI adds the detected
+  X11/XWayland or Wayland socket to each container invocation.
 
 ---
 

@@ -81,12 +81,13 @@ recording, and cleanup.
 
 ## Prerequisites
 
-The application targets Linux desktops with X11.
+The application targets Linux desktops with X11 or Wayland.
 
 - Python 3.8 or newer.
 - PyQt5 5.15 or newer.
 - Docker Engine and the Docker Compose plugin available to the current user.
-- An X11 desktop session for Gazebo, RViz, RQt, and recording.
+- An X11, XWayland, or native Wayland desktop path for Gazebo, RViz, and RQt.
+  Screen recording and window-layout capture still require X11/XWayland.
 - Optional but recommended: NVIDIA Container Toolkit for GPU-accelerated
   simulation.
 - Optional tools for specific features:
@@ -519,6 +520,24 @@ configured delay. The `window_layout.state_file` setting may include
 `{workspace}` or `{workspace_slug}`; paths without a placeholder are treated as
 a base location and expanded into one YAML file per workspace.
 
+## Container display backends
+
+`display.mode` in `gui_settings.yaml` accepts `auto`, `x11`, or `wayland`.
+Automatic mode exposes every valid host display socket to one-off containers,
+but selects Qt's XCB backend when `DISPLAY` is present. This covers native X11
+and XWayland and is the compatibility default for ROS Noetic RViz, Gazebo, and
+OGRE. On a Wayland-only session, automatic mode selects native Wayland.
+
+The GUI adds display mounts to each `docker compose run`; the compose file no
+longer mounts all of `/run/user`. X11 authorization uses a mounted Xauthority
+cookie when one is available and otherwise grants the selected container user
+temporary access with `xhost`. Native Wayland requires the image to contain
+Qt's Wayland platform plugin. Host-user images newly built by the setup wizard
+install `qtwayland5`.
+
+See [Wayland and RViz troubleshooting](doc/wayland-rviz-troubleshooting.md) for
+display and OpenGL diagnostics, including the Mesa loader/code 139 failure.
+
 ## Remote ROS master mode
 
 Remote mode is controlled by the hidden Remote ROS Master view controls. When
@@ -629,8 +648,9 @@ a recoverable state.
   `QT_QPA_PLATFORM=offscreen` and monkeypatch Docker discovery.
 - If a workspace does not mount, check the selected image profile for
   `supports_host_workspaces`.
-- If RViz or Gazebo windows do not open, verify X11, `DISPLAY`, Docker
-  permissions, and temporary `xhost` access.
+- If RViz or Gazebo windows do not open, inspect the detected display variables,
+  Docker GPU access, and OpenGL renderer. See
+  [Wayland and RViz troubleshooting](doc/wayland-rviz-troubleshooting.md).
 - If recordings produce no MP4, inspect the session `ffmpeg.log` and the
   configured display/resolution.
 - If window layout replay does nothing, install `wmctrl` and `xprop` and save a

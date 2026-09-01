@@ -94,6 +94,7 @@ from .config import (
     writable_workspace_docker_cp_config_path,
 )
 from .documentation_dialog import DocumentationDialog
+from .display_runtime import DisplayRuntime, detect_display_runtime
 from .external_links import open_external_url
 from .settings_transfer import export_settings, import_settings
 
@@ -2644,6 +2645,8 @@ class MainWindow(QMainWindow):
         # sim state
         self._sim_container_name = 'mobipick-run'
         self._xhost_sources: set[str] = set()
+        self._xhost_principal: str | None = None
+        self._display_warnings_logged: set[str] = set()
         self._sim_running_cached = False  # event driven sim state
 
         self.tasks: dict[str, ProcessTab] = {}
@@ -6353,7 +6356,8 @@ RUN set -eux; \\
     fi
 
 RUN apt-get update && \\
-    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends sudo && \\
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \\
+        qtwayland5 sudo && \\
     rm -rf /var/lib/apt/lists/* && \\
     echo "${{USER}} ALL=(ALL) NOPASSWD:ALL" > "/etc/sudoers.d/${{USER}}" && \\
     chmod 0440 "/etc/sudoers.d/${{USER}}"
@@ -6840,8 +6844,18 @@ CMD ["bash"]
         *,
         container_name: str | None = None,
     ) -> list[str]:
+        display_runtime = self._display_runtime()
+        for warning in display_runtime.warnings:
+            if warning not in self._display_warnings_logged:
+                self._display_warnings_logged.add(warning)
+                self._log_info(f'display configuration: {warning}')
         env_args: list[str] = []
+        for source, target, access in display_runtime.mounts:
+            env_args.extend(
+                ['--volume', f'{source}:{target}:{access}']
+            )
         compose_env = dict(CONFIG['process']['compose_run_env'])
+        compose_env.update(display_runtime.environment)
         workspace_env = self._workspace_runtime_env()
         effective_workspace_env = dict(workspace_env)
         if overrides:
@@ -6868,6 +6882,17 @@ CMD ["bash"]
                 continue
             env_args.extend(['--env', f'{key}={value}'])
         return env_args
+
+    @staticmethod
+    def _display_runtime() -> DisplayRuntime:
+        """Return display transports available to one-off containers."""
+        display_config = CONFIG.get('display', {})
+        mode = (
+            display_config.get('mode', 'auto')
+            if isinstance(display_config, dict)
+            else 'auto'
+        )
+        return detect_display_runtime(str(mode))
 
     @staticmethod
     def _normalize_ros_master_uri(value) -> str:
@@ -10025,29 +10050,53 @@ CMD ["bash"]
 
     # ---------- Sim control ----------
 
-    def _grant_x(self, source: str, *, log_key: str | None = None):
+    def _grant_x(self, source: str, *, log_key: str | None = None) -> bool:
+        display_runtime = self._display_runtime()
+        if (
+            not display_runtime.x11_available
+            or display_runtime.xauthority_mounted
+        ):
+            return False
         if source in self._xhost_sources:
-            return
+            return True
         if not self._xhost_sources:
-            self._sp_run(['xhost', '+local:root'], check=False, log_key=log_key or 'sim')
+            self._xhost_principal = self._image_container_user() or 'root'
+            self._sp_run(
+                ['xhost', f'+SI:localuser:{self._xhost_principal}'],
+                check=False,
+                log_key=log_key or 'sim',
+            )
         self._xhost_sources.add(source)
+        return True
 
     def _revoke_x(self, source: str | None = None, *, log_key: str | None = None):
         if source is None:
             if not self._xhost_sources:
                 return
             self._xhost_sources.clear()
-            self._sp_run(['xhost', '-local:root'], check=False, log_key=log_key or 'sim')
+            principal = self._xhost_principal or 'root'
+            self._sp_run(
+                ['xhost', f'-SI:localuser:{principal}'],
+                check=False,
+                log_key=log_key or 'sim',
+            )
+            self._xhost_principal = None
             return
         if source not in self._xhost_sources:
             return
         self._xhost_sources.remove(source)
         if not self._xhost_sources:
-            self._sp_run(['xhost', '-local:root'], check=False, log_key=log_key or 'sim')
+            principal = self._xhost_principal or 'root'
+            self._sp_run(
+                ['xhost', f'-SI:localuser:{principal}'],
+                check=False,
+                log_key=log_key or 'sim',
+            )
+            self._xhost_principal = None
 
     def _claim_xhost(self, tab: ProcessTab, token: str, *, log_key: str | None = None):
-        tab.xhost_token = token
-        self._grant_x(token, log_key=log_key or tab.key)
+        claimed = self._grant_x(token, log_key=log_key or tab.key)
+        tab.xhost_token = token if claimed else None
 
     def _release_xhost(self, tab: ProcessTab, *, log_key: str | None = None):
         token = getattr(tab, 'xhost_token', None)

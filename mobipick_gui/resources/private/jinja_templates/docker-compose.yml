@@ -13,13 +13,11 @@ services:
             - driver: nvidia
               capabilities: [gpu]
     environment:
-      - DISPLAY # for Gazebo GUI
       - "ROS_DISTRO=noetic"
       - "GAZEBO_MASTER_URI=http://mobipick:12345"
       - "ROS_MASTER_URI=http://mobipick:11311"
       - NVIDIA_VISIBLE_DEVICES=all # for docker-nvidia2
       - NVIDIA_DRIVER_CAPABILITIES=all # for docker-nvidia2
-      - XDG_RUNTIME_DIR
       - __NV_PRIME_RENDER_OFFLOAD
       - __GLX_VENDOR_LIBRARY_NAME
       - DISABLE_ROS1_EOL_WARNINGS=1
@@ -36,8 +34,6 @@ services:
       - MOBIPICK_ROS_USE_IP=${MOBIPICK_ROS_USE_IP:-1}
       # - HOST_USER=${USER}
     volumes:
-      - /tmp/.X11-unix:/tmp/.X11-unix:ro  # for Gazebo GUI
-      - /run/user:/run/user:rw  # for Gazebo GUI
       - ./scripts:/scripts_430ofkjl04fsw:rw
       # uncomment to add custom entrypoint script
       - ./custom_entrypoint.sh:/usr/local/bin/entrypoint_user.sh:ro
@@ -68,13 +64,11 @@ services:
             - driver: nvidia
               capabilities: [gpu]
     environment:
-      - DISPLAY # for Gazebo GUI
       - "ROS_DISTRO=noetic"
       - "GAZEBO_MASTER_URI=http://mobipick:12345"
       - "ROS_MASTER_URI=http://mobipick-roscore:11311"
       - NVIDIA_VISIBLE_DEVICES=all # for docker-nvidia2
       - NVIDIA_DRIVER_CAPABILITIES=all # for docker-nvidia2
-      - XDG_RUNTIME_DIR
       - __NV_PRIME_RENDER_OFFLOAD
       - __GLX_VENDOR_LIBRARY_NAME
       - DISABLE_ROS1_EOL_WARNINGS=1
@@ -91,8 +85,6 @@ services:
       - MOBIPICK_ROS_USE_IP=${MOBIPICK_ROS_USE_IP:-1}
       # - HOST_USER=${USER} # from mobipick service above
     volumes:
-      - /tmp/.X11-unix:/tmp/.X11-unix:ro  # for gazebo gui
-      - /run/user:/run/user:rw  # for Gazebo GUI
       - ./scripts:/scripts_430ofkjl04fsw:rw
       # uncomment to add custom entrypoint script
       - ./custom_entrypoint.sh:/usr/local/bin/entrypoint_user.sh:ro
@@ -114,12 +106,10 @@ services:
               capabilities: [gpu]
     network_mode: host
     environment:
-      - DISPLAY
       - "ROS_DISTRO=noetic"
       - "ROS_MASTER_URI=${ROS_MASTER_URI:-http://mobipick-os-sensor:11311}"
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=all
-      - XDG_RUNTIME_DIR
       - __NV_PRIME_RENDER_OFFLOAD
       - __GLX_VENDOR_LIBRARY_NAME
       - DISABLE_ROS1_EOL_WARNINGS=1
@@ -135,8 +125,6 @@ services:
       - ROS_WORKSPACE=${ROS_WORKSPACE:-}
       - MOBIPICK_ROS_USE_IP=${MOBIPICK_ROS_USE_IP:-1}
     volumes:
-      - /tmp/.X11-unix:/tmp/.X11-unix:ro
-      - /run/user:/run/user:rw
       - ./scripts:/scripts_430ofkjl04fsw:rw
       - ./custom_entrypoint.sh:/usr/local/bin/entrypoint_user.sh:ro
       - type: bind
