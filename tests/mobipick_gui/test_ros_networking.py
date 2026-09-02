@@ -1,3 +1,4 @@
+import os
 import subprocess
 from pathlib import Path
 
@@ -26,6 +27,80 @@ def test_entrypoint_exposes_unbuilt_workspace_sources():
 
     assert 'source /scripts_430ofkjl04fsw/ros_workspace_setup.bash' in entrypoint
     assert 'mobipick_source_workspace_chain' in entrypoint
+
+
+def test_entrypoint_creates_private_runtime_directory(tmp_path):
+    entrypoint = (
+        Path(__file__).parents[2]
+        / 'mobipick_gui'
+        / 'resources'
+        / 'custom_entrypoint.sh'
+    )
+    env = os.environ.copy()
+    env.pop('XDG_RUNTIME_DIR', None)
+    env.update(
+        {
+            'HOME': str(tmp_path / 'home'),
+            'TMPDIR': str(tmp_path),
+            'MOBIPICK_ROS_USE_IP': '0',
+        }
+    )
+
+    result = subprocess.run(
+        [
+            str(entrypoint),
+            'bash',
+            '-c',
+            'printf "%s\\n" "$XDG_RUNTIME_DIR"; stat -c "%a" "$XDG_RUNTIME_DIR"',
+        ],
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    lines = result.stdout.splitlines()
+    assert result.returncode == 0, result.stderr
+    assert lines[-2] == str(tmp_path / f'mobipick-runtime-{os.getuid()}')
+    assert lines[-1] == '700'
+
+
+def test_entrypoint_links_wayland_socket_into_private_runtime(tmp_path):
+    entrypoint = (
+        Path(__file__).parents[2]
+        / 'mobipick_gui'
+        / 'resources'
+        / 'custom_entrypoint.sh'
+    )
+    mounted_socket = tmp_path / 'mounted-wayland.sock'
+    mounted_socket.touch()
+    env = os.environ.copy()
+    env.pop('XDG_RUNTIME_DIR', None)
+    env.update(
+        {
+            'HOME': str(tmp_path / 'home'),
+            'TMPDIR': str(tmp_path),
+            'MOBIPICK_ROS_USE_IP': '0',
+            'MOBIPICK_WAYLAND_SOCKET': str(mounted_socket),
+            'WAYLAND_DISPLAY': 'wayland-0',
+        }
+    )
+
+    result = subprocess.run(
+        [
+            str(entrypoint),
+            'bash',
+            '-c',
+            'readlink "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY"',
+        ],
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == str(mounted_socket)
 
 
 def test_terminal_rc_restores_ros_shell_functions():

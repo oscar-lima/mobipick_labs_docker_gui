@@ -137,6 +137,10 @@ settings override to force a backend. Native Wayland requires the selected
 Docker image to include the Qt Wayland platform plugin. Screen recording and
 window-layout capture continue to require X11 or XWayland.
 
+Each container receives a private runtime directory with the permissions Qt
+expects. Native Wayland links the selected host Wayland socket into that
+directory; unrelated host session sockets are not exposed.
+
 If RViz prints `MESA-LOADER: failed to retrieve device information` and exits
 with code 139, the display connection was established and the likely problem
 is OpenGL/GPU passthrough rather than a missing Wayland socket. Check

@@ -26,6 +26,11 @@ or:
 The usual override file is
 ~/.config/mobipick-labs-docker-gui/gui_settings.yaml.
 
+Containers use a private XDG_RUNTIME_DIR owned by their effective user with
+mode 0700. Native Wayland mounts only the selected host socket at a neutral
+path and links it into that directory. X11 and XWayland therefore avoid Qt's
+missing-runtime warning without mounting the host's complete /run/user tree.
+
 ## Code 139 after Mesa loader errors
 
 Output like this indicates that RViz initialized Qt and OGRE before the

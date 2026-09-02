@@ -9,6 +9,7 @@ from typing import Mapping
 
 X11_SOCKET_DIR = Path('/tmp/.X11-unix')
 CONTAINER_XAUTHORITY = '/tmp/mobipick.Xauthority'
+CONTAINER_WAYLAND_SOCKET = '/tmp/mobipick-wayland.sock'
 
 
 @dataclass(frozen=True)
@@ -104,10 +105,15 @@ def detect_display_runtime(
             xauthority_mounted = True
 
     if expose_wayland and wayland_socket is not None:
-        socket_path = str(wayland_socket)
-        environment['XDG_RUNTIME_DIR'] = runtime_dir
         environment['WAYLAND_DISPLAY'] = wayland_display
-        mounts.append((socket_path, socket_path, 'rw'))
+        environment['MOBIPICK_WAYLAND_SOCKET'] = CONTAINER_WAYLAND_SOCKET
+        mounts.append(
+            (
+                str(wayland_socket),
+                CONTAINER_WAYLAND_SOCKET,
+                'rw',
+            )
+        )
 
     if backend == 'x11':
         environment['QT_QPA_PLATFORM'] = 'xcb'

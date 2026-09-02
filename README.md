@@ -535,6 +535,12 @@ temporary access with `xhost`. Native Wayland requires the image to contain
 Qt's Wayland platform plugin. Host-user images newly built by the setup wizard
 install `qtwayland5`.
 
+The container entrypoint creates a private `XDG_RUNTIME_DIR` with mode `0700`
+for X11 and XWayland applications. For native Wayland, the GUI mounts only the
+selected host socket and the entrypoint links it into that private directory.
+This prevents Qt's missing-runtime warning without exposing the rest of the
+host user's runtime directory.
+
 See [Wayland and RViz troubleshooting](doc/wayland-rviz-troubleshooting.md) for
 display and OpenGL diagnostics, including the Mesa loader/code 139 failure.
 

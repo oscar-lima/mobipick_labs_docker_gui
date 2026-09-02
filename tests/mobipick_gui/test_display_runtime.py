@@ -5,6 +5,7 @@ from pathlib import Path
 
 from mobipick_gui.display_runtime import (
     CONTAINER_XAUTHORITY,
+    CONTAINER_WAYLAND_SOCKET,
     detect_display_runtime,
 )
 
@@ -61,12 +62,12 @@ def test_auto_uses_native_wayland_when_x11_is_unavailable(tmp_path):
 
     assert runtime.backend == 'wayland'
     assert runtime.environment == {
-        'XDG_RUNTIME_DIR': str(tmp_path),
         'WAYLAND_DISPLAY': 'wayland-1',
+        'MOBIPICK_WAYLAND_SOCKET': CONTAINER_WAYLAND_SOCKET,
         'QT_QPA_PLATFORM': 'wayland',
     }
     assert runtime.mounts == (
-        (str(wayland_path), str(wayland_path), 'rw'),
+        (str(wayland_path), CONTAINER_WAYLAND_SOCKET, 'rw'),
     )
     assert not runtime.x11_available
 
@@ -93,7 +94,11 @@ def test_auto_exposes_xwayland_and_wayland_but_prefers_xcb(tmp_path):
     assert runtime.environment['DISPLAY'] == ':0'
     assert runtime.environment['WAYLAND_DISPLAY'] == 'wayland-0'
     assert (str(x11_dir), str(x11_dir), 'ro') in runtime.mounts
-    assert (str(wayland_path), str(wayland_path), 'rw') in runtime.mounts
+    assert (
+        str(wayland_path),
+        CONTAINER_WAYLAND_SOCKET,
+        'rw',
+    ) in runtime.mounts
 
 
 def test_forced_wayland_does_not_expose_x11(tmp_path):

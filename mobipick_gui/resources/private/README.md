@@ -50,7 +50,9 @@ or changing workspace-specific command buttons after migration.
   Its legacy GUI settings template keeps automatic window-layout replay at one
   second after all Auto Launch processes are ready. Its compose template does
   not statically mount X11 or `/run/user`; the current GUI adds the detected
-  X11/XWayland or Wayland socket to each container invocation.
+  X11/XWayland or Wayland socket to each container invocation. The legacy
+  entrypoint template also creates the private runtime directory and links a
+  forwarded Wayland socket into it when present.
 
 ---
 

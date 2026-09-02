@@ -13,6 +13,23 @@ source_if_present() {
 source_if_present /opt/ros/noetic/setup.bash
 source_if_present /usr/share/gazebo/setup.sh
 
+if [ -z "${XDG_RUNTIME_DIR:-}" ]; then
+    runtime_parent="${TMPDIR:-/tmp}"
+    export XDG_RUNTIME_DIR="${runtime_parent%/}/mobipick-runtime-$(id -u)"
+    old_umask="$(umask)"
+    umask 077
+    mkdir -p -- "$XDG_RUNTIME_DIR"
+    umask "$old_umask"
+    chmod 0700 "$XDG_RUNTIME_DIR"
+fi
+
+if [ -n "${MOBIPICK_WAYLAND_SOCKET:-}" ] \
+    && [ -n "${WAYLAND_DISPLAY:-}" ]; then
+    ln -sfn -- \
+        "$MOBIPICK_WAYLAND_SOCKET" \
+        "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY"
+fi
+
 if [ "${MOBIPICK_WORKSPACE_ENABLED:-0}" = "1" ]; then
     # shellcheck disable=SC1091
     source /scripts_430ofkjl04fsw/ros_workspace_setup.bash
