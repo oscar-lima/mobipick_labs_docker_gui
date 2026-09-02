@@ -249,6 +249,8 @@ Important environment overrides:
 
 - `MOBIPICK_GUI_DATA_ROOT` points the package at an alternate resources root.
 - `MOBIPICK_GUI_CONFIG` points to an alternate per-user GUI settings file.
+- `ROBOT_RACE=true` replaces Auto Launch progress bars with full-resolution
+  synchronized robot animations. The default is `false`.
 - `MOBIPICK_WORKSPACE_CONFIG` points to an alternate workspace registry.
 - `XDG_CONFIG_HOME` and `XDG_DATA_HOME` control the default per-user roots.
 

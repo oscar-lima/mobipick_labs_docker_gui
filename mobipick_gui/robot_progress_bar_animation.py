@@ -20,12 +20,16 @@ class RobotProgressAnimation(QLabel):
     ) -> None:
         super().__init__(parent)
         self.setAlignment(Qt.AlignCenter)
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
 
         self.movie = QMovie(str(gif_path), parent=self)
         self.movie.setCacheMode(QMovie.CacheAll)
         self._frame_starts: list[float] = []
         self._available = self._load_frames()
+        if self._available:
+            self.setFixedSize(self.movie.frameRect().size())
+            self.setMovie(self.movie)
+            self.movie.jumpToFrame(0)
         self.setVisible(self._available)
 
     @property
@@ -37,7 +41,6 @@ class RobotProgressAnimation(QLabel):
         """Decode the GIF and record each frame's normalized start time."""
         if not self.movie.isValid():
             return False
-        self.setMovie(self.movie)
         self.movie.start()
         self.movie.setPaused(True)
         if not self.movie.jumpToFrame(0):

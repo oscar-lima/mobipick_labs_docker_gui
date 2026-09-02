@@ -1270,31 +1270,36 @@ class AutoLaunchProgressWindow(QWidget):
         self._started_at_ns: int | None = None
         self._clock = time.monotonic_ns
         self._process_rows: list[dict] = []
+        self._robot_race_enabled = (
+            os.environ.get('ROBOT_RACE', '').strip().lower() == 'true'
+        )
+        self._robot_gif_path = (
+            PROJECT_ROOT / 'gif' / 'robot_progress_crash.gif'
+        )
 
         layout = QVBoxLayout(self)
         self.status_label = QLabel('Preparing demo...')
         self.status_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.status_label)
-        self.robot_animation = RobotProgressAnimation(
-            PROJECT_ROOT / 'gif' / 'robot_progress_crash.gif',
-            self,
-        )
-        layout.addWidget(self.robot_animation)
-        animation_width = self.robot_animation.sizeHint().width()
-        layout_margins = layout.contentsMargins()
-        self.setMinimumWidth(
-            max(
-                self.minimumWidth(),
-                animation_width
-                + layout_margins.left()
-                + layout_margins.right(),
+        self.robot_animation: RobotProgressAnimation | None = None
+        if self._robot_race_enabled:
+            self.robot_animation = RobotProgressAnimation(
+                self._robot_gif_path,
+                self,
             )
-        )
+            layout.addWidget(self.robot_animation, alignment=Qt.AlignCenter)
+            margins = layout.contentsMargins()
+            self.setMinimumWidth(
+                self.robot_animation.width()
+                + margins.left()
+                + margins.right()
+            )
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 1000)
         self.progress_bar.setValue(0)
         self.progress_bar.setFormat('%p%')
         layout.addWidget(self.progress_bar)
+        self.progress_bar.setVisible(not self._robot_race_enabled)
 
         self.processes_widget = QWidget()
         self.processes_layout = QVBoxLayout(self.processes_widget)
@@ -1322,7 +1327,8 @@ class AutoLaunchProgressWindow(QWidget):
         self._started_at_ns = self._clock()
         self._hide_timer.stop()
         self.progress_bar.setValue(0)
-        self.robot_animation.reset()
+        if self.robot_animation is not None:
+            self.robot_animation.reset()
         self._set_process_rows(processes or [])
         self.status_label.setText(
             f'Demo ready in {self._total_seconds:.1f} s'
@@ -1353,6 +1359,7 @@ class AutoLaunchProgressWindow(QWidget):
             if widget is not None:
                 widget.deleteLater()
         self._process_rows.clear()
+        name_width = 120
         for process in processes:
             if not isinstance(process, dict):
                 continue
@@ -1373,15 +1380,27 @@ class AutoLaunchProgressWindow(QWidget):
             )
             name.setMinimumWidth(120)
             name.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            bar = QProgressBar()
+            name_width = max(name_width, name.sizeHint().width())
+            bar = QProgressBar(row_widget)
             bar.setRange(0, 1000)
             bar.setValue(0)
             row_layout.addWidget(name)
-            row_layout.addWidget(bar, 1)
+            animation = None
+            if self._robot_race_enabled:
+                animation = RobotProgressAnimation(
+                    self._robot_gif_path,
+                    row_widget,
+                )
+                row_layout.addWidget(animation)
+                bar.hide()
+            else:
+                row_layout.addWidget(bar, 1)
             self.processes_layout.addWidget(row_widget)
             self._process_rows.append(
                 {
+                    'name': name,
                     'bar': bar,
+                    'animation': animation,
                     'launch_at': launch_at,
                     'ready_at': ready_at,
                     'already_running': bool(process.get('already_running')),
@@ -1394,6 +1413,18 @@ class AutoLaunchProgressWindow(QWidget):
                     ),
                 }
             )
+        for row in self._process_rows:
+            row['name'].setFixedWidth(name_width)
+        if self._robot_race_enabled and self._process_rows:
+            animation = self._process_rows[0]['animation']
+            margins = self.layout().contentsMargins()
+            self.setMinimumWidth(
+                name_width
+                + animation.width()
+                + self.processes_layout.spacing()
+                + margins.left()
+                + margins.right()
+            )
         self.processes_widget.setVisible(bool(self._process_rows))
 
     def _update_process_rows(self, elapsed: float) -> None:
@@ -1402,31 +1433,43 @@ class AutoLaunchProgressWindow(QWidget):
             bar = row['bar']
             launch_at = row['launch_at']
             ready_at = row['ready_at']
+            animation = row['animation']
             if row['already_running']:
                 bar.setValue(1000)
                 bar.setFormat('Already running')
+                if animation is not None:
+                    animation.set_progress(1.0)
             elif elapsed < launch_at:
                 bar.setValue(0)
                 bar.setFormat(
                     f'{row["pending_text"]} {launch_at - elapsed:.1f} s'
                 )
+                if animation is not None:
+                    animation.set_progress(0.0)
             elif row['milestone']:
                 bar.setValue(1000)
                 bar.setFormat(row['complete_text'])
+                if animation is not None:
+                    animation.set_progress(1.0)
             elif elapsed >= ready_at:
                 bar.setValue(1000)
                 bar.setFormat('Ready')
+                if animation is not None:
+                    animation.set_progress(1.0)
             else:
                 fraction = (elapsed - launch_at) / (ready_at - launch_at)
                 bar.setValue(int(min(1.0, fraction) * 1000))
                 bar.setFormat(f'Ready in {ready_at - elapsed:.1f} s')
+                if animation is not None:
+                    animation.set_progress(fraction)
 
     def dismiss(self) -> None:
         """Stop the countdown and hide it immediately."""
         self._update_timer.stop()
         self._hide_timer.stop()
         self._started_at_ns = None
-        self.robot_animation.reset()
+        if self.robot_animation is not None:
+            self.robot_animation.reset()
         self.hide()
 
     def _update_progress(self) -> None:
@@ -1436,14 +1479,16 @@ class AutoLaunchProgressWindow(QWidget):
         self._update_process_rows(elapsed)
         if self._total_seconds <= 0 or elapsed >= self._total_seconds:
             self.progress_bar.setValue(1000)
-            self.robot_animation.set_progress(1.0)
+            if self.robot_animation is not None:
+                self.robot_animation.set_progress(1.0)
             self.status_label.setText('Demo ready')
             self._update_timer.stop()
             self._hide_timer.start()
             return
         fraction = min(1.0, elapsed / self._total_seconds)
         self.progress_bar.setValue(int(fraction * 1000))
-        self.robot_animation.set_progress(fraction)
+        if self.robot_animation is not None:
+            self.robot_animation.set_progress(fraction)
         remaining_tenths = int(
             (self._total_seconds - elapsed) * 10 + 0.999999999
         )

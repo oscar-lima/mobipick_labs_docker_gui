@@ -223,12 +223,13 @@ after**. For example, 5.65 seconds becomes 5.7 seconds. The measured process is
 left running so you can verify it normally.
 
 When you start Auto Launch, an always-on-top progress window opens in the center
-of the main window and shows the time remaining until the demo is ready. A robot
-race animation follows the overall launch percentage and freezes on its final
-frame when the launch completes. A
-separate bar for every configured process shows whether it is waiting to launch,
-starting, ready, or was already running. Legacy profiles show their configured
-launch times as milestones. Advanced profiles use the full dependency and
+of the main window and shows the time remaining until the demo is ready. By
+default, it uses normal progress bars. Start the GUI with `ROBOT_RACE=true` to
+replace the overall and per-process bars with full-resolution robot animations.
+Waiting robots remain at the start, launching robots advance with their
+readiness time, and ready or already-running robots finish their lane. Legacy
+profiles show their configured launch times as milestones. Advanced profiles
+use the full dependency and
 readiness schedule, while processes that were already running add no wait. At
 completion the window shows **Demo ready** and disappears automatically after
 one second. When automatic window layout replay is enabled and a saved layout

@@ -13,7 +13,8 @@ from mobipick_gui.main_window import (
 )
 
 
-def test_auto_launch_progress_counts_down_and_hides_after_ready():
+def test_auto_launch_progress_counts_down_and_hides_after_ready(monkeypatch):
+    monkeypatch.delenv('ROBOT_RACE', raising=False)
     app = QApplication.instance() or QApplication([])
     now = {'ns': 0}
     progress = AutoLaunchProgressWindow()
@@ -21,6 +22,8 @@ def test_auto_launch_progress_counts_down_and_hides_after_ready():
 
     progress.start_countdown(5.7)
     assert progress.isVisible()
+    assert progress.robot_animation is None
+    assert progress.progress_bar.isVisible()
     assert progress.status_label.text() == 'Demo ready in 5.7 s'
 
     now['ns'] = 2_810_000_000
@@ -38,7 +41,8 @@ def test_auto_launch_progress_counts_down_and_hides_after_ready():
     app.processEvents()
 
 
-def test_auto_launch_progress_shows_each_process_timeline():
+def test_auto_launch_progress_shows_each_process_timeline(monkeypatch):
+    monkeypatch.delenv('ROBOT_RACE', raising=False)
     app = QApplication.instance() or QApplication([])
     now = {'ns': 0}
     progress = AutoLaunchProgressWindow()
@@ -67,6 +71,11 @@ def test_auto_launch_progress_shows_each_process_timeline():
     assert progress.processes_widget.isVisible()
     assert progress._update_timer.interval() == 25
     assert len(progress._process_rows) == 3
+    assert all(row['animation'] is None for row in progress._process_rows)
+    assert all(row['bar'].isVisible() for row in progress._process_rows)
+    assert len(
+        {row['name'].width() for row in progress._process_rows}
+    ) == 1
     assert progress._process_rows[0]['bar'].format() == 'Ready in 4.0 s'
     assert progress._process_rows[1]['bar'].format() == 'Launches in 4.0 s'
     assert progress._process_rows[2]['bar'].format() == 'Already running'
@@ -80,24 +89,38 @@ def test_auto_launch_progress_shows_each_process_timeline():
     app.processEvents()
 
 
-def test_auto_launch_progress_synchronizes_robot_animation():
+def test_auto_launch_progress_synchronizes_native_robot_race(monkeypatch):
+    monkeypatch.setenv('ROBOT_RACE', 'true')
     app = QApplication.instance() or QApplication([])
     now = {'ns': 0}
     progress = AutoLaunchProgressWindow()
     progress._clock = lambda: now['ns']
 
+    assert progress.robot_animation is not None
     assert progress.robot_animation.is_available
-    assert (
-        progress.width()
-        >= progress.robot_animation.sizeHint().width()
+    assert progress.robot_animation.movie.scaledSize().isEmpty()
+    assert progress.robot_animation.size() == (
+        progress.robot_animation.movie.frameRect().size()
     )
-    progress.start_countdown(4)
+    progress.start_countdown(
+        4,
+        [{'label': 'Simulation', 'launch_at': 0, 'ready_at': 4}],
+    )
+    row = progress._process_rows[0]
+    assert not progress.progress_bar.isVisible()
+    assert not row['bar'].isVisible()
+    assert row['animation'] is not None
+    assert row['animation'].movie.scaledSize().isEmpty()
+    assert progress.width() >= (
+        row['name'].width() + row['animation'].width()
+    )
     assert progress.robot_animation.movie.currentFrameNumber() == 0
 
     now['ns'] = 2_000_000_000
     progress._update_progress()
     middle_frame = progress.robot_animation.movie.currentFrameNumber()
     assert 0 < middle_frame < progress.robot_animation.movie.frameCount() - 1
+    assert row['animation'].movie.currentFrameNumber() == middle_frame
 
     now['ns'] = 4_000_000_000
     progress._update_progress()
