@@ -223,7 +223,9 @@ after**. For example, 5.65 seconds becomes 5.7 seconds. The measured process is
 left running so you can verify it normally.
 
 When you start Auto Launch, an always-on-top progress window opens in the center
-of the main window and shows the time remaining until the demo is ready. A
+of the main window and shows the time remaining until the demo is ready. A robot
+race animation follows the overall launch percentage and freezes on its final
+frame when the launch completes. A
 separate bar for every configured process shows whether it is waiting to launch,
 starting, ready, or was already running. Legacy profiles show their configured
 launch times as milestones. Advanced profiles use the full dependency and

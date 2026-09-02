@@ -102,6 +102,7 @@ CONTAINER_SCRIPTS_DIR = str(
     CONFIG.get('process', {}).get('container_scripts_dir', '/scripts_430ofkjl04fsw')
 )
 from .process_tab import ProcessTab
+from .robot_progress_bar_animation import RobotProgressAnimation
 from .setup_wizard import HostDependency, ImageSetupWizard, SetupWizardSelection
 from .version import get_version
 from .window_utils import (
@@ -1274,6 +1275,21 @@ class AutoLaunchProgressWindow(QWidget):
         self.status_label = QLabel('Preparing demo...')
         self.status_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.status_label)
+        self.robot_animation = RobotProgressAnimation(
+            PROJECT_ROOT / 'gif' / 'robot_progress_crash.gif',
+            self,
+        )
+        layout.addWidget(self.robot_animation)
+        animation_width = self.robot_animation.sizeHint().width()
+        layout_margins = layout.contentsMargins()
+        self.setMinimumWidth(
+            max(
+                self.minimumWidth(),
+                animation_width
+                + layout_margins.left()
+                + layout_margins.right(),
+            )
+        )
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 1000)
         self.progress_bar.setValue(0)
@@ -1288,7 +1304,8 @@ class AutoLaunchProgressWindow(QWidget):
         self.processes_widget.hide()
 
         self._update_timer = QTimer(self)
-        self._update_timer.setInterval(250)
+        self._update_timer.setInterval(25)
+        self._update_timer.setTimerType(Qt.PreciseTimer)
         self._update_timer.timeout.connect(self._update_progress)
         self._hide_timer = QTimer(self)
         self._hide_timer.setSingleShot(True)
@@ -1305,6 +1322,7 @@ class AutoLaunchProgressWindow(QWidget):
         self._started_at_ns = self._clock()
         self._hide_timer.stop()
         self.progress_bar.setValue(0)
+        self.robot_animation.reset()
         self._set_process_rows(processes or [])
         self.status_label.setText(
             f'Demo ready in {self._total_seconds:.1f} s'
@@ -1408,6 +1426,7 @@ class AutoLaunchProgressWindow(QWidget):
         self._update_timer.stop()
         self._hide_timer.stop()
         self._started_at_ns = None
+        self.robot_animation.reset()
         self.hide()
 
     def _update_progress(self) -> None:
@@ -1417,12 +1436,14 @@ class AutoLaunchProgressWindow(QWidget):
         self._update_process_rows(elapsed)
         if self._total_seconds <= 0 or elapsed >= self._total_seconds:
             self.progress_bar.setValue(1000)
+            self.robot_animation.set_progress(1.0)
             self.status_label.setText('Demo ready')
             self._update_timer.stop()
             self._hide_timer.start()
             return
         fraction = min(1.0, elapsed / self._total_seconds)
         self.progress_bar.setValue(int(fraction * 1000))
+        self.robot_animation.set_progress(fraction)
         remaining_tenths = int(
             (self._total_seconds - elapsed) * 10 + 0.999999999
         )

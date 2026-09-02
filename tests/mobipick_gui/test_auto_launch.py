@@ -65,7 +65,7 @@ def test_auto_launch_progress_shows_each_process_timeline():
     )
 
     assert progress.processes_widget.isVisible()
-    assert progress._update_timer.interval() == 250
+    assert progress._update_timer.interval() == 25
     assert len(progress._process_rows) == 3
     assert progress._process_rows[0]['bar'].format() == 'Ready in 4.0 s'
     assert progress._process_rows[1]['bar'].format() == 'Launches in 4.0 s'
@@ -76,6 +76,35 @@ def test_auto_launch_progress_shows_each_process_timeline():
     assert progress._process_rows[0]['bar'].format() == 'Ready'
     assert progress._process_rows[1]['bar'].format() == 'Ready in 5.0 s'
     assert 165 <= progress._process_rows[1]['bar'].value() <= 167
+    progress.dismiss()
+    app.processEvents()
+
+
+def test_auto_launch_progress_synchronizes_robot_animation():
+    app = QApplication.instance() or QApplication([])
+    now = {'ns': 0}
+    progress = AutoLaunchProgressWindow()
+    progress._clock = lambda: now['ns']
+
+    assert progress.robot_animation.is_available
+    assert (
+        progress.width()
+        >= progress.robot_animation.sizeHint().width()
+    )
+    progress.start_countdown(4)
+    assert progress.robot_animation.movie.currentFrameNumber() == 0
+
+    now['ns'] = 2_000_000_000
+    progress._update_progress()
+    middle_frame = progress.robot_animation.movie.currentFrameNumber()
+    assert 0 < middle_frame < progress.robot_animation.movie.frameCount() - 1
+
+    now['ns'] = 4_000_000_000
+    progress._update_progress()
+    assert (
+        progress.robot_animation.movie.currentFrameNumber()
+        == progress.robot_animation.movie.frameCount() - 1
+    )
     progress.dismiss()
     app.processEvents()
 

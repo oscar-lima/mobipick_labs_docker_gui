@@ -52,6 +52,7 @@ mobipick_gui = [
     "resources/config/*.yaml",
     "resources/empty_workspace/.gitkeep",
     "resources/images/*.svg",
+    "resources/gif/*.gif",
     "resources/scripts/enter_host_shell.py",
     "resources/scripts/ros_workspace_setup.bash",
     "resources/scripts/terminal.bashrc",
