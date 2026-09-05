@@ -13,14 +13,36 @@ source_if_present() {
 source_if_present /opt/ros/noetic/setup.bash
 source_if_present /usr/share/gazebo/setup.sh
 
-if [ -z "${XDG_RUNTIME_DIR:-}" ]; then
+runtime_uid="$(id -u)"
+runtime_is_valid() {
+    local candidate="$1"
+    [ -n "$candidate" ] \
+        && [ "${candidate#/}" != "$candidate" ] \
+        && [ -d "$candidate" ] \
+        && [ ! -L "$candidate" ] \
+        && [ "$(stat -c '%u:%a' -- "$candidate" 2>/dev/null)" = "${runtime_uid}:700" ]
+}
+
+if ! runtime_is_valid "${XDG_RUNTIME_DIR:-}"; then
     runtime_parent="${TMPDIR:-/tmp}"
-    export XDG_RUNTIME_DIR="${runtime_parent%/}/mobipick-runtime-$(id -u)"
-    old_umask="$(umask)"
-    umask 077
-    mkdir -p -- "$XDG_RUNTIME_DIR"
-    umask "$old_umask"
-    chmod 0700 "$XDG_RUNTIME_DIR"
+    if [ "${runtime_parent#/}" = "$runtime_parent" ]; then
+        runtime_parent=/tmp
+    fi
+    runtime_candidate="${runtime_parent%/}/mobipick-runtime-${runtime_uid}"
+    if [ -d "$runtime_candidate" ] \
+        && [ ! -L "$runtime_candidate" ] \
+        && [ "$(stat -c '%u' -- "$runtime_candidate" 2>/dev/null)" = "$runtime_uid" ]; then
+        chmod 0700 "$runtime_candidate"
+    elif [ -e "$runtime_candidate" ] || [ -L "$runtime_candidate" ]; then
+        runtime_candidate="$(mktemp -d "${runtime_candidate}-XXXXXX")"
+    else
+        old_umask="$(umask)"
+        umask 077
+        mkdir -- "$runtime_candidate"
+        umask "$old_umask"
+    fi
+    chmod 0700 "$runtime_candidate"
+    export XDG_RUNTIME_DIR="$runtime_candidate"
 fi
 
 if [ -n "${MOBIPICK_WAYLAND_SOCKET:-}" ] \

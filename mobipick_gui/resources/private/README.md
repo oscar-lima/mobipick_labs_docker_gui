@@ -51,8 +51,9 @@ or changing workspace-specific command buttons after migration.
   second after all Auto Launch processes are ready. Its compose template does
   not statically mount X11 or `/run/user`; the current GUI adds the detected
   X11/XWayland or Wayland socket to each container invocation. The legacy
-  entrypoint template also creates the private runtime directory and links a
-  forwarded Wayland socket into it when present.
+  entrypoint template also validates or creates a private runtime directory
+  for its effective UID and links a forwarded Wayland socket into it when
+  present.
 
 ---
 

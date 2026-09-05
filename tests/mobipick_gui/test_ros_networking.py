@@ -51,7 +51,8 @@ def test_entrypoint_creates_private_runtime_directory(tmp_path):
             str(entrypoint),
             'bash',
             '-c',
-            'printf "%s\\n" "$XDG_RUNTIME_DIR"; stat -c "%a" "$XDG_RUNTIME_DIR"',
+            'printf "%s\\n" "$XDG_RUNTIME_DIR"; '
+            'stat -c "%u:%a" "$XDG_RUNTIME_DIR"',
         ],
         env=env,
         check=False,
@@ -62,7 +63,46 @@ def test_entrypoint_creates_private_runtime_directory(tmp_path):
     lines = result.stdout.splitlines()
     assert result.returncode == 0, result.stderr
     assert lines[-2] == str(tmp_path / f'mobipick-runtime-{os.getuid()}')
-    assert lines[-1] == '700'
+    assert lines[-1] == f'{os.getuid()}:700'
+
+
+def test_entrypoint_replaces_invalid_inherited_runtime_directory(tmp_path):
+    entrypoint = (
+        Path(__file__).parents[2]
+        / 'mobipick_gui'
+        / 'resources'
+        / 'custom_entrypoint.sh'
+    )
+    inherited = tmp_path / 'inherited-runtime'
+    inherited.mkdir(mode=0o755)
+    env = os.environ.copy()
+    env.update(
+        {
+            'HOME': str(tmp_path / 'home'),
+            'TMPDIR': str(tmp_path),
+            'XDG_RUNTIME_DIR': str(inherited),
+            'MOBIPICK_ROS_USE_IP': '0',
+        }
+    )
+
+    result = subprocess.run(
+        [
+            str(entrypoint),
+            'bash',
+            '-c',
+            'printf "%s\\n" "$XDG_RUNTIME_DIR"; '
+            'stat -c "%u:%a" "$XDG_RUNTIME_DIR"',
+        ],
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    lines = result.stdout.splitlines()
+    assert result.returncode == 0, result.stderr
+    assert lines[-2] != str(inherited)
+    assert lines[-1] == f'{os.getuid()}:700'
 
 
 def test_entrypoint_links_wayland_socket_into_private_runtime(tmp_path):

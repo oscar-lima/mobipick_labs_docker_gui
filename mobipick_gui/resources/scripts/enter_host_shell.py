@@ -10,6 +10,7 @@ import shlex
 import stat
 import shutil
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -249,6 +250,102 @@ def _log_warning(message: str) -> None:
         pass
 
 
+def _runtime_directory_is_valid(path: Path, uid: int) -> bool:
+    """Return whether ``path`` satisfies the XDG runtime requirements."""
+
+    try:
+        stats = path.lstat()
+    except OSError:
+        return False
+    return (
+        stat.S_ISDIR(stats.st_mode)
+        and not path.is_symlink()
+        and stats.st_uid == uid
+        and stat.S_IMODE(stats.st_mode) == 0o700
+    )
+
+
+def _link_wayland_socket(runtime_dir: Path) -> None:
+    """Expose the forwarded Wayland socket in ``runtime_dir`` when present."""
+
+    socket_path = os.environ.get("MOBIPICK_WAYLAND_SOCKET", "").strip()
+    display_name = os.environ.get("WAYLAND_DISPLAY", "").strip()
+    if (
+        not socket_path
+        or not display_name
+        or Path(display_name).name != display_name
+    ):
+        return
+
+    link_path = runtime_dir / display_name
+    try:
+        if link_path.is_symlink():
+            link_path.unlink()
+        elif link_path.exists():
+            _log_warning(f"cannot replace existing Wayland path {link_path}")
+            return
+        link_path.symlink_to(socket_path)
+    except OSError as exc:
+        _log_warning(f"could not link Wayland socket in {runtime_dir}: {exc}")
+
+
+def _prepare_runtime_directory(uid: int, gid: int) -> Path | None:
+    """Set up a private XDG runtime directory owned by ``uid``."""
+
+    configured = os.environ.get("XDG_RUNTIME_DIR", "").strip()
+    if configured:
+        configured_path = Path(configured)
+        if configured_path.is_absolute() and _runtime_directory_is_valid(
+            configured_path,
+            uid,
+        ):
+            _link_wayland_socket(configured_path)
+            return configured_path
+
+    runtime_parent = Path(os.environ.get("TMPDIR", "/tmp") or "/tmp")
+    if not runtime_parent.is_absolute():
+        runtime_parent = Path("/tmp")
+    runtime_dir = runtime_parent / f"mobipick-runtime-{uid}"
+
+    try:
+        if runtime_dir.exists() and not runtime_dir.is_symlink():
+            if runtime_dir.is_dir() and runtime_dir.stat().st_uid == uid:
+                os.chmod(runtime_dir, 0o700)
+            elif not _runtime_directory_is_valid(runtime_dir, uid):
+                runtime_dir = Path(
+                    tempfile.mkdtemp(
+                        prefix=f"mobipick-runtime-{uid}-",
+                        dir=runtime_parent,
+                    )
+                )
+        elif runtime_dir.is_symlink():
+            runtime_dir = Path(
+                tempfile.mkdtemp(
+                    prefix=f"mobipick-runtime-{uid}-",
+                    dir=runtime_parent,
+                )
+            )
+        else:
+            runtime_dir.mkdir(mode=0o700)
+
+        if os.geteuid() == 0:
+            os.chown(runtime_dir, uid, gid)
+        os.chmod(runtime_dir, 0o700)
+    except OSError as exc:
+        os.environ.pop("XDG_RUNTIME_DIR", None)
+        _log_warning(f"could not prepare an XDG runtime directory: {exc}")
+        return None
+
+    if not _runtime_directory_is_valid(runtime_dir, uid):
+        os.environ.pop("XDG_RUNTIME_DIR", None)
+        _log_warning(f"XDG runtime directory is not owned by UID {uid}")
+        return None
+
+    os.environ["XDG_RUNTIME_DIR"] = str(runtime_dir)
+    _link_wayland_socket(runtime_dir)
+    return runtime_dir
+
+
 def main(argv: list[str]) -> "None":
     uid = _parse_int(os.environ.get("MOBIPICK_UID"), 0)
     gid = _parse_int(os.environ.get("MOBIPICK_GID"), uid)
@@ -259,6 +356,7 @@ def main(argv: list[str]) -> "None":
     current_gid = os.getgid()
 
     if uid == 0:
+        _prepare_runtime_directory(current_uid, current_gid)
         os.execvp(command[0], command)
         raise RuntimeError("execvp returned")
 
@@ -266,6 +364,7 @@ def main(argv: list[str]) -> "None":
     matching_gid = gid == current_gid or gid == 0
 
     if matching_uid and matching_gid:
+        _prepare_runtime_directory(current_uid, current_gid)
         os.execvp(command[0], command)
         raise RuntimeError("execvp returned")
 
@@ -275,11 +374,20 @@ def main(argv: list[str]) -> "None":
                 f"insufficient privileges to switch to UID {uid} GID {gid}; "
                 f"running as UID {current_uid} GID {current_gid}"
             )
+        _prepare_runtime_directory(current_uid, current_gid)
         os.execvp(command[0], command)
         raise RuntimeError("execvp returned")
 
-    requested_user = _sanitize_name(os.environ.get("MOBIPICK_HOST_USER"), prefix="host", fallback_id=uid)
-    requested_group = _sanitize_name(os.environ.get("MOBIPICK_HOST_GROUP"), prefix="hostgrp", fallback_id=gid)
+    requested_user = _sanitize_name(
+        os.environ.get("MOBIPICK_HOST_USER"),
+        prefix="host",
+        fallback_id=uid,
+    )
+    requested_group = _sanitize_name(
+        os.environ.get("MOBIPICK_HOST_GROUP"),
+        prefix="hostgrp",
+        fallback_id=gid,
+    )
     home_path, rc_source = _select_home(os.environ.get("MOBIPICK_HOST_HOME"))
 
     _ensure_group(gid, requested_group)
@@ -288,6 +396,7 @@ def main(argv: list[str]) -> "None":
     _ensure_rc_stub(home_path, rc_source, uid, gid)
     _ensure_shadow_entry(user_name)
     _enable_passwordless_sudo(user_name)
+    _prepare_runtime_directory(uid, gid)
 
     cwd = Path.cwd().resolve()
     for candidate in (cwd, *cwd.parents):

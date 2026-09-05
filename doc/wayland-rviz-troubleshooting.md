@@ -27,9 +27,14 @@ The usual override file is
 ~/.config/mobipick-labs-docker-gui/gui_settings.yaml.
 
 Containers use a private XDG_RUNTIME_DIR owned by their effective user with
-mode 0700. Native Wayland mounts only the selected host socket at a neutral
-path and links it into that directory. X11 and XWayland therefore avoid Qt's
-missing-runtime warning without mounting the host's complete /run/user tree.
+mode 0700. The terminal privilege-drop helper replaces the root runtime path
+before changing to the host UID, so Qt programs launched directly, through ROS
+launch files, or from an interactive terminal all inherit the correct path.
+Non-Qt commands can use or ignore the standard XDG environment normally.
+Native Wayland mounts only the selected host socket at a neutral path and
+links it into the active user's directory. X11 and XWayland therefore avoid
+Qt's missing-runtime and wrong-ownership warnings without mounting the host's
+complete /run/user tree.
 
 ## Code 139 after Mesa loader errors
 

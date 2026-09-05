@@ -538,10 +538,16 @@ Qt's Wayland platform plugin. Host-user images newly built by the setup wizard
 install `qtwayland5`.
 
 The container entrypoint creates a private `XDG_RUNTIME_DIR` with mode `0700`
-for X11 and XWayland applications. For native Wayland, the GUI mounts only the
-selected host socket and the entrypoint links it into that private directory.
-This prevents Qt's missing-runtime warning without exposing the rest of the
-host user's runtime directory.
+for the effective container user. When an interactive terminal changes from
+root to the host-matching user, its privilege-drop helper creates a new runtime
+directory for that UID before starting the shell. Every child process inherits
+the corrected environment, whether or not it uses Qt. For native Wayland, the
+GUI mounts only the selected host socket and links it into the active user's
+private directory. This prevents Qt runtime ownership warnings without
+exposing the rest of the host user's runtime directory.
+
+Recreate already-running GUI containers and terminals after upgrading so they
+start with the updated entrypoint and privilege-drop helper.
 
 See [Wayland and RViz troubleshooting](doc/wayland-rviz-troubleshooting.md) for
 display and OpenGL diagnostics, including the Mesa loader/code 139 failure.
