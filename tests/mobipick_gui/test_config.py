@@ -5,6 +5,7 @@ import yaml
 import mobipick_gui.config as config_module
 from mobipick_gui.config import (
     CONFIG,
+    CONFIG_DEFAULTS,
     CONFIG_FILE,
     DEFAULT_BUTTON_COMMANDS,
     default_user_config_dir,
@@ -29,6 +30,20 @@ from mobipick_gui.config import (
 
 def test_screen_recording_is_disabled_by_default():
     assert CONFIG['recording']['enabled_by_default'] is False
+
+
+def test_image_setup_defaults_target_noetic_v2():
+    assert CONFIG_DEFAULTS['images']['default'] == (
+        'ozkrelo/x_mobipick_labs:noetic-v2.0'
+    )
+    assert CONFIG_DEFAULTS['images']['discovery_filters'] == ['mobipick_labs']
+    assert CONFIG_DEFAULTS['setup_wizard']['development_base_image'] == (
+        'ozkrelo/x_mobipick_labs:noetic-v2.0'
+    )
+    assert (
+        CONFIG_DEFAULTS['setup_wizard']['development_image_tag_template']
+        == '{user}_user_from_2.0'
+    )
 
 
 def test_user_state_uses_xdg_directories(monkeypatch, tmp_path):

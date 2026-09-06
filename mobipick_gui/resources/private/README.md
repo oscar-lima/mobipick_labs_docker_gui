@@ -53,7 +53,9 @@ or changing workspace-specific command buttons after migration.
   X11/XWayland or Wayland socket to each container invocation. The legacy
   entrypoint template also validates or creates a private runtime directory
   for its effective UID and links a forwarded Wayland socket into it when
-  present.
+  present. Its image defaults and newly generated host-user tags use
+  `noetic-v2.0`; compatibility profiles for existing v1.1 and v1.2 images are
+  retained for migrated setups.
 
 ---
 

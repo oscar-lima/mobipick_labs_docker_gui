@@ -146,7 +146,7 @@ class ImageSetupWizard(QWizard):
             'Clone and build mobipick_labs from source on this PC'
         )
         self.install_source_workspace.setChecked(install_source_default)
-        self.remember_completion = QCheckBox('Do not show this wizard on startup again')
+        self.remember_completion = QCheckBox('Remember setup as completed')
         self.remember_completion.setChecked(True)
 
         hardware_page = QWizardPage()
@@ -1186,11 +1186,9 @@ class ImageSetupWizard(QWizard):
             ),
             (
                 self.remember_completion,
-                'Saves the wizard as completed after setup so it does not '
-                'open automatically on future startups. The wizard remains '
-                'available from the Tools menu. Leave this unchecked when you '
-                'want the GUI to keep offering setup guidance until the '
-                'environment is fully ready.',
+                'Records that the guided setup was completed. The wizard '
+                'remains available from the Tools menu and can still open as '
+                'a recovery action when no Mobipick Labs image is installed.',
             ),
         ]
 

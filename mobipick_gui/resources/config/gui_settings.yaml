@@ -74,13 +74,13 @@ terminal:
   drop_to_host_user: true                    # when false, the GUI keeps terminals running as root inside the container
 
 setup_wizard:
-  show_on_first_run: true                    # open setup when user settings have not marked it complete
+  show_on_first_run: true                    # open setup as recovery when no matching image is installed
   public_images:                             # images the wizard can pull for image-default testing
     - "ozkrelo/x_mobipick_labs:noetic-v1.1"
-    - "ozkrelo/x_mobipick_labs:noetic-v1.2"
-  development_base_image: "ozkrelo/x_mobipick_labs:noetic-v1.2"
+    - "ozkrelo/x_mobipick_labs:noetic-v2.0"
+  development_base_image: "ozkrelo/x_mobipick_labs:noetic-v2.0"
   development_image_repository: "ozkrelo/x_mobipick_labs"
-  development_image_tag_template: "{user}_user_from_1.2"
+  development_image_tag_template: "{user}_user_from_2.0"
   source_repository: "https://github.com/DFKI-NI/mobipick_labs.git"
   source_branch: "noetic"
   source_workspace_name: "clean_mobipick_labs_ws"
@@ -88,8 +88,8 @@ setup_wizard:
   source_install_by_default: false           # preselect the source clone/build step when true
 
 images:
-  default: "ozkrelo/x_mobipick_labs:noetic-v1.1" # portable base image selected on first launch
-  discovery_filters: ["mobipick"]                 # repository substrings used to filter docker images for the dropdown
+  default: "ozkrelo/x_mobipick_labs:noetic-v2.0" # portable base image selected on first launch
+  discovery_filters: ["mobipick_labs"]            # repository substrings used to filter docker images for the dropdown
   blacklist: []                               # image refs/patterns ignored by setup and image discovery, e.g. ["*n8n*"]
   include_none_tag: false                     # include dangling (<none>) tags in the image list when true
   related_container_keywords: ["mobipick", "mobipick_cmd", "mobipick-run", "rqt", "rviz"]  # container name fragments treated as related
@@ -113,6 +113,12 @@ images:
       workdir: "/root/catkin_ws"
       description: "Public X11 image with a root-owned workspace baked into the image."
     - ref: "ozkrelo/x_mobipick_labs:noetic-v1.2"
+      user: root
+      supports_host_workspaces: false
+      compatible_workspaces: ["Docker image default"]
+      workdir: "/root/catkin_ws"
+      description: "Public X11 image with a root-owned workspace baked into the image."
+    - ref: "ozkrelo/x_mobipick_labs:noetic-v2.0"
       user: root
       supports_host_workspaces: false
       compatible_workspaces: ["Docker image default"]

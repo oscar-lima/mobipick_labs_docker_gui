@@ -180,7 +180,7 @@ def test_workspace_switch_reloads_workspace_window_layout(tmp_path, monkeypatch)
     monkeypatch.setattr(
         MainWindow,
         '_discover_filtered_image_records',
-        lambda self: ([{'ref': 'ozkrelo/x_mobipick_labs:noetic-v1.1'}], None),
+        lambda self: ([{'ref': CONFIG['images']['default']}], None),
     )
     monkeypatch.setattr(
         MainWindow,

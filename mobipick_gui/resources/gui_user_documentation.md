@@ -374,7 +374,10 @@ The tab search is separate from the documentation window search.
   stop the button, after the GUI signals the original process. Check
   **Host** to run that button's command directly on the host instead of inside
   a Mobipick Docker container; saving writes this choice to the button profile.
-  Host commands do not check or automatically start Roscore.
+  Host commands do not check or automatically start Roscore. If the GUI's
+  local Roscore is already running, the GUI gives each newly started Host
+  command a matching `ROS_MASTER_URI` and a host-reachable `ROS_IP` so ROS
+  nodes on the host and in Mobipick Labs can communicate.
   **Stop Roscore** leaves running Host commands alive; stop them with their own
   toolbar buttons when needed.
   **Sim** and **RViz** cannot be removed, but their commands can be changed.
@@ -382,7 +385,15 @@ The tab search is separate from the documentation window search.
   are fixed buttons and cannot be edited from this profile. Use **Load
   Profile** or **Export Profile** in the editor to import or save a complete
   button configuration as one YAML file.
-- **Setup Wizard** opens the setup flow. The first page explains operating
+- **Setup Wizard** opens the setup flow. It opens automatically at startup only
+  when no Docker image matching the configured discovery filters is installed,
+  including after setup was previously completed. If the configured default is
+  absent but another matching image is installed, the GUI silently uses the
+  active workspace's image, then a compatible host-user image, then another
+  matching image for that session without changing the saved default. Missing
+  optional host tools are listed in the GUI Log tab with the functionality they
+  disable; set `MOBIPICK_GUI_SUPPRESS_OPTIONAL_DEPENDENCY_WARNINGS=1` to hide
+  those warnings. The first page explains operating
   system and hardware compatibility, including the tested Ubuntu releases,
   the dedicated CUDA-capable NVIDIA GPU requirement, and reference GPU memory
   usage. The next page checks common Ubuntu host dependencies, and each wizard
@@ -411,7 +422,7 @@ The tab search is separate from the documentation window search.
   in a terminal, then retry after fixing current-user Docker access.
   The setup guide page includes **Learn More About These Choices**, which opens
   a separate explanation window for the public-image pull, host-user image
-  build, source workspace install, and startup reminder checkboxes.
+  build, source workspace install, and setup-completion checkboxes.
   Later pages pull public images on the host PC with streamed output, select
   defaults, build host-user images, and optionally clone and build
   `mobipick_labs` from source in a host-mounted workspace. The progress page

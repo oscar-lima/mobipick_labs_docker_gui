@@ -15,6 +15,7 @@ import uuid
 from collections import deque
 from datetime import datetime
 from fnmatch import fnmatchcase
+from ipaddress import ip_address
 from pathlib import Path
 from typing import Callable, Match, Optional
 from urllib.parse import urlsplit
@@ -2699,7 +2700,6 @@ class MainWindow(QMainWindow):
         self._last_log_origin: dict[str, str] = {}
         self._gui_log_color = str(CONFIG['log'].get('gui_log_color', '#ff00ff'))
         self._command_log_color = str(CONFIG['log'].get('command_log_color', '#4da3ff'))
-        self._default_image_dialog_shown = False
         self._bug_report_dialog: BugReportDialog | None = None
         self._documentation_dialog: DocumentationDialog | None = None
         self._config_paths_dialog: QDialog | None = None
@@ -3094,6 +3094,7 @@ class MainWindow(QMainWindow):
         self._console_log(1, f'Mobipick Labs Control ready (verbosity {self._verbosity})')
         if self._workspace_load_error:
             self._console_log(1, self._workspace_load_error)
+        self._log_optional_dependency_warnings()
         self._schedule_first_run_setup_wizard()
 
         app_instance = QApplication.instance()
@@ -4914,23 +4915,10 @@ class MainWindow(QMainWindow):
         cfg = self._setup_wizard_cfg()
         if not self._bool_config_value(cfg.get('show_on_first_run', True)):
             return False
-        if self._bool_config_value(cfg.get('completed', False)):
-            return False
         platform = os.environ.get('QT_QPA_PLATFORM', '').strip().lower()
         if platform == 'offscreen':
             return False
-        if self._missing_host_dependencies():
-            return True
         return not bool(self._image_choices)
-
-    def _should_offer_setup_for_missing_default_image(self) -> bool:
-        cfg = self._setup_wizard_cfg()
-        if not self._bool_config_value(cfg.get('show_on_first_run', True)):
-            return False
-        if self._bool_config_value(cfg.get('completed', False)):
-            return False
-        platform = os.environ.get('QT_QPA_PLATFORM', '').strip().lower()
-        return platform != 'offscreen'
 
     def _can_offer_setup_wizard(self) -> bool:
         cfg = self._setup_wizard_cfg()
@@ -4947,12 +4935,51 @@ class MainWindow(QMainWindow):
             return value.strip().lower() in {'1', 'true', 'yes', 'on'}
         return bool(value)
 
-    def _missing_host_dependencies(self) -> list[HostDependency]:
-        return [
-            dep
-            for dep in self._host_dependency_statuses()
-            if not dep.installed
-        ]
+    def _missing_optional_dependency_features(
+        self,
+    ) -> list[tuple[str, str]]:
+        checks = (
+            ('wmctrl', 'window layout capture and replay'),
+            (
+                'xprop',
+                'automatic window identification for layout replay',
+            ),
+            ('dot', 'workspace graph rendering'),
+            ('ffmpeg', 'Auto Launch screen recording'),
+        )
+        missing = []
+        for command, feature in checks:
+            installed, _detail = self._host_shell_status(
+                f'command -v {command}'
+            )
+            if not installed:
+                missing.append((command, feature))
+        return missing
+
+    def _log_optional_dependency_warnings(self) -> None:
+        """Describe unavailable optional features in the GUI Log tab."""
+        if self._bool_config_value(
+            os.environ.get(
+                'MOBIPICK_GUI_SUPPRESS_OPTIONAL_DEPENDENCY_WARNINGS'
+            )
+        ):
+            return
+        platform = os.environ.get('QT_QPA_PLATFORM', '').strip().lower()
+        if platform == 'offscreen':
+            return
+        missing = self._missing_optional_dependency_features()
+        if not missing:
+            return
+        details = '; '.join(
+            f'{command}: {feature} will not be available'
+            for command, feature in missing
+        )
+        self._console_log(
+            1,
+            'Optional host dependencies are missing. '
+            f'{details}. Suppress this warning with '
+            'MOBIPICK_GUI_SUPPRESS_OPTIONAL_DEPENDENCY_WARNINGS=1.',
+        )
 
     @staticmethod
     def _host_command_status(
@@ -5286,7 +5313,7 @@ class MainWindow(QMainWindow):
         ).strip()
         base_image = str(
             cfg.get('development_base_image')
-            or 'ozkrelo/x_mobipick_labs:noetic-v1.2'
+            or 'ozkrelo/x_mobipick_labs:noetic-v2.0'
         ).strip()
         target_image = self._default_custom_image_ref(host_user, cfg)
         source_image = str(
@@ -5548,13 +5575,13 @@ class MainWindow(QMainWindow):
         ).strip()
         template = str(
             cfg.get('development_image_tag_template')
-            or '{user}_user_from_1.2'
+            or '{user}_user_from_2.0'
         )
         safe_user = self._safe_image_tag_part(host_user or 'user')
         try:
             tag = template.format(user=safe_user)
         except (KeyError, ValueError):
-            tag = f'{safe_user}_user_from_1.2'
+            tag = f'{safe_user}_user_from_2.0'
         tag = self._safe_image_tag_part(tag)
         return f'{repo}:{tag}' if repo else tag
 
@@ -5712,7 +5739,7 @@ class MainWindow(QMainWindow):
                 )[0],
                 'development_image_tag_template': (
                     self._split_image_ref(selection.target_image)[1]
-                    or '{user}_user_from_1.2'
+                    or '{user}_user_from_2.0'
                 ),
                 'source_repository': selection.source_repository,
                 'source_branch': selection.source_branch,
@@ -6832,15 +6859,23 @@ CMD ["bash"]
         if not run_on_host and not self._confirm_workspace_mismatch_warning(label):
             return
 
-        def _apply_env(cmd: str) -> str:
+        def _apply_env(
+            cmd: str,
+            host_ros_env: Optional[dict[str, str]] = None,
+        ) -> str:
             if not pass_master:
                 return cmd
-            master = self._current_master_uri()
+            master = (host_ros_env or {}).get('ROS_MASTER_URI')
+            if not master:
+                master = self._current_master_uri()
             if not master:
                 return cmd
             return f"ROS_MASTER_URI={self._sh_quote(master)} {cmd}"
 
         def _run_command():
+            host_ros_env = (
+                self._host_ros_environment() if run_on_host else {}
+            )
             key_label = config.get('key', 'button')
             full_command = MainWindow._command_with_generic_args(
                 self,
@@ -6857,8 +6892,10 @@ CMD ["bash"]
             if setup:
                 composed = f'{setup} && {full_command}'
                 full_command = f"bash -lc {self._sh_quote(composed)}"
-            full_command = _apply_env(full_command)
-            log_command_full = _apply_env(log_command) if log_command else ''
+            full_command = _apply_env(full_command, host_ros_env)
+            log_command_full = (
+                _apply_env(log_command, host_ros_env) if log_command else ''
+            )
             if run_on_host:
                 full_command = self._neutralize_compose_ignore(full_command)
                 if log_command_full:
@@ -6867,8 +6904,22 @@ CMD ["bash"]
             if run_on_host:
                 tab.container_name = None
                 tab.exec_id = None
+                tab.set_environment_overrides(host_ros_env)
+                if host_ros_env:
+                    self._log_info(
+                        'host ROS environment: '
+                        f'ROS_MASTER_URI={host_ros_env["ROS_MASTER_URI"]}, '
+                        f'ROS_IP={host_ros_env["ROS_IP"]}'
+                    )
                 if log_command_full:
-                    self._sp_run(['bash', '-lc', full_command], log_key=tab.key, check=False)
+                    command_env = os.environ.copy()
+                    command_env.update(host_ros_env)
+                    self._sp_run(
+                        ['bash', '-lc', full_command],
+                        log_key=tab.key,
+                        check=False,
+                        env=command_env,
+                    )
                     tab.start_program('bash', ['-lc', log_command_full])
                 else:
                     tab.start_program('bash', ['-lc', full_command])
@@ -7021,6 +7072,48 @@ CMD ["bash"]
             self._roscore_running_cached = True
             return f'http://{self._roscore_container_name}:11311'
         return 'http://mobipick:11311'
+
+    def _host_ros_environment(self) -> dict[str, str]:
+        """Return ROS addresses for a host process using the local roscore."""
+        if self._remote_master_enabled() or not self.is_roscore_running():
+            return {}
+        try:
+            cp = self._sp_run(
+                [
+                    'docker',
+                    'inspect',
+                    '--format',
+                    '{{if .State.Running}}'
+                    '{{json (index .NetworkSettings.Networks "mobipick")}}'
+                    '{{end}}',
+                    self._roscore_container_name,
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                check=False,
+                text=True,
+                log_key='log',
+                log_stdout=False,
+                log_stderr=False,
+            )
+            network = json.loads((cp.stdout or '').strip())
+            master_ip = str(network.get('IPAddress') or '').strip()
+            host_ip = str(network.get('Gateway') or '').strip()
+            if (
+                ip_address(master_ip).version != 4
+                or ip_address(host_ip).version != 4
+            ):
+                return {}
+        except (AttributeError, json.JSONDecodeError, TypeError, ValueError):
+            self._log_info(
+                'could not determine the local roscore Docker addresses; '
+                'starting the host command without ROS network overrides'
+            )
+            return {}
+        return {
+            'ROS_MASTER_URI': f'http://{master_ip}:11311',
+            'ROS_IP': host_ip,
+        }
 
     def _set_remote_master_checkbox(self, checked: bool) -> None:
         self.remote_master_checkbox.blockSignals(True)
@@ -7730,6 +7823,30 @@ CMD ["bash"]
             return value
         return 'simple'
 
+    def _preferred_available_image(self, choices: list[str]) -> str:
+        """Choose an installed image without changing the saved default."""
+        active_workspace = self._workspace_registry.active_workspace()
+        workspace_image = (
+            str(active_workspace.image or '').strip()
+            if active_workspace is not None
+            else ''
+        )
+        if workspace_image in choices:
+            return workspace_image
+        workspace_name = self._workspace_registry.active
+        for image in choices:
+            if (
+                self._image_supports_host_workspaces(image)
+                and self._image_compatible_with_workspace(
+                    image,
+                    workspace_name,
+                ) is True
+            ):
+                return image
+        if self._selected_image in choices:
+            return self._selected_image
+        return choices[0] if choices else ''
+
     def _load_available_images(self, show_feedback: bool = False):
         images_cfg = self._images_cfg
         records, error_message = self._discover_filtered_image_records()
@@ -7763,18 +7880,9 @@ CMD ["bash"]
         else:
             ordered_choices = list(choices)
 
-        workspace_image = (
-            self._workspace_match_image(
-                self._workspace_registry.active,
-                ordered_choices,
-            )
-            or self._workspace_image(self._workspace_registry.active)
+        self._selected_image = self._preferred_available_image(
+            ordered_choices
         )
-        preferred_image = workspace_image or self._selected_image
-        if preferred_image in ordered_choices:
-            self._selected_image = preferred_image
-        else:
-            self._selected_image = ordered_choices[0]
 
         self._image_choices = ordered_choices
 
@@ -7798,20 +7906,6 @@ CMD ["bash"]
 
         if show_feedback:
             self._console_log(2, f'Available images: {", ".join(ordered_choices)}')
-
-        if (
-            default_image
-            and not default_available
-        ):
-            if self._should_offer_setup_for_missing_default_image():
-                self._console_log(
-                    1,
-                    'configured default Docker image is missing; '
-                    'opening setup wizard',
-                )
-                QTimer.singleShot(0, self._open_setup_wizard)
-            elif os.environ.get('QT_QPA_PLATFORM', '').strip().lower() != 'offscreen':
-                self._show_missing_default_image_dialog(default_image)
 
         self._update_related_patterns()
         self._populate_workspace_combo()
@@ -7838,69 +7932,6 @@ CMD ["bash"]
         app = QApplication.instance()
         if app is not None:
             QTimer.singleShot(0, app.quit)
-
-    def _show_missing_default_image_dialog(self, image_ref: str):
-        if self._default_image_dialog_shown:
-            return
-        self._default_image_dialog_shown = True
-
-        command = f'docker pull {image_ref}'
-        dialog = QDialog(self)
-        dialog.setWindowTitle('Default Image Not Installed')
-
-        layout = QVBoxLayout(dialog)
-        message = QLabel(
-            'The configured default docker image is not available locally.\n'
-            f'Pull "{image_ref}" on this PC now, or pull it manually and '
-            'confirm when it is available locally.'
-        )
-        message.setWordWrap(True)
-        layout.addWidget(message)
-
-        command_row = QHBoxLayout()
-        command_edit = QLineEdit(command)
-        command_edit.setReadOnly(True)
-        command_edit.setFocusPolicy(Qt.StrongFocus)
-        command_edit.setMinimumWidth(520)
-        command_edit.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        command_edit.selectAll()
-        command_row.addWidget(command_edit)
-
-        copy_button = QPushButton('Copy Command')
-
-        def _copy_command():
-            QApplication.clipboard().setText(command)
-            copy_button.setText('Copied!')
-            QTimer.singleShot(1500, lambda: copy_button.setText('Copy Command'))
-
-        copy_button.clicked.connect(_copy_command)
-        command_row.addWidget(copy_button)
-        layout.addLayout(command_row)
-
-        button_box = QDialogButtonBox(QDialogButtonBox.Cancel)
-        pull_button = button_box.addButton(
-            'Pull on This PC',
-            QDialogButtonBox.AcceptRole,
-        )
-        manual_done_button = button_box.addButton(
-            'I Pulled It',
-            QDialogButtonBox.ActionRole,
-        )
-
-        def _pull_image():
-            self._start_image_pulls([image_ref])
-            dialog.accept()
-
-        def _manual_done():
-            self._load_available_images(show_feedback=False)
-            dialog.accept()
-
-        pull_button.clicked.connect(_pull_image)
-        manual_done_button.clicked.connect(_manual_done)
-        button_box.rejected.connect(dialog.reject)
-        layout.addWidget(button_box)
-
-        dialog.exec_()
 
     def _select_image(
         self,

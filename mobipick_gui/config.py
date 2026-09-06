@@ -269,8 +269,8 @@ CONFIG_DEFAULTS: Dict[str, Dict] = {
         'docker_stop_timeout': 3,
     },
     'images': {
-        'default': 'ozkrelo/x_mobipick_labs:noetic-v1.1',
-        'discovery_filters': ['mobipick'],
+        'default': 'ozkrelo/x_mobipick_labs:noetic-v2.0',
+        'discovery_filters': ['mobipick_labs'],
         'blacklist': [],
         'include_none_tag': False,
         'related_container_keywords': ['mobipick', 'mobipick_cmd', 'mobipick-run', 'rqt', 'rviz'],
@@ -313,6 +313,17 @@ CONFIG_DEFAULTS: Dict[str, Dict] = {
                 ),
             },
             {
+                'ref': 'ozkrelo/x_mobipick_labs:noetic-v2.0',
+                'user': 'root',
+                'supports_host_workspaces': False,
+                'compatible_workspaces': ['Docker image default'],
+                'workdir': '/root/catkin_ws',
+                'description': (
+                    'Public X11 image with a root-owned workspace baked '
+                    'into the image.'
+                ),
+            },
+            {
                 'match': '*_user*',
                 'user': 'host',
                 'supports_host_workspaces': True,
@@ -337,11 +348,11 @@ CONFIG_DEFAULTS: Dict[str, Dict] = {
         'show_on_first_run': True,
         'public_images': [
             'ozkrelo/x_mobipick_labs:noetic-v1.1',
-            'ozkrelo/x_mobipick_labs:noetic-v1.2',
+            'ozkrelo/x_mobipick_labs:noetic-v2.0',
         ],
-        'development_base_image': 'ozkrelo/x_mobipick_labs:noetic-v1.2',
+        'development_base_image': 'ozkrelo/x_mobipick_labs:noetic-v2.0',
         'development_image_repository': 'ozkrelo/x_mobipick_labs',
-        'development_image_tag_template': '{user}_user_from_1.2',
+        'development_image_tag_template': '{user}_user_from_2.0',
         'source_repository': 'https://github.com/DFKI-NI/mobipick_labs.git',
         'source_branch': 'noetic',
         'source_workspace_name': 'clean_mobipick_labs_ws',

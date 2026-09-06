@@ -108,7 +108,7 @@ def test_wizard_setup_guide_learn_more_explains_checkboxes(tmp_path):
     assert 'container user matching your host user' in details
     assert 'Clone and build mobipick_labs from source on this PC' in details
     assert 'Creates a host workspace for mobipick_labs' in details
-    assert 'Do not show this wizard on startup again' in details
+    assert 'Remember setup as completed' in details
     assert 'wizard remains available from the Tools menu' in details
 
     wizard.close()
@@ -905,11 +905,6 @@ def test_setup_wizard_persists_custom_image_profile(
         'update_sim_status_from_poll',
         lambda self, force=False: None,
     )
-    monkeypatch.setattr(
-        MainWindow,
-        '_missing_host_dependencies',
-        lambda self: [],
-    )
     started = {}
     monkeypatch.setattr(
         MainWindow,
@@ -1079,6 +1074,36 @@ def test_discover_filtered_image_records_skips_blacklist(monkeypatch):
     assert error is None
     assert [record['ref'] for record in records] == [
         'ozkrelo/x_mobipick_labs:gpt'
+    ]
+
+
+def test_default_discovery_filter_excludes_other_mobipick_images(monkeypatch):
+    window = MainWindow.__new__(MainWindow)
+    window._images_cfg = copy.deepcopy(CONFIG['images'])
+    window._console_log = lambda *_args, **_kwargs: None
+    window._prepare_run_env = lambda kwargs: kwargs
+
+    monkeypatch.setattr(
+        main_window_module.subprocess,
+        'run',
+        lambda *args, **kwargs: type(
+            'Result',
+            (),
+            {
+                'returncode': 0,
+                'stdout': (
+                    '{"Repository":"mobipick_graspness","Tag":"latest"}\n'
+                    '{"Repository":"ozkrelo/x_mobipick_labs","Tag":"noetic-v2.0"}\n'
+                ),
+            },
+        )(),
+    )
+
+    records, error = window._discover_filtered_image_records()
+
+    assert error is None
+    assert [record['ref'] for record in records] == [
+        'ozkrelo/x_mobipick_labs:noetic-v2.0'
     ]
 
 
@@ -1264,12 +1289,6 @@ def test_setup_wizard_does_not_auto_open_when_images_are_available(
         'update_sim_status_from_poll',
         lambda self, force=False: None,
     )
-    monkeypatch.setattr(
-        MainWindow,
-        '_missing_host_dependencies',
-        lambda self: [],
-    )
-
     app = QApplication.instance() or QApplication([])
     window = MainWindow(verbosity=1)
     window.poll_timer.stop()
@@ -1283,7 +1302,7 @@ def test_setup_wizard_does_not_auto_open_when_images_are_available(
     app.processEvents()
 
 
-def test_setup_wizard_auto_opens_when_host_dependency_is_missing(
+def test_setup_wizard_does_not_auto_open_for_optional_dependency(
     tmp_path,
     monkeypatch,
 ):
@@ -1304,16 +1323,10 @@ def test_setup_wizard_auto_opens_when_host_dependency_is_missing(
     )
     monkeypatch.setattr(
         MainWindow,
-        '_missing_host_dependencies',
-        lambda self: [
-            HostDependency(
-                key='wmctrl',
-                label='wmctrl',
-                package='wmctrl',
-                installed=False,
-                reason='Optional window layout support.',
-            )
-        ],
+        '_host_dependency_statuses',
+        lambda self: pytest.fail(
+            'dependency status must not control startup wizard display'
+        ),
     )
 
     app = QApplication.instance() or QApplication([])
@@ -1321,6 +1334,39 @@ def test_setup_wizard_auto_opens_when_host_dependency_is_missing(
     window.poll_timer.stop()
     window._sigint_timer.stop()
     monkeypatch.setenv('QT_QPA_PLATFORM', 'xcb')
+
+    assert not window._should_auto_show_setup_wizard()
+
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_setup_wizard_auto_opens_without_images_even_when_completed(
+    tmp_path,
+    monkeypatch,
+):
+    registry_path = tmp_path / 'workspaces.yaml'
+    monkeypatch.setenv('MOBIPICK_WORKSPACE_CONFIG', str(registry_path))
+    setup_cfg = copy.deepcopy(CONFIG['setup_wizard'])
+    setup_cfg['completed'] = True
+    monkeypatch.setitem(CONFIG, 'setup_wizard', setup_cfg)
+    monkeypatch.setattr(
+        MainWindow,
+        '_discover_filtered_image_records',
+        lambda self: ([{'ref': CONFIG['images']['default']}], None),
+    )
+    monkeypatch.setattr(
+        MainWindow,
+        'update_sim_status_from_poll',
+        lambda self, force=False: None,
+    )
+
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow(verbosity=1)
+    window.poll_timer.stop()
+    window._sigint_timer.stop()
+    monkeypatch.setenv('QT_QPA_PLATFORM', 'xcb')
+    window._image_choices = []
 
     assert window._should_auto_show_setup_wizard()
 
@@ -1423,7 +1469,7 @@ def test_record_screen_cancel_keeps_checkbox_unchecked(tmp_path, monkeypatch):
     app.processEvents()
 
 
-def test_missing_default_image_opens_setup_wizard_when_other_images_exist(
+def test_missing_default_image_silently_uses_available_image(
     tmp_path,
     monkeypatch,
 ):
@@ -1458,19 +1504,75 @@ def test_missing_default_image_opens_setup_wizard_when_other_images_exist(
         'singleShot',
         lambda _delay, callback: scheduled.append(callback),
     )
-    monkeypatch.setattr(
-        MainWindow,
-        '_show_missing_default_image_dialog',
-        lambda self, image_ref: pytest.fail(
-            f'unexpected missing default dialog for {image_ref}'
-        ),
-    )
     window._images_cfg['default'] = 'ozkrelo/mobipick_labs:noetic'
 
     window._load_available_images(show_feedback=False)
 
     assert window._image_choices == ['ozkrelo/x_mobipick_labs:noetic-v1.1']
-    assert scheduled == [window._open_setup_wizard]
+    assert window._selected_image == 'ozkrelo/x_mobipick_labs:noetic-v1.1'
+    assert window._images_cfg['default'] == 'ozkrelo/mobipick_labs:noetic'
+    assert scheduled == []
+
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_optional_dependency_warning_describes_disabled_functionality(
+    tmp_path,
+    monkeypatch,
+):
+    registry_path = tmp_path / 'workspaces.yaml'
+    monkeypatch.setenv('MOBIPICK_WORKSPACE_CONFIG', str(registry_path))
+    monkeypatch.setattr(
+        MainWindow,
+        '_discover_filtered_image_records',
+        lambda self: ([{'ref': CONFIG['images']['default']}], None),
+    )
+    monkeypatch.setattr(
+        MainWindow,
+        'update_sim_status_from_poll',
+        lambda self, force=False: None,
+    )
+
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow(verbosity=1)
+    window.poll_timer.stop()
+    window._sigint_timer.stop()
+    messages = []
+    monkeypatch.setenv('QT_QPA_PLATFORM', 'xcb')
+    monkeypatch.setattr(
+        window,
+        '_missing_optional_dependency_features',
+        lambda: [
+            ('ffmpeg', 'Auto Launch screen recording'),
+        ],
+    )
+    monkeypatch.setattr(
+        window,
+        '_console_log',
+        lambda level, message: messages.append((level, message)),
+    )
+
+    window._log_optional_dependency_warnings()
+
+    assert len(messages) == 1
+    assert (
+        'Auto Launch screen recording will not be available'
+        in messages[0][1]
+    )
+    assert (
+        'MOBIPICK_GUI_SUPPRESS_OPTIONAL_DEPENDENCY_WARNINGS=1'
+        in messages[0][1]
+    )
+
+    messages.clear()
+    monkeypatch.setenv(
+        'MOBIPICK_GUI_SUPPRESS_OPTIONAL_DEPENDENCY_WARNINGS',
+        '1',
+    )
+    window._log_optional_dependency_warnings()
+
+    assert messages == []
 
     window.deleteLater()
     app.processEvents()

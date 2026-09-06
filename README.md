@@ -108,13 +108,14 @@ group access, and test Docker with both `sudo` and the current user.
 Log out and back in after changing Docker group membership, or start a shell
 with `newgrp docker`.
 
-Use the setup wizard on first launch to pull at least one Mobipick image on
-the host PC with streamed output. If you choose the manual wizard option, run
-one of these commands and confirm in the wizard when it finishes:
+When no matching Mobipick Labs image is installed, the GUI opens the setup
+wizard so you can pull one on the host PC with streamed output. If you choose
+the manual wizard option, run one of these commands and confirm in the wizard
+when it finishes:
 
 ```bash
 docker pull ozkrelo/x_mobipick_labs:noetic-v1.1
-docker pull ozkrelo/x_mobipick_labs:noetic-v1.2
+docker pull ozkrelo/x_mobipick_labs:noetic-v2.0
 ```
 
 ## Installation
@@ -353,6 +354,15 @@ Image behavior is controlled by `images` in `gui_settings.yaml`.
   workspace support, compatible workspaces, working directory, entrypoint, and
   tooltip description.
 
+On startup, the setup wizard opens automatically only when no Docker image
+matching `images.discovery_filters` is installed. A missing configured default
+does not reopen the wizard: the GUI uses an installed workspace image, then a
+compatible host-user image, then another discovered Mobipick Labs image for
+that session without changing the saved default. Missing optional host tools
+are reported in the GUI Log tab instead. Set
+`MOBIPICK_GUI_SUPPRESS_OPTIONAL_DEPENDENCY_WARNINGS=1` to suppress those
+warnings.
+
 The setup wizard first explains operating system and hardware compatibility,
 including the tested Ubuntu releases, the dedicated CUDA-capable NVIDIA GPU
 requirement, and reference GPU memory usage. It then checks common Ubuntu host
@@ -432,7 +442,10 @@ Check **Host** in the editor to run a command directly on the host and save
 `host: true` in the button profile. Unchecked commands continue to run in the
 configured Mobipick Docker service. Stopping Roscore shuts down the dependent
 Docker stack but leaves running host commands alive. Host commands also start
-directly without checking or automatically starting Roscore.
+directly without checking or automatically starting Roscore. When the GUI's
+local Roscore is already running, a newly started host command receives
+`ROS_MASTER_URI` pointing to that container and `ROS_IP` set to the host side
+of the `mobipick` Docker bridge. These overrides apply only to host commands.
 
 Command entries can declare:
 

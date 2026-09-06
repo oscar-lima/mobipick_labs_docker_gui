@@ -483,7 +483,9 @@ class BugReportDialog(QDialog):
             self.notes_edit.blockSignals(False)
             notes_checkbox = self._checkboxes.get('user_notes')
             if notes_checkbox:
+                notes_checkbox.blockSignals(True)
                 notes_checkbox.setChecked(True)
+                notes_checkbox.blockSignals(False)
         left_layout.addStretch(1)
 
         right = QWidget()

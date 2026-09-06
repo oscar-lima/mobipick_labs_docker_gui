@@ -14,8 +14,9 @@ mount a private host workspace for normal simulation runs.
 - `ozkrelo/mobipick_labs:noetic`
 - `ozkrelo/x_mobipick_labs:noetic-v1.1`
 - `ozkrelo/x_mobipick_labs:noetic-v1.2`
+- `ozkrelo/x_mobipick_labs:noetic-v2.0`
 
-The X image `ozkrelo/x_mobipick_labs:noetic-v1.2` has the useful workspace
+The current X image `ozkrelo/x_mobipick_labs:noetic-v2.0` has the useful workspace
 under `/root/catkin_ws` inside the image. For this mode, selecting a private
 workspace in the GUI should still run against the image default workspace
 unless a host-user development image is selected.
@@ -32,9 +33,9 @@ image as `user: host`; do not hardcode a real developer username in image tags,
 paths, or compatibility profiles. Private templates expose the same value as
 `{{ host_user }}`.
 
-- `ozkrelo/x_mobipick_labs:{{ host_user }}_user_from_1.2`
+- `ozkrelo/x_mobipick_labs:{{ host_user }}_user_from_2.0`
   - Suitable for `clean_mobipick_labs_ws`.
-  - Built from `ozkrelo/x_mobipick_labs:noetic-v1.1`.
+  - Built from `ozkrelo/x_mobipick_labs:noetic-v2.0`.
   - Uses `/usr/local/bin/entrypoint_user.sh`.
 - `ozkrelo/x_mobipick_labs:rae_ws_from_{{ host_user }}_user`
   - Intended for `rae_upom_mobipick_ws`.

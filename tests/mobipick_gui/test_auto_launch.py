@@ -676,11 +676,15 @@ def test_host_config_command_does_not_start_roscore():
         def start_program(self, program, args):
             events.append(('start_program', program, args))
 
+        def set_environment_overrides(self, values):
+            events.append(('environment', values))
+
     harness = SimpleNamespace(
         _get_button_widget=lambda key: f'{key}-button',
         _guard_toggle_action=lambda key, button: True,
         _ensure_tab=lambda key, label, closable=False: FakeTab(),
         _current_master_uri=lambda: '',
+        _host_ros_environment=lambda: {},
         _log_info=lambda message: events.append(('log', message)),
         _neutralize_compose_ignore=MainWindow._neutralize_compose_ignore,
         _config_runs_on_host=MainWindow._config_runs_on_host,
@@ -720,6 +724,74 @@ def test_host_config_command_does_not_start_roscore():
         for event in events
         if isinstance(event, tuple)
     )
+
+
+def test_host_config_command_receives_local_roscore_environment():
+    events = []
+
+    class FakeTab:
+        container_name = None
+        exec_id = None
+
+        def is_running(self):
+            return False
+
+        def set_environment_overrides(self, values):
+            events.append(('environment', values))
+
+        def start_program(self, program, args):
+            events.append(('start_program', program, args))
+
+    ros_env = {
+        'ROS_MASTER_URI': 'http://172.20.0.2:11311',
+        'ROS_IP': '172.20.0.1',
+    }
+    harness = SimpleNamespace(
+        _get_button_widget=lambda key: f'{key}-button',
+        _guard_toggle_action=lambda key, button: True,
+        _ensure_tab=lambda key, label, closable=False: FakeTab(),
+        _current_master_uri=lambda: 'http://mobipick-roscore:11311',
+        _host_ros_environment=lambda: ros_env,
+        _log_info=lambda message: events.append(('log', message)),
+        _neutralize_compose_ignore=MainWindow._neutralize_compose_ignore,
+        _sh_quote=MainWindow._sh_quote,
+        _config_runs_on_host=MainWindow._config_runs_on_host,
+        _focus_tab=lambda key: None,
+        _update_stop_custom_enabled=lambda: None,
+        _set_config_visual=lambda *args: None,
+        _ensure_roscore_ready=lambda callback: events.append(
+            'ensure_roscore_ready'
+        ),
+    )
+    harness._config_label = MethodType(MainWindow._config_label, harness)
+    harness._prepared_config_stop_command = MethodType(
+        MainWindow._prepared_config_stop_command,
+        harness,
+    )
+    harness._run_config_command = MethodType(
+        MainWindow._run_config_command,
+        harness,
+    )
+
+    harness._run_config_command(
+        {
+            'key': 'host-node',
+            'label': 'Host Node',
+            'kind': 'command',
+            'command': 'rosrun example node',
+            'host': True,
+            'pass_ros_master_uri': True,
+        }
+    )
+
+    assert ('environment', ros_env) in events
+    start = next(event for event in events if event[0] == 'start_program')
+    assert (
+        "ROS_MASTER_URI='http://172.20.0.2:11311'"
+        in start[2][-1]
+    )
+    assert 'mobipick-roscore' not in start[2][-1]
+    assert 'ensure_roscore_ready' not in events
 
 
 def test_roscore_shutdown_finalizer_resets_config_buttons(monkeypatch):
