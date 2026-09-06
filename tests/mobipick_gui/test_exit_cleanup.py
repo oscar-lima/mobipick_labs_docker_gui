@@ -1,5 +1,8 @@
 from types import MethodType, SimpleNamespace
 
+from PyQt5.QtCore import QProcess, QProcessEnvironment
+from PyQt5.QtWidgets import QApplication, QMainWindow
+
 from mobipick_gui.config import SCRIPT_CLEAN
 from mobipick_gui.main_window import MainWindow
 
@@ -67,3 +70,33 @@ def test_exit_cleanup_runs_all_button_stop_commands_in_reverse_order():
         ['bash', '-lc', 'COMPOSE_IGNORE_ORPHANS= docker compose stop first'],
     ]
     assert commands[3:] == [['stop-sim'], ['stop-related'], [SCRIPT_CLEAN]]
+
+
+def test_exit_cleanup_cancels_background_sequence_before_deleting_process():
+    app = QApplication.instance() or QApplication([])
+    window = QMainWindow()
+    window._bg_procs = []
+    window._build_process_environment = (
+        lambda _env: QProcessEnvironment.systemEnvironment()
+    )
+    window._log_cmd = lambda _command: None
+    window._append_command_output = lambda _key, _data: None
+    window._append_log_html = lambda _message: None
+    window._console_log = lambda _level, _message: None
+    window._fmt_args = lambda command: ' '.join(command)
+    window._is_clean_command = lambda _command: False
+
+    MainWindow._run_command_sequence(
+        window,
+        [['bash', '-lc', 'sleep 5']],
+        log_key='log',
+    )
+    process = window._bg_procs[0]
+    assert process.waitForStarted(1000)
+
+    MainWindow._cancel_background_process(window, process)
+
+    assert process.state() == QProcess.NotRunning
+    assert process not in window._bg_procs
+    app.processEvents()
+    window.deleteLater()

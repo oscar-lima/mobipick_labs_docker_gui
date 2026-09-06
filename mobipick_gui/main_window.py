@@ -9944,9 +9944,12 @@ CMD ["bash"]
 
         queue: deque[list[str]] = deque(commands)
         current: list[str] | None = None
+        active = True
 
         def start_next():
             nonlocal current
+            if not active:
+                return
             if not queue:
                 cleanup()
                 return
@@ -9956,18 +9959,22 @@ CMD ["bash"]
             proc.start(current[0], current[1:])
 
         def handle_stdout():
+            if not active:
+                return
             data = bytes(proc.readAllStandardOutput())
             if data and log_key:
                 self._append_command_output(log_key, data)
 
         def handle_stderr():
+            if not active:
+                return
             data = bytes(proc.readAllStandardError())
             if data and log_key:
                 self._append_command_output(log_key, data)
 
         def handle_finished(code: int, _status):
             nonlocal current
-            if current is None:
+            if not active or current is None:
                 return
             handle_stdout()
             handle_stderr()
@@ -9982,7 +9989,7 @@ CMD ["bash"]
 
         def handle_error(_error):
             nonlocal current
-            if current is None:
+            if not active or current is None:
                 return
             handle_stdout()
             handle_stderr()
@@ -9995,19 +10002,65 @@ CMD ["bash"]
             current = None
             QTimer.singleShot(0, start_next)
 
-        def cleanup():
+        def disconnect_callbacks():
+            for process_signal, callback in (
+                (proc.readyReadStandardOutput, handle_stdout),
+                (proc.readyReadStandardError, handle_stderr),
+                (proc.finished, handle_finished),
+                (proc.errorOccurred, handle_error),
+            ):
+                try:
+                    process_signal.disconnect(callback)
+                except (RuntimeError, TypeError):
+                    pass
+
+        def cleanup(stop_running: bool = False):
+            nonlocal active, current
+            if not active:
+                return
+            active = False
+            current = None
+            queue.clear()
+            disconnect_callbacks()
+            if stop_running:
+                try:
+                    if proc.state() != QProcess.NotRunning:
+                        proc.kill()
+                        proc.waitForFinished(1000)
+                except RuntimeError:
+                    pass
             if proc in self._bg_procs:
                 self._bg_procs.remove(proc)
-            proc.deleteLater()
-            if on_finished:
+            try:
+                proc.deleteLater()
+            except RuntimeError:
+                pass
+            if on_finished and not stop_running:
                 QTimer.singleShot(0, on_finished)
 
         proc.readyReadStandardOutput.connect(handle_stdout)
         proc.readyReadStandardError.connect(handle_stderr)
         proc.finished.connect(handle_finished)
         proc.errorOccurred.connect(handle_error)
+        proc._mobipick_cancel_sequence = lambda: cleanup(stop_running=True)
         self._bg_procs.append(proc)
         start_next()
+
+    def _cancel_background_process(self, proc: QProcess) -> None:
+        """Stop a background process without leaving live Qt callbacks behind."""
+        cancel_sequence = getattr(proc, '_mobipick_cancel_sequence', None)
+        if callable(cancel_sequence):
+            cancel_sequence()
+            return
+        try:
+            if proc.state() != QProcess.NotRunning:
+                proc.kill()
+                proc.waitForFinished(1000)
+            proc.deleteLater()
+        except RuntimeError:
+            pass
+        if proc in self._bg_procs:
+            self._bg_procs.remove(proc)
 
     # ---------- Tabs and process management ----------
 
@@ -12169,11 +12222,7 @@ CMD ["bash"]
         self.stop_terminal()
 
         for proc in list(self._bg_procs):
-            try:
-                proc.kill()
-            except Exception:
-                pass
-            proc.deleteLater()
+            self._cancel_background_process(proc)
         self._bg_procs.clear()
 
         for p in list(self.tasks.values()):
