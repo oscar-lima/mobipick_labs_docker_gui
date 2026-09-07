@@ -314,6 +314,11 @@ Custom commands use the selected image, workspace, world, and ROS master mode.
 
 Each main action has a tab that shows live output.
 
+ROS messages identify the severity, local wall-clock time, and node, for
+example `[WARN] [14:26:56] [/pose_selector]: Clearing planning scene`.
+Warnings are shown in yellow even when the ROS process does not emit terminal
+color codes.
+
 - **Roscore** shows ROS master output.
 - **Sim** shows simulator output.
 - **Tables Demo** shows planning node output.

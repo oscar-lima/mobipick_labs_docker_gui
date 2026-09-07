@@ -244,6 +244,10 @@ CONFIG_DEFAULTS: Dict[str, Dict] = {
             'COMPOSE_IGNORE_ORPHANS': '1',
             'COMPOSE_FILE': str(DOCKER_COMPOSE_FILE),
             'COMPOSE_PROJECT_NAME': 'mobipick',
+            'ROSCONSOLE_FORMAT': (
+                '[${severity}] [${walltime:%H:%M:%S}] '
+                '[${node}]: ${message}'
+            ),
             'MOBIPICK_UID': HOST_UID,
             'MOBIPICK_GID': HOST_GID,
             'MOBIPICK_HOST_USER': HOST_USER,
@@ -253,6 +257,10 @@ CONFIG_DEFAULTS: Dict[str, Dict] = {
         'compose_run_env': {
             'PYTHONUNBUFFERED': '1',
             'PYTHONIOENCODING': 'UTF-8',
+            'ROSCONSOLE_FORMAT': (
+                '[${severity}] [${walltime:%H:%M:%S}] '
+                '[${node}]: ${message}'
+            ),
             'MOBIPICK_ROS_USE_IP': '1',
             'MOBIPICK_UID': HOST_UID,
             'MOBIPICK_GID': HOST_GID,

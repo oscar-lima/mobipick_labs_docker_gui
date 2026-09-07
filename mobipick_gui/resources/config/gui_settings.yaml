@@ -62,9 +62,11 @@ buttons:
 process:
   qprocess_env:
     COMPOSE_IGNORE_ORPHANS: "1"               # environment injected into every QProcess we spawn
+    ROSCONSOLE_FORMAT: '[${severity}] [${walltime:%H:%M:%S}] [${node}]: ${message}'  # readable ROS wall time and node name
   compose_run_env:
     PYTHONUNBUFFERED: "1"                     # exported into docker compose runs to force unbuffered stdout
     PYTHONIOENCODING: "UTF-8"                 # ensure python subprocesses emit UTF-8
+    ROSCONSOLE_FORMAT: '[${severity}] [${walltime:%H:%M:%S}] [${node}]: ${message}'  # use the same ROS format in containers
     MOBIPICK_ROS_USE_IP: "1"                  # advertise container bridge IPs instead of disposable Docker hostnames
 
 terminal:

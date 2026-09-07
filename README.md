@@ -69,8 +69,9 @@ and shutdown sequence.
 Runtime commands are executed in two ways:
 
 - Long-running tasks use `QProcess` through `ProcessTab`. Output is merged,
-  sanitized for terminal escape sequences, converted from ANSI color to HTML
-  when needed, and flushed into `LogTextEdit`.
+  buffered to complete lines, sanitized for terminal escape sequences,
+  converted from ANSI color to HTML when needed, and flushed into
+  `LogTextEdit`. Uncolored ROS warning lines receive a yellow fallback.
 - Short helper commands use `subprocess.run()` through `MainWindow._sp_run()`,
   which injects the same runtime environment and logs the command to the GUI.
 
@@ -604,7 +605,8 @@ profiles in the active writable file override bundled entries.
 
 Every process tab uses `LogTextEdit`, which buffers updates to keep high-volume
 process output responsive. The log widget keeps only the configured maximum
-block count.
+block count. ROS messages use readable wall-clock time and identify their node,
+for example `[WARN] [14:26:56] [/pose_selector]: Clearing planning scene`.
 
 GUI-originated messages and executed commands are written to the **Log** tab.
 Users can save the current tab, save all tabs, or load a saved HTML log into a

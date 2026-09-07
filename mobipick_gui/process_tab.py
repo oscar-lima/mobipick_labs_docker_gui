@@ -1,16 +1,22 @@
 """Process tab widget wrapper."""
 from __future__ import annotations
 
+import codecs
 import html
+import re
 from typing import TYPE_CHECKING
 
 from PyQt5.QtCore import QProcess
 
-from .ansi import ansi_to_html
+from .ansi import CSI_SEQ_RE, ansi_to_html
 from .log_widget import LogTextEdit
 
 if TYPE_CHECKING:  # pragma: no cover
     from .main_window import MainWindow
+
+
+ROS_WARNING_RE = re.compile(r'^\[\s*WARN(?:ING)?\s*\]')
+ROS_WARNING_COLOR = '#f1fa8c'
 
 
 class ProcessTab:
@@ -33,6 +39,7 @@ class ProcessTab:
         self.notify_parent_finished = notify_parent_finished
 
         self.output = output or LogTextEdit()
+        self._reset_output_stream()
 
         self.environment_overrides: dict[str, str] = {}
         self.proc = QProcess(parent)
@@ -53,12 +60,14 @@ class ProcessTab:
         self.xhost_token: str | None = None
 
     def start_shell(self, bash_cmd: str):
+        self._reset_output_stream()
         self._append_command_line(bash_cmd)
         self.parent._log_cmd(bash_cmd)
         self._apply_env()
         self.proc.start('bash', ['-lc', bash_cmd])
 
     def start_program(self, program: str, args: list[str]):
+        self._reset_output_stream()
         cmdline = program + ' ' + ' '.join(args)
         self._append_command_line(cmdline)
         self.parent._log_cmd([program] + args)
@@ -98,21 +107,61 @@ class ProcessTab:
         data_err = bytes(self.proc.readAllStandardError())
         if data_err:
             self._append_raw(data_err)
+        self._output_pending += self._output_decoder.decode(b'', final=True)
+        self._flush_output_pending(final=True)
 
     def _append_raw(self, data_bytes: bytes):
         if not data_bytes:
             return
-        data = data_bytes.decode(errors='replace')
+        data = self._output_decoder.decode(data_bytes)
+        if not data:
+            return
+        self._output_pending += data
+        self._flush_output_pending()
+
+    def _reset_output_stream(self) -> None:
+        """Start fresh decoding state when a reusable tab starts a process."""
+        self._output_decoder = codecs.getincrementaldecoder('utf-8')(
+            errors='replace'
+        )
+        self._output_pending = ''
+
+    def _flush_output_pending(self, *, final: bool = False) -> None:
+        """Render complete lines while retaining an unfinished stream line."""
+        if final:
+            data = self._output_pending
+            self._output_pending = ''
+        else:
+            line_end = self._output_pending.rfind('\n')
+            if line_end < 0:
+                return
+            data = self._output_pending[:line_end + 1]
+            self._output_pending = self._output_pending[line_end + 1:]
         if not data:
             return
         data = self.parent._filter_terminal_escapes(data)
         data = self.parent._collapse_carriage_returns(data)
         if self.notify_parent_finished:
             self.parent._prepare_tab_for_origin(self.key, 'container')
-        if '\x1b[' in data:
-            self.output.enqueue(True, ansi_to_html(data))
-        else:
-            self.output.enqueue(False, data)
+        self._enqueue_output_lines(data)
+
+    def _enqueue_output_lines(self, data: str) -> None:
+        """Preserve ANSI colors and highlight uncolored ROS warnings."""
+        for line in data.splitlines(keepends=True):
+            plain_line = CSI_SEQ_RE.sub('', line)
+            if ROS_WARNING_RE.match(plain_line):
+                content = plain_line.rstrip('\r\n')
+                rendered = (
+                    f'<span style="color:{ROS_WARNING_COLOR}">'
+                    f'{html.escape(content)}</span>'
+                )
+                if line.endswith('\n'):
+                    rendered += '<br>'
+                self.output.enqueue(True, rendered)
+            elif '\x1b[' in line:
+                self.output.enqueue(True, ansi_to_html(line))
+            else:
+                self.output.enqueue(False, line)
 
     def _append_command_line(self, command: str) -> None:
         line = f'<i>&gt; {html.escape(command)}</i>'

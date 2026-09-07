@@ -32,6 +32,19 @@ def test_screen_recording_is_disabled_by_default():
     assert CONFIG['recording']['enabled_by_default'] is False
 
 
+def test_ros_console_format_uses_readable_walltime_and_node_name():
+    expected = (
+        '[${severity}] [${walltime:%H:%M:%S}] [${node}]: ${message}'
+    )
+
+    assert CONFIG_DEFAULTS['process']['qprocess_env']['ROSCONSOLE_FORMAT'] == (
+        expected
+    )
+    assert CONFIG_DEFAULTS['process']['compose_run_env'][
+        'ROSCONSOLE_FORMAT'
+    ] == expected
+
+
 def test_image_setup_defaults_target_noetic_v2():
     assert CONFIG_DEFAULTS['images']['default'] == (
         'ozkrelo/x_mobipick_labs:noetic-v2.0'
