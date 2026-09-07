@@ -7,7 +7,11 @@ from mobipick_gui.config import SCRIPT_CLEAN
 from mobipick_gui.main_window import MainWindow
 
 
-def test_exit_cleanup_runs_all_button_stop_commands_in_reverse_order():
+def _tab(running):
+    return SimpleNamespace(is_running=lambda: running)
+
+
+def test_exit_cleanup_runs_active_button_stop_commands_in_reverse_order():
     harness = SimpleNamespace(
         _config_button_order=[
             'first',
@@ -39,6 +43,11 @@ def test_exit_cleanup_runs_all_button_stop_commands_in_reverse_order():
             },
         },
         _current_master_uri=lambda: 'http://robot:11311',
+        tasks={
+            'first': _tab(True),
+            'container-command': _tab(False),
+            'last': _tab(True),
+        },
         _config_runs_on_host=MainWindow._config_runs_on_host,
         _neutralize_compose_ignore=MainWindow._neutralize_compose_ignore,
         _sh_quote=MainWindow._sh_quote,
@@ -59,17 +68,42 @@ def test_exit_cleanup_runs_all_button_stop_commands_in_reverse_order():
 
     commands = harness._collect_exit_commands()
 
-    assert commands[:3] == [
+    assert commands[:2] == [
         [
             'bash',
             '-lc',
             'COMPOSE_IGNORE_ORPHANS= '
             "ROS_MASTER_URI='http://robot:11311' stop-last",
         ],
-        ['bash', '-lc', 'stop-container-command'],
         ['bash', '-lc', 'COMPOSE_IGNORE_ORPHANS= docker compose stop first'],
     ]
-    assert commands[3:] == [['stop-sim'], ['stop-related'], [SCRIPT_CLEAN]]
+    assert commands[2:] == [['stop-sim'], ['stop-related'], [SCRIPT_CLEAN]]
+
+
+def test_exit_cleanup_skips_stop_commands_when_no_buttons_were_started():
+    harness = SimpleNamespace(
+        _config_button_order=['disc'],
+        _config_buttons={
+            'disc': {
+                'kind': 'command',
+                'host': True,
+                'stop_command': 'pkill -f disc',
+            },
+        },
+        tasks={},
+        _prepared_config_stop_command=lambda _config: 'pkill -f disc',
+        _sim_container_name='sim-container',
+        _collect_container_commands=lambda *args, **kwargs: [],
+        _stop_all_related=lambda tab: [],
+        _cleanup_done=False,
+        _cleanup_script_available=lambda: True,
+    )
+    harness._collect_exit_commands = MethodType(
+        MainWindow._collect_exit_commands,
+        harness,
+    )
+
+    assert harness._collect_exit_commands() == [[SCRIPT_CLEAN]]
 
 
 def test_exit_cleanup_cancels_background_sequence_before_deleting_process():

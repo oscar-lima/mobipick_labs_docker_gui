@@ -537,8 +537,9 @@ against the workspace inside the image even if a host workspace is selected.
 ## Closing the GUI
 
 When the GUI closes, it stops running Mobipick containers, stops recording if
-needed, runs every configured toolbar-button stop command, revokes temporary
-X11 access, runs cleanup, and then exits. Wait for the
+needed, runs stop commands for toolbar buttons that are still active, revokes
+temporary X11 access, runs cleanup, and then exits. Buttons that were not
+started during the session do not have their stop commands run. Wait for the
 shutdown dialog to finish before starting a new GUI session.
 
 The main window remembers its last normal size, position, and maximized state

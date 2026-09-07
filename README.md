@@ -642,11 +642,12 @@ Closing the GUI starts a controlled shutdown:
 1. cancel Auto Launch timers and pending recording start;
 2. stop screen recording if active;
 3. stop the external terminal container;
-4. kill GUI-owned background `QProcess` instances;
-5. stop simulator and related Mobipick containers;
-6. run `clean.bash` when available;
-7. revoke temporary X11 access;
-8. quit the Qt application.
+4. collect stop commands only for active configurable toolbar processes;
+5. kill GUI-owned background `QProcess` instances;
+6. stop simulator and related Mobipick containers;
+7. run `clean.bash` when available;
+8. revoke temporary X11 access;
+9. quit the Qt application.
 
 Avoid adding early returns in shutdown paths unless they still leave the GUI in
 a recoverable state.

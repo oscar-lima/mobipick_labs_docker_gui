@@ -10668,8 +10668,12 @@ CMD ["bash"]
         return commands
 
     def _collect_exit_commands(self) -> list[list[str]]:
+        """Return cleanup commands for processes active at shutdown."""
         commands: list[list[str]] = []
         for key in reversed(self._config_button_order):
+            tab = self.tasks.get(key)
+            if tab is None or not tab.is_running():
+                continue
             config = self._config_buttons.get(key, {})
             stop_command = self._prepared_config_stop_command(config)
             if stop_command:
@@ -12225,6 +12229,11 @@ CMD ["bash"]
             self._cancel_background_process(proc)
         self._bg_procs.clear()
 
+        # Capture which configured commands are active before killing their
+        # QProcesses; exit cleanup must not run stop commands for buttons that
+        # were never started.
+        commands = self._collect_exit_commands()
+
         for p in list(self.tasks.values()):
             if p.is_running():
                 try:
@@ -12232,7 +12241,6 @@ CMD ["bash"]
                 except Exception:
                     pass
 
-        commands = self._collect_exit_commands()
         if commands:
             self._run_command_sequence(commands, on_finished=self._finalize_exit, log_key='log')
         else:
