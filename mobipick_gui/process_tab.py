@@ -40,6 +40,7 @@ class ProcessTab:
 
         self.output = output or LogTextEdit()
         self._reset_output_stream()
+        self._shutting_down = False
 
         self.environment_overrides: dict[str, str] = {}
         self.proc = QProcess(parent)
@@ -84,6 +85,28 @@ class ProcessTab:
         except Exception:
             pass
 
+    def stop_for_shutdown(self, timeout_ms: int = 1000) -> bool:
+        """Synchronously stop the process and disable GUI callbacks."""
+        self._shutting_down = True
+        process_signals = (
+            self.proc.readyReadStandardOutput,
+            self.proc.readyReadStandardError,
+            self.proc.finished,
+            self.proc.errorOccurred,
+        )
+        for process_signal in process_signals:
+            try:
+                process_signal.disconnect()
+            except (RuntimeError, TypeError):
+                pass
+        try:
+            if self.proc.state() == QProcess.NotRunning:
+                return True
+            self.proc.kill()
+            return self.proc.waitForFinished(timeout_ms)
+        except RuntimeError:
+            return True
+
     def is_running(self) -> bool:
         return self.proc.state() != QProcess.NotRunning
 
@@ -91,16 +114,22 @@ class ProcessTab:
         self.output.enqueue(True, html_text + '<br>')
 
     def _on_stdout_buf(self):
+        if self._shutting_down:
+            return
         data = bytes(self.proc.readAllStandardOutput())
         if data:
             self._append_raw(data)
 
     def _on_stderr_buf(self):
+        if self._shutting_down:
+            return
         data = bytes(self.proc.readAllStandardError())
         if data:
             self._append_raw(data)
 
     def _drain_remaining(self, *_):
+        if self._shutting_down:
+            return
         data_out = bytes(self.proc.readAllStandardOutput())
         if data_out:
             self._append_raw(data_out)

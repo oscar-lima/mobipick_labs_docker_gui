@@ -1,4 +1,8 @@
 import codecs
+import sys
+
+from PyQt5.QtCore import QProcess, QProcessEnvironment
+from PyQt5.QtWidgets import QApplication, QMainWindow
 
 from mobipick_gui.process_tab import ProcessTab, ROS_WARNING_COLOR
 
@@ -75,3 +79,30 @@ def test_incomplete_final_line_is_flushed_when_process_finishes():
 
     assert len(tab.output.entries) == 1
     assert f'color:{ROS_WARNING_COLOR}' in tab.output.entries[0][1]
+
+
+def test_stop_for_shutdown_reaps_process_and_disables_callbacks():
+    app = QApplication.instance() or QApplication([])
+    parent = QMainWindow()
+    parent._build_process_environment = (
+        lambda _env: QProcessEnvironment.systemEnvironment()
+    )
+    parent._log_cmd = lambda _command: None
+    parent._command_log_color = '#4da3ff'
+    output = FakeOutput()
+    tab = ProcessTab(
+        'shutdown-test',
+        'Shutdown test',
+        parent,
+        False,
+        output=output,
+        notify_parent_finished=False,
+    )
+    tab.start_program(sys.executable, ['-c', 'import time; time.sleep(10)'])
+    assert tab.proc.waitForStarted(1000)
+
+    assert tab.stop_for_shutdown()
+    assert tab.proc.state() == QProcess.NotRunning
+
+    app.processEvents()
+    parent.deleteLater()

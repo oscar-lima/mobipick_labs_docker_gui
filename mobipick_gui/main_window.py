@@ -5560,11 +5560,7 @@ class MainWindow(QMainWindow):
 
     def _on_setup_wizard_closed(self, _result: int) -> None:
         for tab in list(self._setup_wizard_process_tabs):
-            if tab.is_running():
-                try:
-                    tab.kill()
-                except Exception:
-                    pass
+            tab.stop_for_shutdown()
         self._setup_wizard_process_tabs.clear()
         self._setup_wizard_dialog = None
 
@@ -12113,6 +12109,10 @@ CMD ["bash"]
     # ---------- Process completion callback ----------
 
     def on_task_finished(self, key: str, exit_code: int, exit_status):
+        # Exit cleanup owns process teardown. Do not enqueue GUI updates while
+        # Qt is in the process of destroying child widgets and timers.
+        if self._exit_in_progress:
+            return
         status_name = 'NormalExit' if int(exit_status) == int(QProcess.NormalExit) else 'Crashed'
         if key == self._terminal_stream_tab_key:
             self._terminal_stream_tab_key = None
@@ -12234,12 +12234,12 @@ CMD ["bash"]
         # were never started.
         commands = self._collect_exit_commands()
 
-        for p in list(self.tasks.values()):
-            if p.is_running():
-                try:
-                    p.kill()
-                except Exception:
-                    pass
+        process_tabs = [
+            *self.tasks.values(),
+            *self._setup_wizard_process_tabs,
+        ]
+        for process_tab in dict.fromkeys(process_tabs):
+            process_tab.stop_for_shutdown()
 
         if commands:
             self._run_command_sequence(commands, on_finished=self._finalize_exit, log_key='log')
