@@ -4791,10 +4791,30 @@ class MainWindow(QMainWindow):
                 closable=False,
             )
         self._ensure_tab('sim', 'Sim', closable=False)
-        self._ensure_tab('tables', 'Tables Demo', closable=False)
+        if self._has_builtin_action('tables'):
+            self._ensure_tab('tables', 'Tables Demo', closable=False)
         self._ensure_tab('rviz', 'RViz', closable=False)
-        self._ensure_tab('rqt', 'RQt Tables', closable=False)
+        if self._has_builtin_action('rqt'):
+            self._ensure_tab('rqt', 'RQt Tables', closable=False)
         self._ensure_tab('log', 'Log', closable=False)
+
+    _BUILTIN_ACTION_KEYS = {
+        'sim': {'sim', 'toggle_sim', 'sim_toggle'},
+        'tables': {'tables', 'tables_demo', 'toggle_tables'},
+        'rviz': {'rviz', 'toggle_rviz'},
+        'rqt': {'rqt', 'rqt_tables', 'toggle_rqt'},
+    }
+
+    def _has_builtin_action(self, tab_key: str) -> bool:
+        actions = self._BUILTIN_ACTION_KEYS.get(tab_key, set())
+        for key in self._config_button_order:
+            config = self._config_buttons.get(key, {})
+            if str(config.get('kind') or 'builtin').lower() != 'builtin':
+                continue
+            action = str(config.get('action') or key).strip().lower()
+            if action in actions:
+                return True
+        return False
 
     def _refresh_launch_plan_settings(self) -> None:
         self._launch_retry_ms = max(
@@ -10942,14 +10962,14 @@ CMD ["bash"]
     # ---------- Actions ----------
 
     def toggle_tables_demo(self):
-        tab = self.tasks['tables']
-        if tab.is_running():
+        tab = self.tasks.get('tables')
+        if tab is not None and tab.is_running():
             self.stop_tables_demo()
         else:
             self.run_tables_demo()
 
     def run_tables_demo(self):
-        tab = self.tasks['tables']
+        tab = self._ensure_tab('tables', 'Tables Demo', closable=False)
         if tab.is_running():
             self.set_tables_visual('green', 'Stop Tables Demo', True)
             self._focus_tab('tables')
@@ -10984,8 +11004,8 @@ CMD ["bash"]
         self._ensure_roscore_ready(_start_tables)
 
     def stop_tables_demo(self):
-        tab = self.tasks['tables']
-        if not tab.is_running():
+        tab = self.tasks.get('tables')
+        if tab is None or not tab.is_running():
             self.set_tables_visual('red', 'Run Tables Demo', True)
             return
         self.set_tables_visual('yellow', 'Stopping Tables Demo...', False)
@@ -11050,14 +11070,14 @@ CMD ["bash"]
         self._stop_custom_tab(tab, on_stopped=_on_stopped)
 
     def toggle_rqt_tables_demo(self):
-        tab = self.tasks['rqt']
-        if tab.is_running():
+        tab = self.tasks.get('rqt')
+        if tab is not None and tab.is_running():
             self.stop_rqt_tables_demo()
         else:
             self.open_rqt_tables_demo()
 
     def open_rqt_tables_demo(self):
-        tab = self.tasks['rqt']
+        tab = self._ensure_tab('rqt', 'RQt Tables', closable=False)
         if tab.is_running():
             self.set_rqt_visual('green', 'Stop RQt Tables', True)
             self._focus_tab('rqt')
@@ -11093,8 +11113,8 @@ CMD ["bash"]
         self._ensure_roscore_ready(_start_rqt)
 
     def stop_rqt_tables_demo(self):
-        tab = self.tasks['rqt']
-        if not tab.is_running():
+        tab = self.tasks.get('rqt')
+        if tab is None or not tab.is_running():
             self.set_rqt_visual('red', 'Start RQt Tables', True)
             return
         self.set_rqt_visual('yellow', 'Stopping RQt Tables...', False)
