@@ -822,6 +822,8 @@ a recoverable state.
   `QSocketNotifier: Can only be used with threads started with QThread`
   message only while constructing `QApplication`. A copy emitted later is not
   filtered and should be investigated as an application threading problem.
+- On Wayland, the CLI also filters Qt 5's benign `QWindow::requestActivate()`
+  platform warning. Other Qt Wayland warnings remain visible.
 - If a workspace does not mount, check the selected image profile for
   `supports_host_workspaces`.
 - If RViz or Gazebo windows do not open, inspect the detected display variables,

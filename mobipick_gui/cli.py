@@ -11,26 +11,34 @@ from PyQt5.QtCore import qInstallMessageHandler
 from PyQt5.QtWidgets import QApplication
 
 from . import MainWindow, trigger_sigint
-from .window_control import install_gnome_extension
+from .window_control import install_gnome_extension, session_type
 
 
 _QT_SOCKET_NOTIFIER_THREAD_WARNING = (
     'QSocketNotifier: Can only be used with threads started with QThread'
 )
+_QT_WAYLAND_ACTIVATION_WARNING = (
+    'Wayland does not support QWindow::requestActivate()'
+)
 
 
 def _create_application(arguments: list[str]) -> QApplication:
-    """Create the application while hiding a known Qt platform warning.
+    """Create the application while hiding known benign Qt warnings.
 
     Some Qt 5 Wayland installations emit the socket-notifier thread warning
     from ``QApplication`` construction itself, even for a minimal application
-    with no worker threads.  Limit the filter to construction and preserve all
-    other Qt messages so genuine application threading warnings stay visible.
+    with no worker threads.  Limit that filter to construction.  On Wayland,
+    keep filtering Qt's unsupported activation warning because Qt widgets can
+    request activation internally when they are shown.  Preserve all other Qt
+    messages so genuine application warnings stay visible.
     """
     previous_handler = None
+    wayland_session = session_type() == 'wayland'
 
     def startup_message_handler(message_type, context, message):
         if message == _QT_SOCKET_NOTIFIER_THREAD_WARNING:
+            return
+        if wayland_session and message == _QT_WAYLAND_ACTIVATION_WARNING:
             return
         if previous_handler is not None:
             previous_handler(message_type, context, message)
@@ -38,10 +46,16 @@ def _create_application(arguments: list[str]) -> QApplication:
             print(message, file=sys.stderr, flush=True)
 
     previous_handler = qInstallMessageHandler(startup_message_handler)
+    application = None
     try:
-        return QApplication(arguments)
+        application = QApplication(arguments)
+        platform_name = getattr(application, 'platformName', None)
+        if callable(platform_name):
+            wayland_session = str(platform_name()).lower().startswith('wayland')
+        return application
     finally:
-        qInstallMessageHandler(previous_handler)
+        if application is None or not wayland_session:
+            qInstallMessageHandler(previous_handler)
 
 
 def _build_parser() -> argparse.ArgumentParser:
