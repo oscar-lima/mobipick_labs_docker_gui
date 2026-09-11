@@ -10,3 +10,4 @@ include mobipick_gui/resources/empty_workspace/.gitkeep
 include mobipick_gui/resources/scripts/enter_host_shell.py
 include mobipick_gui/resources/scripts/ros_workspace_setup.bash
 include mobipick_gui/resources/scripts/terminal.bashrc
+recursive-include mobipick_gui/resources/skills SKILL.md

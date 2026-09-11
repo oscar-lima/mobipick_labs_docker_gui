@@ -37,6 +37,7 @@ Repository = "https://github.com/DFKI-NI/mobipick_labs_docker_gui"
 
 [project.scripts]
 mobipick-labs-docker-gui = "mobipick_gui.cli:main"
+mobipick-labs-docker-gui-remote = "mobipick_gui.remote_client:main"
 
 [tool.setuptools]
 include-package-data = true
@@ -56,6 +57,7 @@ mobipick_gui = [
     "resources/scripts/enter_host_shell.py",
     "resources/scripts/ros_workspace_setup.bash",
     "resources/scripts/terminal.bashrc",
+    "resources/skills/*/SKILL.md",
 ]
 
 [tool.setuptools.exclude-package-data]

@@ -8,3 +8,4 @@ dist/
 mobipick_gui/resources/log/
 mobipick_gui/resources/private/button_configs/
 mobipick_gui/resources/private/recordings/
+.claude

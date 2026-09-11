@@ -103,6 +103,12 @@ CONTAINER_SCRIPTS_DIR = str(
     CONFIG.get('process', {}).get('container_scripts_dir', '/scripts_430ofkjl04fsw')
 )
 from .process_tab import ProcessTab
+from .remote_adapter import REMOTE_SHELL_TAB_PREFIX, MainWindowRemoteAdapter
+from .remote_control import (
+    GuiInvoker,
+    RemoteControlServer,
+    remote_control_settings,
+)
 from .robot_progress_bar_animation import RobotProgressAnimation
 from .setup_wizard import HostDependency, ImageSetupWizard, SetupWizardSelection
 from .version import get_version
@@ -117,6 +123,21 @@ from .workspaces import RosWorkspace, WorkspaceRegistry
 _SIGINT_TRIGGERED = False
 ABOUT_MAINTAINER_NAME = 'Oscar Lima'
 ABOUT_MAINTAINER_EMAIL = 'oscar.lima@dfki.de'
+
+
+def _emit_remote_event(window, name: str, /, **data) -> None:
+    """Record a remote-control event when ``window`` runs the API server.
+
+    Uses ``getattr`` so lightweight test harnesses that bind MainWindow
+    methods onto plain objects keep working.
+    """
+    server = getattr(window, 'remote_control', None)
+    if server is None:
+        return
+    try:
+        server.emit(name, **data)
+    except Exception:
+        pass
 
 
 def trigger_sigint():
@@ -2577,7 +2598,11 @@ class WorkspaceMatchDialog(QDialog):
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, verbosity: int = 1):
+    def __init__(
+        self,
+        verbosity: int = 1,
+        remote_control: Optional[dict] = None,
+    ):
         super().__init__()
         configure_maximizable_window(self)
 
@@ -2586,6 +2611,16 @@ class MainWindow(QMainWindow):
         except (TypeError, ValueError):
             value = 1
         self._verbosity = max(1, min(3, value))
+
+        # Remote control must exist before any button visual is set so the
+        # event hooks can run safely during construction.
+        self.remote_control: RemoteControlServer | None = None
+        self._remote_invoker: GuiInvoker | None = None
+        self._remote_control_settings = remote_control_settings(
+            CONFIG.get('remote_control'),
+            remote_control,
+        )
+        self._remote_control_action: QAction | None = None
 
         window_cfg = CONFIG['window']
         self.setWindowTitle(window_cfg['title'])
@@ -2758,6 +2793,10 @@ class MainWindow(QMainWindow):
             log_warning=lambda msg: self._append_gui_html('log', f'<i>{html.escape(msg)}</i>'),
             log_debug=lambda msg: self._console_log(3, msg),
             apply_delay_ms=self._window_layout_delay_ms,
+            on_applied=lambda count: self._remote_emit(
+                'window_layout_applied',
+                windows=int(count),
+            ),
         )
         self._window_layout_manager.record_baseline(exclude_titles={self.windowTitle()})
         self._window_layout_dialog: QDialog | None = None
@@ -2852,6 +2891,9 @@ class MainWindow(QMainWindow):
         self.roscore_button = QPushButton()
         _configure_expanding_toolbar_button(self.roscore_button)
         self.roscore_button.clicked.connect(self._on_roscore_toggle_clicked)
+        self.roscore_button.setToolTip(
+            'Start or stop the local ROS 1 master container used by the other buttons'
+        )
         top.addWidget(self.roscore_button)
         self._button_widgets['roscore'] = self.roscore_button
 
@@ -2860,6 +2902,9 @@ class MainWindow(QMainWindow):
         self.terminal_button = QPushButton()
         _configure_expanding_toolbar_button(self.terminal_button)
         self.terminal_button.clicked.connect(self._on_terminal_toggle_clicked)
+        self.terminal_button.setToolTip(
+            'Open or close an interactive terminal inside the ROS tool container'
+        )
         top.addWidget(self.terminal_button)
         self._button_widgets['terminal'] = self.terminal_button
 
@@ -3102,6 +3147,134 @@ class MainWindow(QMainWindow):
             app_instance.installEventFilter(self)
             app_instance.aboutToQuit.connect(self._ensure_cleanup_before_exit)
 
+        if self._remote_control_settings.get('enabled'):
+            self._start_remote_control()
+
+    # ---------- Remote control ----------
+
+    def _remote_emit(self, name: str, /, **data) -> None:
+        """Record an event for remote-control clients when the server runs."""
+        _emit_remote_event(self, name, **data)
+
+    def _start_remote_control(self) -> bool:
+        if self.remote_control is not None:
+            return True
+        settings = self._remote_control_settings
+        if self._remote_invoker is None:
+            self._remote_invoker = GuiInvoker(self)
+        server = RemoteControlServer(
+            MainWindowRemoteAdapter(self),
+            host=str(settings.get('host') or '0.0.0.0'),
+            port=int(settings['port']),
+            token=str(settings.get('token') or ''),
+            invoker=self._remote_invoker,
+            gui_timeout=float(settings.get('gui_timeout_s') or 10.0),
+            shell_max_lines=int(settings.get('shell_max_lines') or 20000),
+            shell_start_timeout=float(settings.get('shell_start_timeout_s') or 180.0),
+            default_exec_timeout=float(settings.get('default_exec_timeout_s') or 60.0),
+            max_output_lines=int(settings.get('max_output_lines') or 400),
+        )
+        try:
+            host, port = server.start()
+        except OSError as exc:
+            self._append_gui_html(
+                'log',
+                '<i>Remote control server failed to start on '
+                f'{html.escape(str(settings.get("host")))}:'
+                f'{html.escape(str(settings.get("port")))}: '
+                f'{html.escape(str(exc))}</i>',
+            )
+            self._sync_remote_control_action()
+            return False
+        self.remote_control = server
+        token_note = 'token required' if server.token else 'no token configured'
+        self._append_gui_html(
+            'log',
+            f'<i>Remote control API listening on http://{html.escape(host)}:{port}/ '
+            f'({token_note}). Anyone who can reach this port can run commands '
+            'inside the Mobipick containers.</i>',
+        )
+        self._console_log(1, f'remote control API listening on http://{host}:{port}/ ({token_note})')
+        self._sync_remote_control_action()
+        return True
+
+    def _stop_remote_control(self) -> None:
+        server = self.remote_control
+        if server is None:
+            return
+        self.remote_control = None
+        try:
+            server.stop()
+        finally:
+            for key in list(self.tasks):
+                if key.startswith(REMOTE_SHELL_TAB_PREFIX):
+                    tab = self.tasks[key]
+                    tab.container_name = None
+                    tab.exec_id = None
+            self._revoke_x('remote-shell', log_key='log')
+            if not self._exit_in_progress:
+                self._append_gui_html('log', '<i>Remote control API stopped.</i>')
+            self._sync_remote_control_action()
+
+    def _on_remote_control_toggled(self, checked: bool) -> None:
+        if checked:
+            if not self._start_remote_control():
+                self._sync_remote_control_action()
+        else:
+            self._stop_remote_control()
+
+    def _sync_remote_control_action(self) -> None:
+        action = self._remote_control_action
+        if action is None:
+            return
+        action.blockSignals(True)
+        try:
+            action.setChecked(self.remote_control is not None)
+        finally:
+            action.blockSignals(False)
+
+    def _remote_control_info_text(self) -> str:
+        settings = self._remote_control_settings
+        server = self.remote_control
+        if server is not None:
+            host, port = server.address
+            state = f'Running on http://{host}:{port}/'
+        else:
+            state = (
+                'Stopped (would listen on '
+                f'http://{settings.get("host")}:{settings.get("port")}/)'
+            )
+        token = str(settings.get('token') or '')
+        token_line = (
+            'Token: required (send "Authorization: Bearer <token>")'
+            if token
+            else 'Token: none (any client that reaches the port is trusted)'
+        )
+        shells = len(server.sessions()) if server is not None else 0
+        return (
+            f'{state}\n{token_line}\nOpen remote shells: {shells}\n\n'
+            'Enable with --remote-control, MOBIPICK_GUI_REMOTE_CONTROL=1, or '
+            'remote_control.enabled in gui_settings.yaml.\n'
+            'Client: mobipick-labs-docker-gui-remote --url http://<host>:<port> status'
+        )
+
+    def _show_remote_control_info(self) -> None:
+        QMessageBox.information(self, 'Remote Control', self._remote_control_info_text())
+
+    def _mark_auto_launch_ready(self, key: str, *, already_running: bool = False) -> None:
+        """Record an auto-launch process as ready and notify remote clients."""
+        self._auto_launch_ready_keys.add(key)
+        if already_running:
+            self._log_info(
+                f'auto launch: {key} is already running; treating it as ready'
+            )
+        else:
+            self._log_info(f'auto launch: {key} is ready')
+        _emit_remote_event(self, 'auto_launch_ready', key=key)
+        active = [k for k in getattr(self, '_auto_launch_active_keys', []) if k]
+        if active and all(k in self._auto_launch_ready_keys for k in active):
+            _emit_remote_event(self, 'auto_launch_complete', keys=list(active))
+
     # ---------- Menu bar ----------
 
     def _create_menu_bar(self) -> None:
@@ -3227,6 +3400,23 @@ class MainWindow(QMainWindow):
             automation_menu,
             'Configure Auto Launch',
             self._open_auto_launch_wizard,
+        )
+
+        remote_menu = self._add_menu(tools_menu, 'Remote Control')
+        self._remote_control_action = self._add_checkable_menu_action(
+            remote_menu,
+            'Enable Remote Control API',
+            self._on_remote_control_toggled,
+        )
+        self._remote_control_action.setToolTip(
+            'Accept button clicks, log reads, and container shell commands '
+            'over HTTP from other machines'
+        )
+        self._add_menu_action(
+            remote_menu,
+            'Show Remote Control Info',
+            self._show_remote_control_info,
+            tooltip='Show the remote control address, token policy, and open shells',
         )
         tools_menu.addSeparator()
         self._add_menu_action(
@@ -9281,6 +9471,12 @@ CMD ["bash"]
         source = self._launch_plan.get('source', 'configuration')
         launch_kind = 'dependency plan' if advanced else 'timeline'
         self._log_info(f'starting auto launch {launch_kind} from {source}')
+        _emit_remote_event(
+            self,
+            'auto_launch_started',
+            keys=list(self._auto_launch_active_keys),
+            mode='advanced' if advanced else 'timeline',
+        )
         self.set_auto_launch_visual('green', self._auto_launch_stop_text(), True)
         if advanced:
             self._start_dependency_launch(processes)
@@ -9384,10 +9580,7 @@ CMD ["bash"]
         self._schedule_auto_launch_layout_apply()
         for key, (launch_at, ready_at, was_running) in schedule.items():
             if was_running:
-                self._auto_launch_ready_keys.add(key)
-                self._log_info(
-                    f'auto launch: {key} is already running; treating it as ready'
-                )
+                self._mark_auto_launch_ready(key, already_running=True)
                 continue
             launch_ms = int(max(0.0, launch_at) * 1000)
             if launch_ms:
@@ -9405,8 +9598,7 @@ CMD ["bash"]
         def _ready():
             try:
                 if self._auto_launch_running:
-                    self._auto_launch_ready_keys.add(key)
-                    self._log_info(f'auto launch: {key} is ready')
+                    self._mark_auto_launch_ready(key)
             finally:
                 if timer in self._auto_launch_timers:
                     self._auto_launch_timers.remove(timer)
@@ -9610,6 +9802,7 @@ CMD ["bash"]
         if hasattr(self, '_auto_launch_schedule'):
             self._auto_launch_schedule.clear()
         self.set_auto_launch_visual('red', self._auto_launch_start_text(), True)
+        _emit_remote_event(self, 'auto_launch_stopped')
 
     def _flush_ui_events(self):
         app = QApplication.instance()
@@ -10166,6 +10359,14 @@ CMD ["bash"]
                 tab.kill()
             except Exception:
                 pass
+        if key.startswith(REMOTE_SHELL_TAB_PREFIX) and self.remote_control is not None:
+            session = self.remote_control.session_for_tab(key)
+            if session is not None:
+                self._log_info(f'remote control: closing shell {session.id} with its tab')
+                try:
+                    self.remote_control.close_session(session.id)
+                except Exception:
+                    pass
         self.tabs.removeTab(index)
         del self.tasks[key]
 
@@ -10859,7 +11060,20 @@ CMD ["bash"]
             f'QPushButton:disabled {{ opacity: {disabled_opacity}; }}'
         )
         button.setEnabled(enabled)
+        previous = self._toggle_states.get(key)
         self._toggle_states[key] = state
+        if getattr(self, 'remote_control', None) is not None and (
+            previous != state or previous is None
+        ):
+            _emit_remote_event(
+                self,
+                'button_state',
+                key=key,
+                state=state,
+                previous=previous,
+                text=text,
+                enabled=bool(enabled),
+            )
 
     def _disable_toggle_preserving_visual(self, key: str, button: QPushButton | None):
         current_state = self._toggle_states.get(key, 'red')
@@ -12136,6 +12350,13 @@ CMD ["bash"]
         status_name = 'NormalExit' if int(exit_status) == int(QProcess.NormalExit) else 'Crashed'
         if key == self._terminal_stream_tab_key:
             self._terminal_stream_tab_key = None
+        _emit_remote_event(
+            self,
+            'process_finished',
+            key=key,
+            exit_code=int(exit_code),
+            status=status_name,
+        )
         tab = self.tasks.get(key)
         if tab:
             self._release_xhost(tab, log_key=key)
@@ -12239,6 +12460,8 @@ CMD ["bash"]
         QTimer.singleShot(0, self._perform_exit_cleanup)
 
     def _perform_exit_cleanup(self):
+        _emit_remote_event(self, 'gui_closing')
+        self._stop_remote_control()
         self._cancel_auto_launch_timers()
         self._cancel_recording_schedule()
         self._stop_screen_recording(save_logs=False, reason='Exit requested; stopping recording')

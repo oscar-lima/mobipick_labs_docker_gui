@@ -35,6 +35,9 @@ resource and is rendered in the application from **Help > Documentation**.
 |   |-- workspaces.py              # Workspace registry and runtime env model
 |   |-- settings_transfer.py       # Portable import/export of GUI settings
 |   |-- window_layout.py           # wmctrl/xprop capture and replay helper
+|   |-- remote_control.py          # HTTP remote-control server, events, shell sessions
+|   |-- remote_adapter.py          # MainWindow bridge used by the remote-control server
+|   |-- remote_client.py           # mobipick-labs-docker-gui-remote CLI client
 |   |-- config.py                  # Bundled/user config loading and defaults
 |   `-- resources/
 |       |-- docker-compose.yml
@@ -216,10 +219,11 @@ Package data is declared in both `pyproject.toml` and `MANIFEST.in`. When adding
 new runtime assets under `mobipick_gui/resources/`, update both files so editable
 installs, wheels, and source distributions all behave the same.
 
-The console script installed by the package is:
+The console scripts installed by the package are:
 
 ```text
 mobipick-labs-docker-gui = mobipick_gui.cli:main
+mobipick-labs-docker-gui-remote = mobipick_gui.remote_client:main
 ```
 
 ### PyPI release flow
@@ -535,6 +539,122 @@ workspace, and applies saved positions to matching new windows after the
 configured delay. The `window_layout.state_file` setting may include
 `{workspace}` or `{workspace_slug}`; paths without a placeholder are treated as
 a base location and expanded into one YAML file per workspace.
+
+## Remote control API
+
+The GUI can expose a JSON-over-HTTP API so another machine, or an automation
+agent such as Claude Code, can press toolbar buttons, wait until a launch has
+settled, read log tabs, and run commands in persistent ROS 1 shells inside the
+Mobipick containers. The server is off by default. Enable it with any of:
+
+- `mobipick-labs-docker-gui --remote-control [--remote-host H] [--remote-port P] [--remote-token T]`
+- `MOBIPICK_GUI_REMOTE_CONTROL=1` plus optional `MOBIPICK_GUI_REMOTE_HOST`,
+  `MOBIPICK_GUI_REMOTE_PORT`, and `MOBIPICK_GUI_REMOTE_TOKEN`
+- `remote_control.enabled: true` in `gui_settings.yaml`
+- **Tools > Remote Control > Enable Remote Control API** at runtime
+
+The GUI normally runs on the host and the processes it launches are mostly
+containers, though configured buttons can also run host processes. The
+default bind address is `0.0.0.0:8765` so other machines on the network can
+reach the API; use `127.0.0.1` for a local-only agent.
+Anyone who can reach the port can run commands inside the containers, so set
+`remote_control.token` on shared networks; clients then send
+`Authorization: Bearer <token>` (or `?token=`).
+
+Implementation lives in `mobipick_gui/remote_control.py` (server, event bus,
+shell sessions), `mobipick_gui/remote_adapter.py` (the bridge that touches
+`MainWindow`; every call is marshalled onto the Qt thread through
+`GuiInvoker`), and `mobipick_gui/remote_client.py` (the
+`mobipick-labs-docker-gui-remote` CLI, standard library only). Configuration
+keys are documented in `config/gui_settings.yaml` under `remote_control`.
+
+### Endpoints
+
+`GET /` returns this list as JSON. Responses are `{"ok": true, ..., "seq": N}`
+where `seq` is the newest event sequence number, so a client can chain a
+click with a wait without missing events.
+
+| Method and path | Purpose |
+| --- | --- |
+| `GET /status` | Workspace, image, world, cached roscore/sim state, buttons, tabs, shells, active dialog. |
+| `GET /buttons` | Toolbar buttons with `state` (`red` stopped, `green` running, `yellow` busy, `grey` unavailable), `tooltip`, `runs_on` (`host` or `container`), and the log `tab` key. |
+| `POST /buttons/{key}/click`, `/start`, `/stop` | Press a button. `start`/`stop` are idempotent. Body may contain `wait_for` (event names) and `timeout`. |
+| `GET /events?since=N&names=a,b` | Event history; add `follow=1&timeout=s` to stream NDJSON. |
+| `POST /wait` | Block until one of `events` arrives after `since` (default: now) or `timeout`. |
+| `GET /tabs`, `GET /tabs/{key}?tail=N&grep=RE` | Log tab list and plain-text tab contents. |
+| `GET /dialogs`, `POST /dialogs/dismiss` | Inspect or close the active modal dialog (`{"button": "Continue"}`, `accept`, `reject`). |
+| `POST /command` | Run text through the GUI custom command box. |
+| `POST /shell` | Open a shell session in the ROS tool container (`{"name", "stream", "root"}`); blocks until ready. |
+| `POST /shell/{id}/exec` | Run a command: `{"command", "stream", "tail", "grep", "max_lines", "timeout", "wait"}`. |
+| `GET /shell/{id}/output?since=N&command=ID&tail=N&grep=RE` | Buffered output; `follow=1` streams NDJSON until the command finishes. |
+| `POST /shell/{id}/interrupt` | Send `INT` (default), `TERM`, `KILL`, or `HUP` to the foreground command. |
+| `POST /shell/{id}/settings`, `DELETE /shell/{id}` | Change the session `stream` default; close the session and its container. |
+| `POST /quit` | Close the GUI with its normal container cleanup. |
+
+Events: `button_state`, `process_finished`, `auto_launch_started`,
+`auto_launch_ready`, `auto_launch_complete` (every process in the plan reached
+its ready time), `window_layout_applied` (the saved layout was replayed, which
+is the usual "everything is up" signal), `auto_launch_stopped`,
+`shell_opened`, `shell_exited`, `shell_closed`, and `gui_closing`.
+
+### Shell sessions and output streaming
+
+A session is `docker compose run --rm -T ... <tool service> python3
+enter_host_shell.py bash --noprofile --norc` with `terminal.bashrc` sourced on
+start, so it has the same ROS environment and user as **Open Terminal**. The
+shell is stateful (`cd`, `source`, exported variables persist) and its output
+is mirrored into a closable **Remote Shell N** tab. Each command is wrapped
+with a base64 `eval` and a completion marker, so quoting and multi-line
+commands are safe and the API knows the exit code. Standard input is
+`/dev/null`; interactive prompts fail fast instead of hanging.
+
+Output is buffered per session with sequence numbers. The `stream` flag
+decides whether an `exec` response carries the lines at all: `stream: false`
+returns only the exit code and line count, and the output stays retrievable
+through `/output` with `tail`, `grep`, `since`, or `command`. The per-session
+default can be changed with `/settings`. Long-running commands use
+`wait: false` and are polled or followed; `interrupt` sends SIGINT to the
+foreground process group child of the session shell through `docker exec`.
+
+### Client and agent workflow
+
+```bash
+export MOBIPICK_GUI_REMOTE_URL=http://<gui-host>:8765   # and MOBIPICK_GUI_REMOTE_TOKEN
+mobipick-labs-docker-gui-remote status
+mobipick-labs-docker-gui-remote click auto_launch --wait window_layout_applied,auto_launch_complete --timeout 240
+mobipick-labs-docker-gui-remote --text tab sim --tail 40 --grep "ERROR|WARN"
+mobipick-labs-docker-gui-remote shell open
+mobipick-labs-docker-gui-remote --text shell exec 1 "rostopic list" --tail 20
+mobipick-labs-docker-gui-remote shell exec 1 "rosrun tables_demo_planning tables_demo_node.py" --no-wait
+mobipick-labs-docker-gui-remote --text shell output 1 --follow --grep "ERROR|Success" --timeout 120
+mobipick-labs-docker-gui-remote shell interrupt 1
+mobipick-labs-docker-gui-remote shell close 1
+```
+
+A Claude Code skill describing this workflow with plain `curl` is kept in
+two identical copies: `.claude/skills/mobipick-gui-remote/SKILL.md` (loaded
+automatically in this checkout) and
+`mobipick_gui/resources/skills/mobipick-gui-remote/SKILL.md` (shipped in the
+package). Port it to another machine or project with:
+
+```bash
+mobipick-labs-docker-gui-remote skill --install ~/.claude/skills        # user-wide
+mobipick-labs-docker-gui-remote skill --install /path/to/repo/.claude/skills
+mobipick-labs-docker-gui-remote skill            # print it
+```
+
+A test fails when the two copies drift apart.
+
+`tests/mobipick_gui/test_remote_live.py` holds opt-in checks against a running
+GUI: with `MOBIPICK_GUI_REMOTE_LIVE=1` (and `MOBIPICK_GUI_REMOTE_URL` when the
+port differs) it opens a fresh remote shell, verifies that TCPROS
+subscriptions receive `/clock` and joint states from the simulator, and closes
+the shell. It starts and stops nothing.
+
+If a request reports HTTP 504 with a `dialog` entry, a modal dialog (for
+example the workspace mismatch warning) is waiting; answer it with
+`dismiss <button text>` and retry. Requests are served even while a dialog is
+open because Qt modal loops keep processing queued calls.
 
 ## Container display backends
 

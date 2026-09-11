@@ -39,8 +39,10 @@ class WindowLayoutManager:
         log_warning: Callable[[str], None] | None = None,
         log_debug: Callable[[str], None] | None = None,
         apply_delay_ms: int = 0,
+        on_applied: Callable[[int], None] | None = None,
     ):
         self.state_file = Path(state_file)
+        self._on_applied = on_applied
         self._wmctrl_bin = wmctrl_bin
         self._xprop_bin = xprop_bin
         self._log_info = log_info or (lambda _msg: None)
@@ -202,6 +204,11 @@ class WindowLayoutManager:
             self._applied_ids.add(win.wid)
         if len(self._applied_ids) >= len(windows_cfg):
             self._auto_apply_done = True
+        if self._on_applied is not None:
+            try:
+                self._on_applied(len(matches))
+            except Exception as exc:
+                self._log_debug(f'window layout applied callback failed: {exc}')
 
     def _warn_missing_tools(self):
         if self._warned_missing:

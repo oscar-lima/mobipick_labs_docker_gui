@@ -490,6 +490,26 @@ the **Install Source** tab.
 - **Configure Auto Launch** opens the sequence editor for Auto Launch and the
   extra recording start delay.
 
+### Remote Control
+
+- **Enable Remote Control API** starts or stops an HTTP server that lets
+  another computer, or an automation agent, press toolbar buttons, wait for
+  launch events, read log tabs, and run commands in a ROS terminal inside the
+  container. The address, port, and optional token come from the
+  `remote_control` section of `gui_settings.yaml`, the `--remote-control`
+  command line options, or the `MOBIPICK_GUI_REMOTE_*` environment variables.
+- **Show Remote Control Info** displays the listening address, whether a token
+  is required, and how many remote shells are open.
+- Remote shells appear as closable **Remote Shell N** tabs that mirror their
+  output. Closing the tab closes the shell and its container. Anyone who can
+  reach the port can run commands in the containers, so use a token on
+  shared networks.
+- The command line client is `mobipick-labs-docker-gui-remote`; run it with
+  `--help` for the available actions.
+- A Claude Code skill describing the curl workflow ships with the package;
+  `mobipick-labs-docker-gui-remote skill --install ~/.claude/skills` copies
+  it to another machine or project.
+
 ### Status
 
 - **Update Status** refreshes the GUI view of Docker container status.

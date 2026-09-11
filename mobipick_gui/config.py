@@ -379,6 +379,17 @@ CONFIG_DEFAULTS: Dict[str, Dict] = {
         'retry_delay_ms': 750,
         'max_retry_attempts': 6,
     },
+    'remote_control': {
+        'enabled': False,
+        'host': '0.0.0.0',
+        'port': 8765,
+        'token': '',
+        'gui_timeout_s': 10,
+        'shell_max_lines': 20000,
+        'shell_start_timeout_s': 180,
+        'default_exec_timeout_s': 60,
+        'max_output_lines': 400,
+    },
 }
 
 BUTTON_CONFIG_DEFAULTS = [
