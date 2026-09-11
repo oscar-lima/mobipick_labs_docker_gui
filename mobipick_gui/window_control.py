@@ -54,14 +54,14 @@ def session_type(environ: Mapping[str, str] | None = None) -> str:
     value = str(env.get('XDG_SESSION_TYPE') or '').strip().lower()
     if value in {'wayland', 'x11'}:
         return value
-    if str(env.get('WAYLAND_DISPLAY') or '').strip():
-        return 'wayland'
-    if str(env.get('DISPLAY') or '').strip():
-        return 'x11'
     qpa_platform = str(env.get('QT_QPA_PLATFORM') or '').strip().lower()
     if qpa_platform.startswith('wayland'):
         return 'wayland'
     if qpa_platform in {'xcb', 'x11'}:
+        return 'x11'
+    if str(env.get('WAYLAND_DISPLAY') or '').strip():
+        return 'wayland'
+    if str(env.get('DISPLAY') or '').strip():
         return 'x11'
     return ''
 

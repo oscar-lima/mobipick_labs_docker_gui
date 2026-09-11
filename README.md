@@ -112,6 +112,8 @@ install apt prerequisites, replace the Docker apt repository key/source, verify
 Docker package candidates, install Docker Engine and the Compose plugin,
 install selected optional tools, restart Docker services, configure docker
 group access, and test Docker with both `sudo` and the current user.
+On GNOME Wayland, the same dependency step includes the one-time bundled
+window-extension install command and reminds the user to log out and back in.
 
 Log out and back in after changing Docker group membership, or start a shell
 with `newgrp docker`.
@@ -676,9 +678,10 @@ open because Qt modal loops keep processing queued calls.
 
 `display.mode` in `gui_settings.yaml` accepts `auto`, `x11`, or `wayland`.
 Automatic mode exposes every valid host display socket to one-off containers,
-but selects Qt's XCB backend when `DISPLAY` is present. This covers native X11
-and XWayland and is the compatibility default for ROS Noetic RViz, Gazebo, and
-OGRE. On a Wayland-only session, automatic mode selects native Wayland.
+and follows the native host session: native Wayland on a Wayland desktop and
+X11 on Xorg. If the native Wayland transport is unavailable, automatic mode
+falls back to XWayland. Set `display.mode: x11` only when an older image or
+application requires the XCB compatibility backend.
 
 The GUI adds display mounts to each `docker compose run`; the compose file no
 longer mounts all of `/run/user`. X11 authorization uses a mounted Xauthority

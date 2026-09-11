@@ -236,6 +236,18 @@ def test_wizard_dependency_page_builds_copyable_install_command(tmp_path):
                 reason='Optional window layout support.',
             ),
             HostDependency(
+                key='gnome_window_extension',
+                label='GNOME Shell window extension',
+                package='',
+                installed=False,
+                reason='Optional native Wayland window support.',
+                install_commands=[
+                    '# Install the extension once.',
+                    'mobipick-labs-docker-gui --install-gnome-window-extension',
+                    '# Log out and back in once.',
+                ],
+            ),
+            HostDependency(
                 key='ffmpeg',
                 label='FFmpeg',
                 package='ffmpeg',
@@ -276,6 +288,18 @@ def test_wizard_dependency_page_builds_copyable_install_command(tmp_path):
                 reason='Optional window layout support.',
             ),
             HostDependency(
+                key='gnome_window_extension',
+                label='GNOME Shell window extension',
+                package='',
+                installed=False,
+                reason='Optional native Wayland window support.',
+                install_commands=[
+                    '# Install the extension once.',
+                    'mobipick-labs-docker-gui --install-gnome-window-extension',
+                    '# Log out and back in once.',
+                ],
+            ),
+            HostDependency(
                 key='ffmpeg',
                 label='FFmpeg',
                 package='ffmpeg',
@@ -298,15 +322,19 @@ def test_wizard_dependency_page_builds_copyable_install_command(tmp_path):
     assert 'docker-ce docker-ce-cli containerd.io' in command
     assert 'docker-buildx-plugin docker-compose-plugin' in command
     assert 'sudo apt install -y wmctrl' in command
+    assert 'mobipick-labs-docker-gui --install-gnome-window-extension' in command
+    assert '# Log out and back in once.' in command
     assert 'ffmpeg' not in command
     assert 'sudo usermod -aG docker "$USER"' in command
     assert wizard.copy_dependency_command_button.text() == 'Copy Commands'
     assert wizard.dependency_done_button.text() == 'Run Checks'
 
     wizard._dependency_checkboxes['wmctrl'].setChecked(False)
+    wizard._dependency_checkboxes['gnome_window_extension'].setChecked(False)
     command = wizard.dependency_command_edit.toPlainText()
     assert 'docker-ce docker-ce-cli containerd.io' in command
     assert 'wmctrl' not in command
+    assert '--install-gnome-window-extension' not in command
 
     wizard._mark_selected_dependencies_done()
 
@@ -318,7 +346,10 @@ def test_wizard_dependency_page_builds_copyable_install_command(tmp_path):
         '# Refresh Ubuntu package information.\n'
         'sudo apt update\n\n'
         '# Install the selected host tools.\n'
-        'sudo apt install -y wmctrl'
+        'sudo apt install -y wmctrl\n\n'
+        '# Install the extension once.\n'
+        'mobipick-labs-docker-gui --install-gnome-window-extension\n'
+        '# Log out and back in once.'
     )
     assert 'download.docker.com' not in refreshed_command
 
@@ -1615,6 +1646,11 @@ def test_host_dependency_checks_add_gnome_extension_on_wayland(monkeypatch):
     ext = deps['gnome_window_extension']
     assert ext.installed is False
     assert ext.package == ''
+    assert ext.install_commands == [
+        '# Install the bundled GNOME Wayland window extension once.',
+        'mobipick-labs-docker-gui --install-gnome-window-extension',
+        '# Log out and back in once so GNOME Shell loads it.',
+    ]
     assert '--install-gnome-window-extension' in ext.reason
     assert 'gnome-extensions info winctl@mobipick-labs-docker-gui' in ext.check_commands
     assert 'this session is Wayland' in deps['wmctrl'].reason

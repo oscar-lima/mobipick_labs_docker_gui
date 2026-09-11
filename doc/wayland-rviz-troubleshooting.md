@@ -6,14 +6,15 @@ Wayland desktop, prints Mesa loader errors, and exits with code 139.
 ## What the three display cases mean
 
 - On native X11, Qt connects through DISPLAY and /tmp/.X11-unix.
-- On a Wayland desktop with XWayland, Qt uses the same X11 interface. This is
-  the default when both DISPLAY and WAYLAND_DISPLAY exist.
+- On a Wayland desktop with XWayland, Qt can use the same X11 interface as a
+  compatibility option.
 - On native Wayland, Qt connects through the socket named by WAYLAND_DISPLAY
   under XDG_RUNTIME_DIR.
 
-The GUI's default display.mode of auto exposes both valid transports but
-prefers X11/XWayland for ROS Noetic RViz, Gazebo, Qt 5, and OGRE. Set a
-per-user override to test one backend explicitly:
+The GUI's default display.mode of auto exposes both valid transports and uses
+native Wayland on a Wayland desktop. It uses X11 on Xorg and falls back to
+XWayland if the native Wayland socket is unavailable. Set a per-user override
+to test one backend explicitly:
 
     display:
       mode: x11       # native X11 or XWayland

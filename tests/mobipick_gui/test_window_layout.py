@@ -57,6 +57,9 @@ def test_session_type_detection():
     assert session_type({'XDG_SESSION_TYPE': 'tty', 'WAYLAND_DISPLAY': 'wayland-0'}) == 'wayland'
     assert session_type({'QT_QPA_PLATFORM': 'wayland-egl'}) == 'wayland'
     assert session_type({'QT_QPA_PLATFORM': 'xcb'}) == 'x11'
+    assert session_type(
+        {'QT_QPA_PLATFORM': 'xcb', 'WAYLAND_DISPLAY': 'wayland-0'}
+    ) == 'x11'
     assert session_type({}) == ''
 
 

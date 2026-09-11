@@ -69,6 +69,7 @@ class HostDependency:
     reason: str
     required: bool = False
     check_commands: list[str] = field(default_factory=list)
+    install_commands: list[str] = field(default_factory=list)
 
 
 class ImageSetupWizard(QWizard):
@@ -183,8 +184,9 @@ class ImageSetupWizard(QWizard):
         dependency_page.setTitle('Host Dependencies')
         dependency_layout = QVBoxLayout(dependency_page)
         dependency_hint = QLabel(
-            'Install missing Ubuntu host packages before using Docker, window '
-            'layout capture, workspace graphs, or screen recording. The GUI '
+            'Install missing host tools before using Docker, window layout '
+            'capture, workspace graphs, or screen recording. On GNOME '
+            'Wayland this includes the bundled window extension. The GUI '
             'only copies short terminal commands; you choose what to run.'
         )
         dependency_hint.setWordWrap(True)
@@ -803,12 +805,16 @@ class ImageSetupWizard(QWizard):
         selected_keys = {dep.key for dep in selected}
         needs_docker = bool({'docker', 'docker_compose'} & selected_keys)
         packages: list[str] = []
+        custom_commands: list[str] = []
         for dep in selected:
             if needs_docker and dep.key in {'docker', 'docker_compose'}:
                 continue
             if dep.package and dep.package not in packages:
                 packages.append(dep.package)
-        if not packages and not needs_docker:
+            for command in dep.install_commands:
+                if command and command not in custom_commands:
+                    custom_commands.append(command)
+        if not packages and not needs_docker and not custom_commands:
             return '# Select one or more host dependencies to build a command.'
 
         lines: list[str] = []
@@ -816,6 +822,10 @@ class ImageSetupWizard(QWizard):
             lines.extend(self._docker_official_install_command(packages))
         elif packages:
             lines.extend(self._host_packages_install_command(packages))
+        if custom_commands:
+            if lines:
+                lines.append('')
+            lines.extend(custom_commands)
         return '\n'.join(lines)
 
     @staticmethod
@@ -923,6 +933,7 @@ class ImageSetupWizard(QWizard):
                 dep.reason = fresh.reason
                 dep.required = fresh.required
                 dep.check_commands = list(fresh.check_commands)
+                dep.install_commands = list(fresh.install_commands)
                 checkbox = self._dependency_checkboxes.get(dep.key)
                 label = self._dependency_status_labels.get(dep.key)
                 if checkbox is not None:

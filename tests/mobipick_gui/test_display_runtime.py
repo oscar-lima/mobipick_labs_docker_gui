@@ -72,7 +72,7 @@ def test_auto_uses_native_wayland_when_x11_is_unavailable(tmp_path):
     assert not runtime.x11_available
 
 
-def test_auto_exposes_xwayland_and_wayland_but_prefers_xcb(tmp_path):
+def test_auto_exposes_both_transports_but_prefers_native_wayland(tmp_path):
     x11_dir = tmp_path / 'x11'
     x11_dir.mkdir()
     wayland_path = tmp_path / 'wayland-0'
@@ -89,8 +89,8 @@ def test_auto_exposes_xwayland_and_wayland_but_prefers_xcb(tmp_path):
     finally:
         server.close()
 
-    assert runtime.backend == 'x11'
-    assert runtime.environment['QT_QPA_PLATFORM'] == 'xcb'
+    assert runtime.backend == 'wayland'
+    assert runtime.environment['QT_QPA_PLATFORM'] == 'wayland'
     assert runtime.environment['DISPLAY'] == ':0'
     assert runtime.environment['WAYLAND_DISPLAY'] == 'wayland-0'
     assert (str(x11_dir), str(x11_dir), 'ro') in runtime.mounts
@@ -99,6 +99,28 @@ def test_auto_exposes_xwayland_and_wayland_but_prefers_xcb(tmp_path):
         CONTAINER_WAYLAND_SOCKET,
         'rw',
     ) in runtime.mounts
+
+
+def test_auto_uses_x11_for_an_xorg_session_even_with_wayland_socket(tmp_path):
+    x11_dir = tmp_path / 'x11'
+    x11_dir.mkdir()
+    wayland_path = tmp_path / 'wayland-0'
+    server = _wayland_socket(wayland_path)
+    try:
+        runtime = detect_display_runtime(
+            environ={
+                'XDG_SESSION_TYPE': 'x11',
+                'DISPLAY': ':0',
+                'XDG_RUNTIME_DIR': str(tmp_path),
+                'WAYLAND_DISPLAY': wayland_path.name,
+            },
+            x11_socket_dir=x11_dir,
+        )
+    finally:
+        server.close()
+
+    assert runtime.backend == 'x11'
+    assert runtime.environment['QT_QPA_PLATFORM'] == 'xcb'
 
 
 def test_forced_wayland_does_not_expose_x11(tmp_path):

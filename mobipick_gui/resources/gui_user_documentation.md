@@ -127,15 +127,15 @@ In remote ROS master mode, RViz connects to the selected external ROS master.
 ### X11, XWayland, and Wayland
 
 The GUI automatically forwards available X11/XWayland and native Wayland
-sockets into containers. When both are available, RViz and Gazebo use
-XWayland by default because it is the most compatible backend for ROS Noetic,
-Qt 5, and OGRE. On a Wayland-only desktop, the native Qt Wayland backend is
-selected.
+sockets into containers. Automatic mode follows the native desktop session:
+RViz and Gazebo use native Wayland on a Wayland desktop and X11 on Xorg. If
+Wayland is unavailable, it falls back to XWayland.
 
 Advanced users can set `display.mode` to `x11` or `wayland` in their GUI
-settings override to force a backend. Native Wayland requires the selected
-Docker image to include the Qt Wayland platform plugin. Screen recording and
-window-layout capture continue to require X11 or XWayland.
+settings override to force a backend. Use `x11` as a compatibility option for
+older images or applications. Native Wayland requires the selected Docker
+image to include the Qt Wayland platform plugin. Screen recording continues
+to require X11 or XWayland.
 
 Each container user receives a private runtime directory with the ownership
 and permissions expected by Qt and other XDG-aware programs. Terminals update
@@ -487,7 +487,8 @@ the **Install Source** tab.
   the layout is saved. On X11 sessions this needs `wmctrl` and `xprop`; on a
   GNOME Wayland session install the bundled GNOME Shell extension once with
   `mobipick-labs-docker-gui --install-gnome-window-extension` and log out and
-  back in. The setup wizard's dependency page shows which one applies.
+  back in. The setup wizard's dependency page detects when it is needed and
+  includes that command in its generated Host Dependencies commands.
 
 ### Automation
 

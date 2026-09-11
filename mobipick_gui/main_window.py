@@ -5505,6 +5505,11 @@ class MainWindow(QMainWindow):
                     check_commands=[
                         f'gnome-extensions info {GNOME_EXTENSION_UUID}',
                     ],
+                    install_commands=[
+                        '# Install the bundled GNOME Wayland window extension once.',
+                        GNOME_EXTENSION_INSTALL_COMMAND,
+                        '# Log out and back in once so GNOME Shell loads it.',
+                    ],
                 )
             )
         x11_note = (
