@@ -7,10 +7,41 @@ import signal
 import sys
 from typing import Sequence
 
+from PyQt5.QtCore import qInstallMessageHandler
 from PyQt5.QtWidgets import QApplication
 
 from . import MainWindow, trigger_sigint
 from .window_control import install_gnome_extension
+
+
+_QT_SOCKET_NOTIFIER_THREAD_WARNING = (
+    'QSocketNotifier: Can only be used with threads started with QThread'
+)
+
+
+def _create_application(arguments: list[str]) -> QApplication:
+    """Create the application while hiding a known Qt platform warning.
+
+    Some Qt 5 Wayland installations emit the socket-notifier thread warning
+    from ``QApplication`` construction itself, even for a minimal application
+    with no worker threads.  Limit the filter to construction and preserve all
+    other Qt messages so genuine application threading warnings stay visible.
+    """
+    previous_handler = None
+
+    def startup_message_handler(message_type, context, message):
+        if message == _QT_SOCKET_NOTIFIER_THREAD_WARNING:
+            return
+        if previous_handler is not None:
+            previous_handler(message_type, context, message)
+        else:
+            print(message, file=sys.stderr, flush=True)
+
+    previous_handler = qInstallMessageHandler(startup_message_handler)
+    try:
+        return QApplication(arguments)
+    finally:
+        qInstallMessageHandler(previous_handler)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -159,7 +190,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 1
         return 0
 
-    app = QApplication([sys.argv[0]] + qt_args)
+    app = _create_application([sys.argv[0]] + qt_args)
     window = MainWindow(
         verbosity=verbosity,
         remote_control=remote_control_overrides(parsed_args),

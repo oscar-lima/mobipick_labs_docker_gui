@@ -818,6 +818,10 @@ a recoverable state.
   images from `docker images`.
 - If GUI tests create real dialogs unexpectedly, set
   `QT_QPA_PLATFORM=offscreen` and monkeypatch Docker discovery.
+- The CLI filters Qt 5's
+  `QSocketNotifier: Can only be used with threads started with QThread`
+  message only while constructing `QApplication`. A copy emitted later is not
+  filtered and should be investigated as an application threading problem.
 - If a workspace does not mount, check the selected image profile for
   `supports_host_workspaces`.
 - If RViz or Gazebo windows do not open, inspect the detected display variables,
