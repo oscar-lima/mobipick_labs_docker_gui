@@ -6,9 +6,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping
 
-from .window_control import session_type
-
-
 X11_SOCKET_DIR = Path('/tmp/.X11-unix')
 CONTAINER_XAUTHORITY = '/tmp/mobipick.Xauthority'
 CONTAINER_WAYLAND_SOCKET = '/tmp/mobipick-wayland.sock'
@@ -34,9 +31,10 @@ def detect_display_runtime(
 ) -> DisplayRuntime:
     """Detect X11/XWayland and native Wayland transports on the host.
 
-    In ``auto`` mode both usable transports are exposed and Qt follows the
-    host's native desktop session. Wayland is preferred on Wayland sessions;
-    X11 is selected on Xorg or as a fallback when Wayland is unavailable.
+    In ``auto`` mode both usable transports are exposed, while Qt defaults to
+    X11/XWayland for compatibility with ROS Noetic RViz, Gazebo, and other
+    images that do not include Qt's Wayland platform plugin. Native Wayland is
+    selected automatically only when X11 is unavailable.
     """
     host_env = os.environ if environ is None else environ
     requested_mode = str(mode or 'auto').strip().lower()
@@ -78,15 +76,9 @@ def detect_display_runtime(
         expose_x11 = False
         expose_wayland = wayland_available
     else:
-        host_session = session_type(host_env)
-        if host_session == 'x11' and x11_available:
-            backend = 'x11'
-        elif wayland_available:
-            backend = 'wayland'
-        elif x11_available:
-            backend = 'x11'
-        else:
-            backend = 'none'
+        backend = 'x11' if x11_available else (
+            'wayland' if wayland_available else 'none'
+        )
         expose_x11 = x11_available
         expose_wayland = wayland_available
 

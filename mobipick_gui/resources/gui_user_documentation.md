@@ -127,15 +127,17 @@ In remote ROS master mode, RViz connects to the selected external ROS master.
 ### X11, XWayland, and Wayland
 
 The GUI automatically forwards available X11/XWayland and native Wayland
-sockets into containers. Automatic mode follows the native desktop session:
-RViz and Gazebo use native Wayland on a Wayland desktop and X11 on Xorg. If
-Wayland is unavailable, it falls back to XWayland.
+sockets into containers. Automatic mode makes RViz, Gazebo, and other Qt
+applications use X11/XWayland whenever it is available, including on a
+Wayland desktop. This avoids requiring the Qt Wayland platform plugin in
+existing images. On a Wayland-only session, it uses native Wayland.
 
 Advanced users can set `display.mode` to `x11` or `wayland` in their GUI
 settings override to force a backend. Use `x11` as a compatibility option for
-older images or applications. Native Wayland requires the selected Docker
-image to include the Qt Wayland platform plugin. Screen recording continues
-to require X11 or XWayland.
+older images or applications, or `wayland` to explicitly select the native
+backend. Native Wayland requires the selected Docker image to include the Qt
+Wayland platform plugin. Screen recording continues to require X11 or
+XWayland.
 
 Each container user receives a private runtime directory with the ownership
 and permissions expected by Qt and other XDG-aware programs. Terminals update
