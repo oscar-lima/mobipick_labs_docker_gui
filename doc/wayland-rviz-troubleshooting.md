@@ -112,6 +112,33 @@ OGRE initialize.
 
 ## Remaining X11-only features
 
-The GUI's screen recorder uses ffmpeg x11grab, while window capture and layout
-replay use wmctrl and xprop. These features require native X11 or XWayland even
-when RViz itself is forced to native Wayland.
+The GUI's screen recorder uses ffmpeg x11grab and requires native X11 or
+XWayland even when RViz itself is forced to native Wayland.
+
+## Window layout on Wayland
+
+wmctrl and xprop only see XWayland windows, and GNOME 46 blocks scripting the
+Shell over D-Bus, so on a Wayland session window capture and layout replay use
+a small GNOME Shell extension shipped with the GUI:
+
+    mobipick-labs-docker-gui --install-gnome-window-extension
+
+Then log out and back in; GNOME Shell on Wayland only scans for new extensions
+at session start. Verify with:
+
+    gnome-extensions info winctl@mobipick-labs-docker-gui
+    gdbus call --session --dest org.gnome.Shell \
+      --object-path /org/gnome/Shell/Extensions/MobipickWinCtl \
+      --method org.gnome.Shell.Extensions.MobipickWinCtl.Version
+
+The extension is only used when the GUI runs in a Wayland session. Saved
+geometries are in logical pixels there, so a layout captured on X11 with
+fractional scaling may need to be saved again.
+
+Wayland also ignores Qt's "stays on top" window flag, because clients cannot
+request stacking from the compositor. The Auto Launch progress window, the
+Window Layout helper, the Recording Control window, and the exit dialog are
+therefore pinned through the extension's `SetAbove` method instead. If those
+windows fall behind others, confirm the extension is ACTIVE and reports
+protocol version 2 or later with the `Version` call above; older copies need
+`--install-gnome-window-extension` again and a fresh login.

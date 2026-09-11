@@ -237,7 +237,8 @@ readiness schedule, while processes that were already running add no wait. At
 completion the window shows **Demo ready** and disappears automatically after
 one second. When automatic window layout replay is enabled and a saved layout
 exists, an **Arrange windows** bar shows the remaining wait; the default
-`apply_delay_ms: auto` runs `wmctrl` one second after all processes are ready.
+`apply_delay_ms: auto` rearranges the windows one second after all processes
+are ready.
 Stopping Auto Launch dismisses the progress window immediately.
 It stops when you uncheck **Record Auto Launch**, press **Stop Recording**, stop
 Auto Launch, stop Roscore, or exit the GUI.
@@ -483,7 +484,10 @@ the **Install Source** tab.
   simulator and tool window positions.
 - **Save Window State** records visible windows so the GUI can reapply the
   layout during later Auto Launch runs. The helper closes automatically after
-  the layout is saved.
+  the layout is saved. On X11 sessions this needs `wmctrl` and `xprop`; on a
+  GNOME Wayland session install the bundled GNOME Shell extension once with
+  `mobipick-labs-docker-gui --install-gnome-window-extension` and log out and
+  back in. The setup wizard's dependency page shows which one applies.
 
 ### Automation
 

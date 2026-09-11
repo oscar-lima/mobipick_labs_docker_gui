@@ -34,7 +34,8 @@ resource and is rendered in the application from **Help > Documentation**.
 |   |-- workspace_dialog.py        # Workspace manager dialog
 |   |-- workspaces.py              # Workspace registry and runtime env model
 |   |-- settings_transfer.py       # Portable import/export of GUI settings
-|   |-- window_layout.py           # wmctrl/xprop capture and replay helper
+|   |-- window_control.py          # window backends: wmctrl/xprop (X11), GNOME Shell extension (Wayland)
+|   |-- window_layout.py           # window layout capture and replay helper
 |   |-- remote_control.py          # HTTP remote-control server, events, shell sessions
 |   |-- remote_adapter.py          # MainWindow bridge used by the remote-control server
 |   |-- remote_client.py           # mobipick-labs-docker-gui-remote CLI client
@@ -91,11 +92,14 @@ The application targets Linux desktops with X11 or Wayland.
 - PyQt5 5.15 or newer.
 - Docker Engine and the Docker Compose plugin available to the current user.
 - An X11, XWayland, or native Wayland desktop path for Gazebo, RViz, and RQt.
-  Screen recording and window-layout capture still require X11/XWayland.
+  Screen recording still requires X11/XWayland.
 - Optional but recommended: NVIDIA Container Toolkit for GPU-accelerated
   simulation.
 - Optional tools for specific features:
-  - `wmctrl` and `xprop` for window layout capture/replay.
+  - `wmctrl` and `xprop` for window layout capture/replay on X11 sessions.
+  - On GNOME Wayland sessions, the bundled GNOME Shell extension instead
+    (`mobipick-labs-docker-gui --install-gnome-window-extension`, then log
+    out and back in), because `wmctrl` cannot see native Wayland windows.
   - `graphviz` for workspace graph rendering.
   - `ffmpeg` for Auto Launch screen recording.
 
@@ -532,7 +536,19 @@ GUI checkbox and starts only after Auto Launch begins and the timeline/layout
 delay has elapsed. Recording sessions create timestamped folders containing the
 MP4, `ffmpeg.log`, and saved HTML logs when requested.
 
-Window layout capture uses `WindowLayoutManager` plus `wmctrl` and `xprop`.
+Window layout capture uses `WindowLayoutManager` on top of a backend from
+`window_control.py`. On X11 sessions the backend shells out to `wmctrl` and
+`xprop`. On Wayland sessions those tools only see XWayland windows, so the
+backend talks over D-Bus to the GNOME Shell extension shipped in
+`mobipick_gui/resources/gnome-shell-extension/` (installed with
+`mobipick-labs-docker-gui --install-gnome-window-extension`; GNOME Shell only
+loads new extensions after a fresh login). The extension exposes
+`ListWindows`, `MoveResize`, `SetWorkspace`, `Activate`, `Unmaximize`, and
+`SetAbove` on `/org/gnome/Shell/Extensions/MobipickWinCtl`, and windows are
+addressed by the Mutter window id. `MainWindow.keep_window_above` uses
+`SetAbove` for the always-on-top helper windows, since Wayland ignores
+`Qt.WindowStaysOnTopHint`. When the extension is not available on Wayland the manager
+falls back to `wmctrl` for XWayland windows.
 The manager records the baseline windows present when the GUI starts, excludes
 the GUI/helper windows during capture, stores a separate layout for each active
 workspace, and applies saved positions to matching new windows after the
@@ -803,5 +819,7 @@ a recoverable state.
   [Wayland and RViz troubleshooting](doc/wayland-rviz-troubleshooting.md).
 - If recordings produce no MP4, inspect the session `ffmpeg.log` and the
   configured display/resolution.
-- If window layout replay does nothing, install `wmctrl` and `xprop` and save a
-  layout after simulator windows are visible.
+- If window layout replay does nothing on X11, install `wmctrl` and `xprop` and
+  save a layout after simulator windows are visible. On a Wayland session run
+  `mobipick-labs-docker-gui --install-gnome-window-extension`, log out and back
+  in, and check `gnome-extensions info winctl@mobipick-labs-docker-gui`.

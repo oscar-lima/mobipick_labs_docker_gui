@@ -1,33 +1,26 @@
 from __future__ import annotations
 
-import re
-import shutil
-import subprocess
-from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Iterable
+from typing import Callable, Iterable, Mapping
 import time
 
 import yaml
 
-
-@dataclass
-class WindowInfo:
-    wid: str
-    title: str
-    desktop: int | None
-    pid: int | None
-    x: int
-    y: int
-    width: int
-    height: int
-    wm_class: list[str]
-    stack_index: int | None = None
+from .window_control import (
+    WindowInfo,
+    normalize_wid,
+    select_backend,
+)
 
 
 class WindowLayoutManager:
-    """Capture and re-apply window positions via wmctrl/xprop."""
+    """Capture and re-apply window positions.
+
+    The actual window enumeration and placement is delegated to a backend
+    from :mod:`mobipick_gui.window_control`: ``wmctrl``/``xprop`` on X11 and
+    the bundled GNOME Shell extension on Wayland sessions.
+    """
 
     def __init__(
         self,
@@ -40,17 +33,22 @@ class WindowLayoutManager:
         log_debug: Callable[[str], None] | None = None,
         apply_delay_ms: int = 0,
         on_applied: Callable[[int], None] | None = None,
+        backend=None,
+        environ: Mapping[str, str] | None = None,
     ):
         self.state_file = Path(state_file)
         self._on_applied = on_applied
-        self._wmctrl_bin = wmctrl_bin
-        self._xprop_bin = xprop_bin
         self._log_info = log_info or (lambda _msg: None)
         self._log_warning = log_warning or (lambda _msg: None)
         self._log_debug = log_debug or (lambda _msg: None)
         self._apply_delay_ms = max(0, int(apply_delay_ms or 0))
-        self._wmctrl_available = bool(shutil.which(wmctrl_bin))
-        self._xprop_available = bool(shutil.which(xprop_bin))
+        self._backend = backend or select_backend(
+            wmctrl_bin=wmctrl_bin,
+            xprop_bin=xprop_bin,
+            environ=environ,
+            log_info=self._log_info,
+            log_warning=self._log_warning,
+        )
         self._layout: dict = {}
         self._applied_ids: set[str] = set()
         self._auto_apply_done = False
@@ -61,7 +59,7 @@ class WindowLayoutManager:
         self._start_ts = time.monotonic()
 
     def record_baseline(self, *, exclude_titles: Iterable[str] | None = None):
-        if not self._wmctrl_available:
+        if not self._backend.available:
             self._auto_apply_done = True
             return
         titles = {t.strip() for t in (exclude_titles or []) if t}
@@ -102,6 +100,20 @@ class WindowLayoutManager:
         """Update the wait time used before auto-applying saved layouts."""
         self._apply_delay_ms = max(0, int(delay_ms or 0))
 
+    @property
+    def backend_name(self) -> str:
+        """Human readable name of the window backend in use."""
+        return getattr(self._backend, 'name', 'unknown')
+
+    @property
+    def backend_available(self) -> bool:
+        return bool(self._backend.available)
+
+    @property
+    def backend(self):
+        """The window backend (see :mod:`mobipick_gui.window_control`)."""
+        return self._backend
+
     def has_saved_layout(self) -> bool:
         """Return whether a saved layout contains windows to rearrange."""
         windows = (
@@ -112,13 +124,16 @@ class WindowLayoutManager:
         return bool(windows)
 
     def capture_layout(self, exclude_titles: Iterable[str] | None = None) -> dict | None:
-        if not self._wmctrl_available:
+        if not self._backend.available:
             self._warn_missing_tools()
             return None
         self._last_capture_ids = set()
         windows = self._enumerate_windows(include_classes=True, include_stack=True)
         if not windows:
-            self._log_warning('No windows found to capture.')
+            hint = getattr(self._backend, 'hint', '')
+            self._log_warning(
+                'No windows found to capture.' + (f' {hint}' if hint else '')
+            )
             return None
         exclude = {title.strip() for title in (exclude_titles or []) if title}
         entries = []
@@ -164,7 +179,7 @@ class WindowLayoutManager:
         if not windows_cfg:
             self._auto_apply_done = True
             return
-        if not self._wmctrl_available:
+        if not self._backend.available:
             self._warn_missing_tools()
             return
         if self._apply_delay_ms:
@@ -213,15 +228,13 @@ class WindowLayoutManager:
     def _warn_missing_tools(self):
         if self._warned_missing:
             return
-        msg_parts = []
-        if not self._wmctrl_available:
-            msg_parts.append('wmctrl')
-        if not self._xprop_available:
-            msg_parts.append('xprop')
-        if msg_parts:
-            self._log_warning(f"Missing tools: {', '.join(msg_parts)}. Window layout support is disabled.")
+        missing = self._backend.missing_tools()
+        if missing:
+            self._log_warning(
+                f"Missing tools: {', '.join(missing)}. Window layout support is disabled."
+            )
         self._warned_missing = True
-        if not self._wmctrl_available:
+        if not self._backend.available:
             self._auto_apply_done = True
 
     def _enumerate_windows(
@@ -230,108 +243,13 @@ class WindowLayoutManager:
         include_classes: bool = False,
         include_stack: bool = False,
     ) -> list[WindowInfo]:
-        try:
-            cp = subprocess.run(
-                [self._wmctrl_bin, '-lpG'],
-                check=False,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-            )
-        except FileNotFoundError:
-            self._wmctrl_available = False
+        windows = self._backend.list_windows(
+            include_classes=include_classes,
+            include_stack=include_stack,
+        )
+        if not windows and not self._backend.available:
             self._warn_missing_tools()
-            return []
-
-        stdout = cp.stdout or ''
-        stack_map = self._stacking_map() if include_stack else {}
-        windows: list[WindowInfo] = []
-        for idx, line in enumerate(stdout.splitlines()):
-            parts = line.split(None, 8)
-            if len(parts) < 9:
-                continue
-            wid_raw, desktop_raw, pid_raw, x_raw, y_raw, width_raw, height_raw, _host, title = parts
-            try:
-                desktop = int(desktop_raw)
-            except ValueError:
-                desktop = None
-            try:
-                pid = int(pid_raw)
-            except ValueError:
-                pid = None
-            try:
-                x = int(x_raw)
-                y = int(y_raw)
-                width = int(width_raw)
-                height = int(height_raw)
-            except ValueError:
-                continue
-            win = WindowInfo(
-                wid=self._normalize_wid(wid_raw),
-                title=title.strip(),
-                desktop=desktop,
-                pid=pid,
-                x=x,
-                y=y,
-                width=width,
-                height=height,
-                wm_class=[],
-                stack_index=None,
-            )
-            if include_classes:
-                win.wm_class = self._read_wm_class(win.wid)
-            if include_stack:
-                win.stack_index = stack_map.get(win.wid, idx)
-            windows.append(win)
         return windows
-
-    def _stacking_map(self) -> dict[str, int]:
-        if not self._xprop_available:
-            return {}
-        try:
-            cp = subprocess.run(
-                [self._xprop_bin, '-root', '_NET_CLIENT_LIST_STACKING'],
-                check=False,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-            )
-        except FileNotFoundError:
-            self._xprop_available = False
-            self._warn_missing_tools()
-            return {}
-        stdout = cp.stdout or ''
-        order = [self._normalize_wid(match) for match in re.findall(r'0x[0-9a-fA-F]+', stdout)]
-        return {wid: idx for idx, wid in enumerate(order)}
-
-    def _read_wm_class(self, wid: str) -> list[str]:
-        if not self._xprop_available:
-            return []
-        try:
-            cp = subprocess.run(
-                [self._xprop_bin, '-id', wid, 'WM_CLASS'],
-                check=False,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-            )
-        except FileNotFoundError:
-            self._xprop_available = False
-            self._warn_missing_tools()
-            return []
-        if cp.returncode != 0:
-            return []
-        stdout = cp.stdout or ''
-        if '=' in stdout:
-            _, raw_value = stdout.split('=', 1)
-        else:
-            raw_value = stdout
-        parts = []
-        for piece in raw_value.split(','):
-            cleaned = piece.strip().strip('"')
-            if cleaned:
-                parts.append(cleaned)
-        return parts
 
     def _serialize_window(self, window: WindowInfo) -> dict:
         data = {
@@ -394,11 +312,7 @@ class WindowLayoutManager:
         except Exception:
             coords = []
         if len(coords) == 4:
-            # drop maximized flags before resizing/repositioning so wmctrl can move the window
-            self._run_wmctrl(['-i', '-r', window.wid, '-b', 'remove,maximized_vert,maximized_horz'])
-        if len(coords) == 4:
-            geometry_arg = f"0,{coords[0]},{coords[1]},{coords[2]},{coords[3]}"
-            self._run_wmctrl(['-i', '-r', window.wid, '-e', geometry_arg])
+            self._backend.move_resize(window.wid, *coords)
 
         desktop = entry.get('desktop')
         try:
@@ -406,28 +320,11 @@ class WindowLayoutManager:
         except (TypeError, ValueError):
             desk_idx = None
         if desk_idx is not None:
-            self._run_wmctrl(['-i', '-r', window.wid, '-t', str(desk_idx)])
+            self._backend.set_desktop(window.wid, desk_idx)
 
     def _apply_stack(self, matches: list[tuple[dict, WindowInfo]]):
         ordered = sorted(matches, key=lambda pair: self._stacking_key(pair[0]))
-        for _, win in ordered:
-            self._run_wmctrl(['-i', '-r', win.wid, '-b', 'remove,below,above'])
-        for _, win in ordered:
-            self._run_wmctrl(['-i', '-a', win.wid])
-
-    def _run_wmctrl(self, args: list[str]):
-        try:
-            cmd = [self._wmctrl_bin, *args]
-            self._log_info(' '.join(cmd))
-            subprocess.run(
-                cmd,
-                check=False,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-        except FileNotFoundError:
-            self._wmctrl_available = False
-            self._warn_missing_tools()
+        self._backend.restack([win.wid for _, win in ordered])
 
     @staticmethod
     def _stacking_key(entry: dict) -> int:
@@ -446,10 +343,4 @@ class WindowLayoutManager:
 
     @staticmethod
     def _normalize_wid(raw: str) -> str:
-        value = str(raw).strip().lower()
-        if value.startswith('0x'):
-            return value
-        try:
-            return hex(int(value))
-        except ValueError:
-            return value
+        return normalize_wid(raw)

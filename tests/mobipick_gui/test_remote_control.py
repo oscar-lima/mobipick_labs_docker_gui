@@ -486,15 +486,27 @@ def test_cli_remote_control_overrides(monkeypatch):
     assert remote_control_overrides(args) == {}
 
     args, _ = parser.parse_known_args(['--remote-control', '--remote-port', '9999'])
-    assert remote_control_overrides(args) == {'enabled': True, 'port': 9999}
+    assert remote_control_overrides(args) == {
+        'enabled': True,
+        '_enabled_source': '--remote-control',
+        'port': 9999,
+    }
 
     args, _ = parser.parse_known_args(['--remote-token', 'x'])
-    assert remote_control_overrides(args) == {'token': 'x', 'enabled': True}
+    assert remote_control_overrides(args) == {
+        'token': 'x',
+        'enabled': True,
+        '_enabled_source': 'remote-control CLI option',
+    }
 
     monkeypatch.setenv('MOBIPICK_GUI_REMOTE_CONTROL', '1')
     monkeypatch.setenv('MOBIPICK_GUI_REMOTE_HOST', '127.0.0.1')
     args, _ = parser.parse_known_args(['--no-remote-control'])
-    assert remote_control_overrides(args) == {'enabled': False, 'host': '127.0.0.1'}
+    assert remote_control_overrides(args) == {
+        'enabled': False,
+        '_enabled_source': '--no-remote-control',
+        'host': '127.0.0.1',
+    }
 
 
 # ---------------------------------------------------------------------------

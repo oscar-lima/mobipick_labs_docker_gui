@@ -116,6 +116,12 @@ from .window_utils import (
     MaximizableDialog as QDialog,
     configure_maximizable_window,
 )
+from .window_control import (
+    GNOME_EXTENSION_INSTALL_COMMAND,
+    GNOME_EXTENSION_UUID,
+    find_own_window,
+    session_type as desktop_session_type,
+)
 from .window_layout import WindowLayoutManager
 from .workspace_dialog import WorkspaceManagerDialog
 from .workspaces import RosWorkspace, WorkspaceRegistry
@@ -1368,7 +1374,6 @@ class AutoLaunchProgressWindow(QWidget):
                 bounds.center().y() - self.height() // 2,
             )
         self.show()
-        self.raise_()
         self._update_progress()
         if self._total_seconds > 0:
             self._update_timer.start()
@@ -2606,6 +2611,12 @@ class MainWindow(QMainWindow):
         super().__init__()
         configure_maximizable_window(self)
 
+        # The desktop session is stable for the lifetime of the GUI. Cache it
+        # once so every window operation makes the same Xorg/Wayland choice.
+        self._desktop_session_type = desktop_session_type()
+        self._is_wayland_session = self._desktop_session_type == 'wayland'
+        self._is_x11_session = self._desktop_session_type == 'x11'
+
         try:
             value = int(verbosity)
         except (TypeError, ValueError):
@@ -2616,10 +2627,18 @@ class MainWindow(QMainWindow):
         # event hooks can run safely during construction.
         self.remote_control: RemoteControlServer | None = None
         self._remote_invoker: GuiInvoker | None = None
+        remote_control_config = CONFIG.get('remote_control')
         self._remote_control_settings = remote_control_settings(
-            CONFIG.get('remote_control'),
+            remote_control_config,
             remote_control,
         )
+        if (
+            self._remote_control_settings.get('enabled')
+            and not self._remote_control_settings.get('_enabled_source')
+        ):
+            self._remote_control_settings['_enabled_source'] = (
+                'remote_control.enabled in gui_settings.yaml'
+            )
         self._remote_control_action: QAction | None = None
 
         window_cfg = CONFIG['window']
@@ -2952,7 +2971,7 @@ class MainWindow(QMainWindow):
         self.execute_docker_cp_button.clicked.connect(self.execute_docker_cp_from_container)
 
         self.window_layout_button = QPushButton('Window Layout')
-        self.window_layout_button.setToolTip('Open helper to save window positions for wmctrl replay')
+        self.window_layout_button.setToolTip('Open helper to save window positions for layout replay')
         self.window_layout_button.clicked.connect(self._on_window_layout_clicked)
 
         self.save_current_button = QPushButton('Save Current Log')
@@ -3137,6 +3156,12 @@ class MainWindow(QMainWindow):
         self.update_sim_status_from_poll(force=True)
 
         self._console_log(1, f'Mobipick Labs Control ready (verbosity {self._verbosity})')
+        self._console_log(
+            1,
+            'desktop session: '
+            f'{self._desktop_session_type or "unknown"} '
+            '(detected from the process environment)',
+        )
         if self._workspace_load_error:
             self._console_log(1, self._workspace_load_error)
         self._log_optional_dependency_warnings()
@@ -3188,13 +3213,21 @@ class MainWindow(QMainWindow):
             return False
         self.remote_control = server
         token_note = 'token required' if server.token else 'no token configured'
+        enabled_source = str(
+            settings.get('_enabled_source') or 'Tools menu'
+        )
         self._append_gui_html(
             'log',
             f'<i>Remote control API listening on http://{html.escape(host)}:{port}/ '
-            f'({token_note}). Anyone who can reach this port can run commands '
+            f'({token_note}; enabled by {html.escape(enabled_source)}). '
+            'Anyone who can reach this port can run commands '
             'inside the Mobipick containers.</i>',
         )
-        self._console_log(1, f'remote control API listening on http://{host}:{port}/ ({token_note})')
+        self._console_log(
+            1,
+            f'remote control API listening on http://{host}:{port}/ '
+            f'({token_note}; enabled by {enabled_source})',
+        )
         self._sync_remote_control_action()
         return True
 
@@ -3218,6 +3251,7 @@ class MainWindow(QMainWindow):
 
     def _on_remote_control_toggled(self, checked: bool) -> None:
         if checked:
+            self._remote_control_settings['_enabled_source'] = 'Tools menu'
             if not self._start_remote_control():
                 self._sync_remote_control_action()
         else:
@@ -3251,8 +3285,10 @@ class MainWindow(QMainWindow):
             else 'Token: none (any client that reaches the port is trusted)'
         )
         shells = len(server.sessions()) if server is not None else 0
+        source = str(settings.get('_enabled_source') or 'not enabled')
         return (
-            f'{state}\n{token_line}\nOpen remote shells: {shells}\n\n'
+            f'{state}\nEnabled by: {source}\n{token_line}\n'
+            f'Open remote shells: {shells}\n\n'
             'Enable with --remote-control, MOBIPICK_GUI_REMOTE_CONTROL=1, or '
             'remote_control.enabled in gui_settings.yaml.\n'
             'Client: mobipick-labs-docker-gui-remote --url http://<host>:<port> status'
@@ -3392,7 +3428,7 @@ class MainWindow(QMainWindow):
             layout_menu,
             'Window Layout',
             self._on_window_layout_clicked,
-            tooltip='Open helper to save window positions for wmctrl replay',
+            tooltip='Open helper to save window positions for layout replay',
         )
 
         automation_menu = self._add_menu(tools_menu, 'Automation')
@@ -3670,8 +3706,7 @@ class MainWindow(QMainWindow):
 
     def _show_configuration_paths(self) -> None:
         if self._config_paths_dialog:
-            self._config_paths_dialog.raise_()
-            self._config_paths_dialog.activateWindow()
+            self.bring_window_to_front(self._config_paths_dialog)
             return
         dialog = QDialog(self)
         dialog.setWindowTitle('Configuration Paths')
@@ -3968,8 +4003,7 @@ class MainWindow(QMainWindow):
 
     def _open_documentation_dialog(self) -> None:
         if self._documentation_dialog:
-            self._documentation_dialog.raise_()
-            self._documentation_dialog.activateWindow()
+            self.bring_window_to_front(self._documentation_dialog)
             return
         dialog = DocumentationDialog(
             PROJECT_ROOT / 'gui_user_documentation.md',
@@ -3984,8 +4018,7 @@ class MainWindow(QMainWindow):
 
     def _open_bug_report_dialog(self) -> None:
         if self._bug_report_dialog:
-            self._bug_report_dialog.raise_()
-            self._bug_report_dialog.activateWindow()
+            self.bring_window_to_front(self._bug_report_dialog)
             return
         dialog = BugReportDialog(self._build_bug_report_context, self)
         dialog.finished.connect(self._on_bug_report_dialog_closed)
@@ -5060,8 +5093,7 @@ class MainWindow(QMainWindow):
 
     def _open_workspace_manager(self) -> None:
         if self._workspace_dialog:
-            self._workspace_dialog.raise_()
-            self._workspace_dialog.activateWindow()
+            self.bring_window_to_front(self._workspace_dialog)
             return
         dialog = WorkspaceManagerDialog(
             self._workspace_registry,
@@ -5148,16 +5180,30 @@ class MainWindow(QMainWindow):
     def _missing_optional_dependency_features(
         self,
     ) -> list[tuple[str, str]]:
-        checks = (
-            ('wmctrl', 'window layout capture and replay'),
-            (
-                'xprop',
-                'automatic window identification for layout replay',
-            ),
+        checks = [
             ('dot', 'workspace graph rendering'),
             ('ffmpeg', 'Auto Launch screen recording'),
-        )
+        ]
         missing = []
+        if desktop_session_type() == 'wayland':
+            if not self._gnome_window_extension_status()[0]:
+                missing.append(
+                    (
+                        GNOME_EXTENSION_UUID,
+                        'window layout capture and replay on Wayland '
+                        f'(install with "{GNOME_EXTENSION_INSTALL_COMMAND}" '
+                        'and log in again)',
+                    )
+                )
+        else:
+            checks = [
+                ('wmctrl', 'window layout capture and replay'),
+                (
+                    'xprop',
+                    'automatic window identification for layout replay',
+                ),
+                *checks,
+            ]
         for command, feature in checks:
             installed, _detail = self._host_shell_status(
                 f'command -v {command}'
@@ -5165,6 +5211,23 @@ class MainWindow(QMainWindow):
             if not installed:
                 missing.append((command, feature))
         return missing
+
+    @classmethod
+    def _gnome_window_extension_status(cls) -> tuple[bool, str]:
+        """Return whether the bundled GNOME Shell window extension responds."""
+        return cls._host_command_status(
+            [
+                'gdbus',
+                'call',
+                '--session',
+                '--dest',
+                'org.gnome.Shell',
+                '--object-path',
+                '/org/gnome/Shell/Extensions/MobipickWinCtl',
+                '--method',
+                'org.gnome.Shell.Extensions.MobipickWinCtl.Version',
+            ]
+        )
 
     def _log_optional_dependency_warnings(self) -> None:
         """Describe unavailable optional features in the GUI Log tab."""
@@ -5422,6 +5485,33 @@ class MainWindow(QMainWindow):
         xprop_ok, xprop_detail = self._host_shell_status('command -v xprop')
         dot_ok, dot_detail = self._host_shell_status('command -v dot')
         ffmpeg_ok, ffmpeg_detail = self._host_shell_status('command -v ffmpeg')
+        on_wayland = desktop_session_type() == 'wayland'
+        window_deps: list[HostDependency] = []
+        if on_wayland:
+            ext_ok, ext_detail = self._gnome_window_extension_status()
+            window_deps.append(
+                HostDependency(
+                    key='gnome_window_extension',
+                    label='GNOME Shell window extension',
+                    package='',
+                    installed=ext_ok,
+                    reason=(
+                        'Optional; enables window layout capture and replay '
+                        'on Wayland sessions, where wmctrl cannot see native '
+                        f'windows. Install with "{GNOME_EXTENSION_INSTALL_COMMAND}" '
+                        'and log out and back in. '
+                        f'Probe output: {ext_detail or "extension not responding"}.'
+                    ),
+                    check_commands=[
+                        f'gnome-extensions info {GNOME_EXTENSION_UUID}',
+                    ],
+                )
+            )
+        x11_note = (
+            ' Only used on X11 sessions; this session is Wayland.'
+            if on_wayland
+            else ''
+        )
 
         return [
             HostDependency(
@@ -5442,13 +5532,15 @@ class MainWindow(QMainWindow):
                 required=True,
                 check_commands=compose_probe_commands,
             ),
+            *window_deps,
             HostDependency(
                 key='wmctrl',
                 label='wmctrl',
                 package='wmctrl',
                 installed=wmctrl_ok,
                 reason=(
-                    'Optional; enables window layout capture and replay. '
+                    'Optional; enables window layout capture and replay.'
+                    f'{x11_note} '
                     f'Probe output: {wmctrl_detail or "not found"}.'
                 ),
                 check_commands=['command -v wmctrl'],
@@ -5459,7 +5551,8 @@ class MainWindow(QMainWindow):
                 package='x11-utils',
                 installed=xprop_ok,
                 reason=(
-                    'Optional; helps identify windows for layout replay. '
+                    'Optional; helps identify windows for layout replay.'
+                    f'{x11_note} '
                     f'Probe output: {xprop_detail or "not found"}.'
                 ),
                 check_commands=['command -v xprop'],
@@ -5493,8 +5586,7 @@ class MainWindow(QMainWindow):
 
     def _open_setup_wizard(self, *, build_custom_default: bool = False) -> None:
         if self._setup_wizard_dialog:
-            self._setup_wizard_dialog.raise_()
-            self._setup_wizard_dialog.activateWindow()
+            self.bring_window_to_front(self._setup_wizard_dialog)
             return
         cfg = self._setup_wizard_cfg()
         public_images = self._normalize_image_list(
@@ -8274,8 +8366,8 @@ CMD ["bash"]
         self._log_button_click(self.window_layout_button, 'Window Layout')
         dialog = self._ensure_window_layout_dialog()
         dialog.show()
-        dialog.raise_()
-        dialog.activateWindow()
+        self.bring_window_to_front(dialog)
+        self.keep_window_above(dialog)
 
     def _compute_window_layout_delay_ms(self) -> int:
         raw = self._window_layout_cfg.get('apply_delay_ms', 'auto')
@@ -8346,6 +8438,78 @@ CMD ["bash"]
             self._window_layout_dialog.deleteLater()
             self._window_layout_dialog = None
 
+    # Native Wayland blocks client-side activation and stacking requests. The
+    # compositor extension handles those operations after the window appears.
+    _WINDOW_ACTION_RETRY_MS = (0, 150, 400, 1000, 2500)
+
+    def _uses_wayland(self) -> bool:
+        """Return the cached session flag, with a fallback for test harnesses."""
+        return self.__dict__.get(
+            '_is_wayland_session',
+            desktop_session_type() == 'wayland',
+        )
+
+    def _schedule_wayland_window_action(
+        self,
+        widget: QWidget,
+        action_name: str,
+        success_message: str,
+        failure_message: str = '',
+    ) -> None:
+        """Run a compositor window action once a Wayland window is mapped."""
+        manager = getattr(self, '_window_layout_manager', None)
+        backend = getattr(manager, 'backend', None)
+        action = getattr(backend, action_name, None)
+        if backend is None or not backend.available or not callable(action):
+            return
+        title = widget.windowTitle()
+        attempts = list(self._WINDOW_ACTION_RETRY_MS)
+
+        def attempt():
+            try:
+                if not widget.isVisible():
+                    return
+            except RuntimeError:
+                return
+            win = find_own_window(backend, title)
+            if win is not None and action(win.wid):
+                self._console_log(3, success_message.format(title=title))
+                return
+            if attempts:
+                QTimer.singleShot(attempts.pop(0), attempt)
+            elif failure_message:
+                self._console_log(2, failure_message.format(title=title))
+
+        QTimer.singleShot(attempts.pop(0), attempt)
+
+    def bring_window_to_front(self, widget: QWidget) -> None:
+        """Bring a window forward without unsupported Qt calls on Wayland."""
+        if self._uses_wayland():
+            self._schedule_wayland_window_action(
+                widget,
+                'activate',
+                'activated window {title!r} through the Wayland backend',
+            )
+            return
+        widget.raise_()
+        widget.activateWindow()
+
+    def keep_window_above(self, widget: QWidget) -> None:
+        """Pin ``widget`` above other windows on Wayland sessions.
+
+        On X11 the ``WindowStaysOnTopHint`` flag already works. On Wayland the
+        window is created asynchronously, so the lookup by title and pid is
+        retried a few times through the GNOME Shell extension backend.
+        """
+        if not self._uses_wayland():
+            return
+        self._schedule_wayland_window_action(
+            widget,
+            'set_above',
+            'pinned window {title!r} above others',
+            'could not keep window {title!r} on top via the window backend',
+        )
+
     def _ensure_window_layout_dialog(self) -> QDialog:
         if self._window_layout_dialog is not None:
             return self._window_layout_dialog
@@ -8354,7 +8518,9 @@ CMD ["bash"]
         dialog.setWindowFlag(Qt.WindowStaysOnTopHint, True)
         dialog.setWindowModality(Qt.NonModal)
         layout = QVBoxLayout(dialog)
-        label = QLabel('Capture and reuse window positions with wmctrl.')
+        manager = getattr(self, '_window_layout_manager', None)
+        backend_name = manager.backend_name if manager is not None else 'the window tools'
+        label = QLabel(f'Capture and reuse window positions with {backend_name}.')
         label.setWordWrap(True)
         layout.addWidget(label)
         path_label = QLabel(str(self._window_layout_path))
@@ -8384,7 +8550,9 @@ CMD ["bash"]
         QMessageBox.warning(
             self,
             'Window Layout',
-            'Unable to capture window state. Ensure wmctrl/xprop are installed and windows are visible.',
+            'Unable to capture window state. Ensure the window tools are '
+            'installed (wmctrl/xprop on X11, the bundled GNOME Shell '
+            'extension on Wayland) and windows are visible.',
         )
 
     def _on_stop_custom_clicked(self):
@@ -9156,7 +9324,7 @@ CMD ["bash"]
         except RuntimeError:
             self._recording_window = None
 
-        dialog = QDialog(None)  # top-level so wmctrl can move it independently
+        dialog = QDialog(None)  # top-level so layout replay can move it independently
         dialog.setWindowTitle('Recording Control')
         dialog.setWindowFlag(Qt.WindowStaysOnTopHint, True)
         dialog.setWindowModality(Qt.NonModal)
@@ -9189,8 +9357,8 @@ CMD ["bash"]
         if self._recording_stop_button:
             self._recording_stop_button.setEnabled(True)
         dialog.show()
-        dialog.raise_()
-        dialog.activateWindow()
+        self.bring_window_to_front(dialog)
+        self.keep_window_above(dialog)
 
     def _on_recording_stop_clicked(self):
         self._log_event('user requested recording stop')
@@ -9668,6 +9836,8 @@ CMD ["bash"]
         if self._auto_launch_progress is None:
             self._auto_launch_progress = AutoLaunchProgressWindow(self)
         self._auto_launch_progress.start_countdown(total_seconds, processes)
+        self.bring_window_to_front(self._auto_launch_progress)
+        self.keep_window_above(self._auto_launch_progress)
 
     def _auto_launch_wizard_buttons(self) -> list[tuple[str, str]]:
         buttons: list[tuple[str, str]] = [('roscore', 'Roscore')]
@@ -12457,6 +12627,7 @@ CMD ["bash"]
         self._exit_dialog.setWindowModality(Qt.ApplicationModal)
         self._exit_dialog.setWindowFlag(Qt.WindowStaysOnTopHint, True)
         self._exit_dialog.show()
+        self.keep_window_above(self._exit_dialog)
         QTimer.singleShot(0, self._perform_exit_cleanup)
 
     def _perform_exit_cleanup(self):

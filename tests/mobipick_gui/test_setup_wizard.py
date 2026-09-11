@@ -464,6 +464,7 @@ def test_wizard_dependency_check_shows_explained_results(tmp_path):
 
 
 def test_host_dependency_checks_report_docker_install_details(monkeypatch):
+    monkeypatch.setenv('XDG_SESSION_TYPE', 'x11')
     monkeypatch.setattr(
         main_window_module.shutil,
         'which',
@@ -1576,3 +1577,48 @@ def test_optional_dependency_warning_describes_disabled_functionality(
 
     window.deleteLater()
     app.processEvents()
+
+
+def test_host_dependency_checks_add_gnome_extension_on_wayland(monkeypatch):
+    monkeypatch.setenv('XDG_SESSION_TYPE', 'wayland')
+    monkeypatch.setattr(
+        main_window_module.shutil,
+        'which',
+        lambda name: f'/usr/bin/{name}',
+    )
+    monkeypatch.setattr(
+        MainWindow,
+        '_docker_apt_candidate_status',
+        classmethod(lambda cls, packages: (True, 'ok')),
+    )
+    monkeypatch.setattr(
+        MainWindow,
+        '_host_shell_status',
+        classmethod(lambda cls, command, timeout=4.0: (True, '/usr/bin/tool')),
+    )
+
+    def fake_command_status(args, timeout=4.0):
+        if args[0] == 'gdbus':
+            assert args[-1].endswith('MobipickWinCtl.Version')
+            return False, 'Object does not exist at path'
+        return True, 'ok'
+
+    monkeypatch.setattr(
+        MainWindow,
+        '_host_command_status',
+        staticmethod(fake_command_status),
+    )
+
+    window = MainWindow.__new__(MainWindow)
+    deps = {dep.key: dep for dep in window._host_dependency_statuses()}
+
+    ext = deps['gnome_window_extension']
+    assert ext.installed is False
+    assert ext.package == ''
+    assert '--install-gnome-window-extension' in ext.reason
+    assert 'gnome-extensions info winctl@mobipick-labs-docker-gui' in ext.check_commands
+    assert 'this session is Wayland' in deps['wmctrl'].reason
+
+    missing = dict(window._missing_optional_dependency_features())
+    assert 'winctl@mobipick-labs-docker-gui' in missing
+    assert 'wmctrl' not in missing

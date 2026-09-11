@@ -10,6 +10,7 @@ from typing import Sequence
 from PyQt5.QtWidgets import QApplication
 
 from . import MainWindow, trigger_sigint
+from .window_control import install_gnome_extension
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -25,6 +26,16 @@ def _build_parser() -> argparse.ArgumentParser:
         type=int,
         choices=[1, 2, 3],
         help='Verbosity level (1=min, 3=max). If no value provided defaults to 3.',
+    )
+    parser.add_argument(
+        '--install-gnome-window-extension',
+        dest='install_gnome_window_extension',
+        action='store_true',
+        help=(
+            'Install and enable the bundled GNOME Shell extension used for '
+            'window layout capture and replay on Wayland sessions, then exit. '
+            'Log out and back in afterwards.'
+        ),
     )
     remote = parser.add_argument_group(
         'remote control',
@@ -82,6 +93,7 @@ def remote_control_overrides(parsed_args: argparse.Namespace) -> dict:
     env_enabled = _env_flag('MOBIPICK_GUI_REMOTE_CONTROL')
     if env_enabled is not None:
         overrides['enabled'] = env_enabled
+        overrides['_enabled_source'] = 'MOBIPICK_GUI_REMOTE_CONTROL'
     env_host = os.environ.get('MOBIPICK_GUI_REMOTE_HOST')
     if env_host:
         overrides['host'] = env_host
@@ -96,6 +108,11 @@ def remote_control_overrides(parsed_args: argparse.Namespace) -> dict:
         overrides['token'] = env_token
     if parsed_args.remote_control is not None:
         overrides['enabled'] = bool(parsed_args.remote_control)
+        overrides['_enabled_source'] = (
+            '--remote-control'
+            if parsed_args.remote_control
+            else '--no-remote-control'
+        )
     if parsed_args.remote_host:
         overrides['host'] = parsed_args.remote_host
     if parsed_args.remote_port is not None:
@@ -113,6 +130,7 @@ def remote_control_overrides(parsed_args: argparse.Namespace) -> dict:
             for name in ('remote_host', 'remote_port', 'remote_token')
         ):
             overrides['enabled'] = True
+            overrides['_enabled_source'] = 'remote-control CLI option'
     return overrides
 
 
@@ -125,6 +143,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
     parsed_args, qt_args = parser.parse_known_args(list(argv))
     verbosity = parsed_args.verbosity or 1
+
+    if parsed_args.install_gnome_window_extension:
+        try:
+            install_gnome_extension(log=print)
+        except OSError as exc:
+            print(f'Failed to install the GNOME Shell extension: {exc}', file=sys.stderr)
+            return 1
+        return 0
 
     app = QApplication([sys.argv[0]] + qt_args)
     window = MainWindow(

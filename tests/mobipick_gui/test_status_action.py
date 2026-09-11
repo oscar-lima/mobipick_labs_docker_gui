@@ -174,7 +174,7 @@ def test_top_menu_actions_have_tooltips(tmp_path, monkeypatch):
         ),
         'Build Custom Image': 'Build a host-user development Docker image',
         'Execute Docker cp': 'Copy configured paths from the active container to the host',
-        'Window Layout': 'Open helper to save window positions for wmctrl replay',
+        'Window Layout': 'Open helper to save window positions for layout replay',
         'Update Status': 'Refresh Docker container status',
     }
     for text, tooltip in expected.items():
