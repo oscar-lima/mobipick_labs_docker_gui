@@ -483,7 +483,11 @@ def test_cli_remote_control_overrides(monkeypatch):
     for name in ('MOBIPICK_GUI_REMOTE_CONTROL', 'MOBIPICK_GUI_REMOTE_HOST', 'MOBIPICK_GUI_REMOTE_PORT', 'MOBIPICK_GUI_REMOTE_TOKEN'):
         monkeypatch.delenv(name, raising=False)
     args, _ = parser.parse_known_args([])
-    assert remote_control_overrides(args) == {}
+    assert remote_control_overrides(args) == {'enabled': False}
+    assert remote_control_settings(
+        {'enabled': True},
+        remote_control_overrides(args),
+    )['enabled'] is False
 
     args, _ = parser.parse_known_args(['--remote-control', '--remote-port', '9999'])
     assert remote_control_overrides(args) == {

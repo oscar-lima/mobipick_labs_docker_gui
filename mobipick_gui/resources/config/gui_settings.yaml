@@ -76,7 +76,7 @@ terminal:
   drop_to_host_user: true                    # when false, the GUI keeps terminals running as root inside the container
 
 remote_control:
-  enabled: false                             # start the HTTP remote control API on launch (also --remote-control or MOBIPICK_GUI_REMOTE_CONTROL=1)
+  enabled: false                             # retained for compatibility; CLI launches require --remote-control or MOBIPICK_GUI_REMOTE_CONTROL=1
   host: "0.0.0.0"                            # bind address; 0.0.0.0 accepts requests from other machines, 127.0.0.1 keeps it local
   port: 8765                                 # TCP port for the JSON API
   token: ""                                  # optional shared secret; clients send "Authorization: Bearer <token>" when set

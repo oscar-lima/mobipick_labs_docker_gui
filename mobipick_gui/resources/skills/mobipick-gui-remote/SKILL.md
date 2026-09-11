@@ -24,9 +24,8 @@ curl -s $GUI/            # endpoint list, if you forget anything below
 If the connection is refused, the API is off (it is off by default and the
 menu toggle is not remembered across relaunches). Stop and ask the user to
 enable it with **Tools > Remote Control > Enable Remote Control API**, or to
-relaunch with `--remote-control` (env `MOBIPICK_GUI_REMOTE_CONTROL=1`), or
-to set `remote_control.enabled: true` in
-`~/.config/mobipick-labs-docker-gui/gui_settings.yaml` so it stays on.
+relaunch with `--remote-control` (env `MOBIPICK_GUI_REMOTE_CONTROL=1`). A
+persisted `remote_control.enabled` value does not enable the API by itself.
 There is no fallback: do not run `docker exec` against the GUI's containers
 and do not start a second GUI. A second instance shares the Docker daemon
 and its exit cleanup stops the user's containers, and `docker exec` bypasses

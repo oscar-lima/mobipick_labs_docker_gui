@@ -568,8 +568,11 @@ Mobipick containers. The server is off by default. Enable it with any of:
 - `mobipick-labs-docker-gui --remote-control [--remote-host H] [--remote-port P] [--remote-token T]`
 - `MOBIPICK_GUI_REMOTE_CONTROL=1` plus optional `MOBIPICK_GUI_REMOTE_HOST`,
   `MOBIPICK_GUI_REMOTE_PORT`, and `MOBIPICK_GUI_REMOTE_TOKEN`
-- `remote_control.enabled: true` in `gui_settings.yaml`
 - **Tools > Remote Control > Enable Remote Control API** at runtime
+
+Remote control is opt-in for each launch. A persisted
+`remote_control.enabled: true` setting is ignored by the GUI command unless
+`--remote-control` or `MOBIPICK_GUI_REMOTE_CONTROL=1` enables the API.
 
 The GUI normally runs on the host and the processes it launches are mostly
 containers, though configured buttons can also run host processes. The

@@ -88,7 +88,12 @@ def _env_flag(name: str) -> bool | None:
 
 
 def remote_control_overrides(parsed_args: argparse.Namespace) -> dict:
-    """Combine environment and CLI remote-control settings (CLI wins)."""
+    """Combine environment and CLI remote-control settings (CLI wins).
+
+    Remote control is opt-in for every launch.  A stale user configuration
+    must not expose the command API when neither the command-line flag nor
+    the environment variable enables it.
+    """
     overrides: dict = {}
     env_enabled = _env_flag('MOBIPICK_GUI_REMOTE_CONTROL')
     if env_enabled is not None:
@@ -131,6 +136,8 @@ def remote_control_overrides(parsed_args: argparse.Namespace) -> dict:
         ):
             overrides['enabled'] = True
             overrides['_enabled_source'] = 'remote-control CLI option'
+    if 'enabled' not in overrides:
+        overrides['enabled'] = False
     return overrides
 
 

@@ -3290,7 +3290,7 @@ class MainWindow(QMainWindow):
             f'{state}\nEnabled by: {source}\n{token_line}\n'
             f'Open remote shells: {shells}\n\n'
             'Enable with --remote-control, MOBIPICK_GUI_REMOTE_CONTROL=1, or '
-            'remote_control.enabled in gui_settings.yaml.\n'
+            'the Tools menu for the current session.\n'
             'Client: mobipick-labs-docker-gui-remote --url http://<host>:<port> status'
         )
 
