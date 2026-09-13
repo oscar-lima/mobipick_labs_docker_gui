@@ -3,6 +3,13 @@
 ## Project Structure & Module Organization
 The PyQt5 application lives in `mobipick_gui/`, with `main_window.py` orchestrating the window and `process_tab.py` managing the log consoles. Docker orchestration assets reside under `mobipick_gui/resources/`; edit `resources/config/gui_settings.yaml` for UI behaviour, `resources/config/worlds.yaml` for world choices, and drop helper scripts in `resources/scripts/` when a container needs extra setup. The legacy `gui.py` script simply forwards to the packaged entry point, while `doc/` stores imagery. Keep new modules small, cohesive, and colocated beside related widgets or helpers.
 
+## Task Completion
+When investigating an operational problem, continue through implementation
+and verification when the root cause and an in-scope fix are identified. Do
+not stop after reporting the diagnosis unless the user explicitly requested
+analysis only or the fix requires a material decision or authorization that
+has not already been provided.
+
 ## Build, Test, and Development Commands
 - `python -m pip install -e .` installs an editable environment with the GUI dependencies.
 - `mobipick-labs-docker-gui --verbose 2` launches the interface with extra logging; `python -m mobipick_gui` is equivalent when debugging.
@@ -21,17 +28,6 @@ before choosing window-management behavior. Reuse the session helpers in
 `mobipick_gui.window_control` and the cached session flags on `MainWindow`;
 do not issue X11-only or unsupported Wayland activation/placement requests
 unconditionally.
-
-Container display routing is a user-space compatibility invariant. In
-`display.mode: auto`, a Wayland session with a usable Wayland socket must
-select native Wayland (`QT_QPA_PLATFORM=wayland`) even when `DISPLAY` and
-XWayland are available. Do not change automatic mode to prefer X11/XCB on a
-Wayland session: on NVIDIA systems this can leave Gazebo's menus and sidebar
-visible while its OGRE 3D viewport is black. Xorg sessions must continue to
-select X11/XCB, and `display.mode: x11` must remain an explicit compatibility
-override for images without Qt's Wayland platform plugin. Preserve regression
-tests for both session types whenever changing display detection or container
-display environment variables.
 
 ## Testing Guidelines
 Add regression tests under a top-level `tests/` package (create it if missing) and mirror the package path (e.g., `tests/mobipick_gui/test_process_tab.py`). Use `pytest` plus `pytest-qt` for widget exercises, and stub Docker subprocesses with `unittest.mock` so tests run without containers. Name tests after the scenario (`test_roscore_button_disables_when_process_stops`) and include a smoke test that launches the application headless to verify resource loading.

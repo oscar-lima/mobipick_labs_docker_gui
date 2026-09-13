@@ -22,17 +22,6 @@ before choosing window-management behavior. Reuse the session helpers in
 do not issue X11-only or unsupported Wayland activation/placement requests
 unconditionally.
 
-Container display routing is a user-space compatibility invariant. In
-`display.mode: auto`, a Wayland session with a usable Wayland socket must
-select native Wayland (`QT_QPA_PLATFORM=wayland`) even when `DISPLAY` and
-XWayland are available. Do not change automatic mode to prefer X11/XCB on a
-Wayland session: on NVIDIA systems this can leave Gazebo's menus and sidebar
-visible while its OGRE 3D viewport is black. Xorg sessions must continue to
-select X11/XCB, and `display.mode: x11` must remain an explicit compatibility
-override for images without Qt's Wayland platform plugin. Preserve regression
-tests for both session types whenever changing display detection or container
-display environment variables.
-
 ## Testing Guidelines
 Add regression tests under a top-level `tests/` package (create it if missing) and mirror the package path (e.g., `tests/mobipick_gui/test_process_tab.py`). Use `pytest` plus `pytest-qt` for widget exercises, and stub Docker subprocesses with `unittest.mock` so tests run without containers. Name tests after the scenario (`test_roscore_button_disables_when_process_stops`) and include a smoke test that launches the application headless to verify resource loading.
 
