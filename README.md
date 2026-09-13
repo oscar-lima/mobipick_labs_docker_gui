@@ -681,10 +681,10 @@ open because Qt modal loops keep processing queued calls.
 
 `display.mode` in `gui_settings.yaml` accepts `auto`, `x11`, or `wayland`.
 Automatic mode exposes every valid host display socket to one-off containers,
-but selects Qt's XCB backend whenever X11 or XWayland is available. This is the
-compatibility default for ROS Noetic RViz, Gazebo, and images without Qt's
-Wayland platform plugin. On a Wayland-only session, automatic mode selects
-native Wayland. Set `display.mode: wayland` to explicitly use native Wayland.
+and selects the backend matching the host session: native Wayland on Wayland
+and X11 on Xorg. If the native transport is unavailable, automatic mode falls
+back to the other transport. Set `display.mode: x11` for an older image that
+does not contain Qt's Wayland platform plugin.
 
 The GUI adds display mounts to each `docker compose run`; the compose file no
 longer mounts all of `/run/user`. X11 authorization uses a mounted Xauthority

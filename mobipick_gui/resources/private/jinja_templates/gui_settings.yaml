@@ -32,7 +32,7 @@ recording:
   include_detected_resolution: true     # when true, add the detected primary monitor resolution as a selectable option
 
 display:
-  mode: "auto"                          # auto prefers X11/XWayland for container compatibility; use x11 or wayland to force one backend
+  mode: "auto"                          # auto follows the native session (Wayland preferred there); use x11 or wayland to force one backend
 
 timers:
   poll_ms: 1200                     # interval for the UI poller that updates button state, etc.
