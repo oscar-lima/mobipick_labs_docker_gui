@@ -96,6 +96,50 @@ def _button_texts(window):
     return {button.text() for button in window.findChildren(QPushButton)}
 
 
+def test_graphics_group_ids_reach_all_compose_launch_environments(
+    tmp_path,
+    monkeypatch,
+):
+    image = 'ozkrelo/x_mobipick_labs:noetic-v1.2'
+    registry_path, _ = _write_registry(tmp_path, image)
+    graphics_groups = {
+        'MOBIPICK_RENDER_GID': '992',
+        'MOBIPICK_VIDEO_GID': '44',
+    }
+    monkeypatch.setattr(
+        main_window_module,
+        'graphics_device_group_environment',
+        lambda: graphics_groups,
+    )
+    monkeypatch.setattr(
+        main_window_module,
+        'ogre_glx_environment',
+        lambda _runtime: {
+            'QT_QPA_PLATFORM': 'xcb',
+            '__NV_PRIME_RENDER_OFFLOAD': '1',
+            '__GLX_VENDOR_LIBRARY_NAME': 'nvidia',
+        },
+    )
+    app, window = _create_window(monkeypatch, registry_path, [image])
+
+    env_args = window._compose_env_args()
+    ogre_env_args = window._compose_env_args(ogre_glx=True)
+    process_env = window._build_process_environment()
+    subprocess_env = window._prepare_run_env({})['env']
+
+    assert 'MOBIPICK_RENDER_GID=992' in env_args
+    assert 'MOBIPICK_VIDEO_GID=44' in env_args
+    assert 'QT_QPA_PLATFORM=xcb' in ogre_env_args
+    assert '__NV_PRIME_RENDER_OFFLOAD=1' in ogre_env_args
+    assert '__GLX_VENDOR_LIBRARY_NAME=nvidia' in ogre_env_args
+    for key, value in graphics_groups.items():
+        assert process_env.value(key) == value
+        assert subprocess_env[key] == value
+
+    window.deleteLater()
+    app.processEvents()
+
+
 def test_public_root_image_uses_baked_workspace_for_private_workspace(
     tmp_path,
     monkeypatch,

@@ -6,6 +6,9 @@ services:
     working_dir: ${MOBIPICK_WORKSPACE_PATH:-/tmp}
     entrypoint: /usr/local/bin/entrypoint_user.sh
     user: "${USER}"
+    group_add:
+      - "${MOBIPICK_RENDER_GID:-0}"
+      - "${MOBIPICK_VIDEO_GID:-0}"
     deploy:
       resources:
         reservations:
@@ -58,6 +61,9 @@ services:
     working_dir: ${MOBIPICK_WORKSPACE_PATH:-/tmp}
     entrypoint: /usr/local/bin/entrypoint_user.sh
     # user: "${USER}" # from mobipick service above
+    group_add:
+      - "${MOBIPICK_RENDER_GID:-0}"
+      - "${MOBIPICK_VIDEO_GID:-0}"
     deploy:
       resources:
         reservations:
@@ -100,6 +106,9 @@ services:
     image: ${MOBIPICK_IMAGE:-ozkrelo/x_mobipick_labs:noetic-v1.1}
     working_dir: ${MOBIPICK_WORKSPACE_PATH:-/tmp}
     entrypoint: /usr/local/bin/entrypoint_user.sh
+    group_add:
+      - "${MOBIPICK_RENDER_GID:-0}"
+      - "${MOBIPICK_VIDEO_GID:-0}"
     deploy:
       resources:
         reservations:

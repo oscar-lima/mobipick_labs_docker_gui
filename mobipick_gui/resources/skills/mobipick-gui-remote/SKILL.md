@@ -93,6 +93,14 @@ curl -s -X POST $GUI/buttons/rviz/stop -H 'Content-Type: application/json' -d '{
 disabled; read the reason and move on. Most container buttons auto-start
 roscore when needed.
 
+Treat the simulator as an expensive resource. Record which processes were
+already running before the task. If you start **Sim** or **Auto Launch** for
+inspection or testing, stop every process you started as soon as the required
+observations are complete and before yielding back to the user. Do not leave
+the simulator running while waiting for visual confirmation; stop it first,
+then ask what the user saw. Never stop a process that was already running
+unless the user explicitly requests it.
+
 Wait until a launch has settled. The reliable signal is the GUI replaying
 the saved window layout (`window_layout_applied`); `auto_launch_complete`
 fires when every step of an Auto Launch reached its ready time:
@@ -209,5 +217,6 @@ states, and `rospy.wait_for_message`.
    green state plus an expected log line.
 4. Open one shell, run checks with `stream:false`/`tail`/`grep`, follow
    long commands with `--no-wait` plus `follow=1`.
-5. Report findings with the relevant log lines; stop only what you started
-   unless told otherwise; close your shell.
+5. Stop Sim, Auto Launch, and other processes you started, then close your
+   shell before reporting findings. Leave pre-existing processes alone unless
+   the user asked you to stop them.

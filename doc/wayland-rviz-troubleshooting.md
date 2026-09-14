@@ -12,9 +12,10 @@ Wayland desktop, prints Mesa loader errors, and exits with code 139.
   under XDG_RUNTIME_DIR.
 
 The GUI's default display.mode of auto exposes both valid transports and uses
-native Wayland on a Wayland desktop. It uses X11 on Xorg and falls back to
-XWayland if the native Wayland socket is unavailable. Set a per-user override
-to test one backend explicitly:
+native Wayland for compatible Qt tools on a Wayland desktop. Gazebo and RViz
+from ROS Noetic are launched through XWayland because their OGRE 1.9 renderer
+requires an X11/GLX parent window. Set a per-user override to test one backend
+explicitly:
 
     display:
       mode: x11       # native X11 or XWayland
@@ -78,6 +79,12 @@ Do not set them permanently on machines that do not use NVIDIA PRIME.
 
 ## Native Wayland checks
 
+Do not use native Wayland to diagnose the ROS Noetic Gazebo or RViz builds.
+Qt can connect successfully and initialize Wayland-EGL, but OGRE then tries to
+create a `GLXWindow`. RViz reports `Invalid parentWindowHandle (wrong server
+or screen)`, while Gazebo can abort with code 134. Their GUI launch actions
+therefore use XWayland when it is available.
+
 Native Wayland needs the Qt Wayland platform plugin inside the selected image:
 
     dpkg -s qtwayland5
@@ -86,6 +93,23 @@ New host-user images built by the setup wizard install this package. Existing
 custom images need to be rebuilt or have the package installed. The public
 images may differ, so use display.mode auto or x11 when their native Wayland
 plugin is unavailable.
+
+On NVIDIA hosts, verify the Wayland client ABI as well:
+
+    objdump -T /usr/local/lib/libwayland-client.so.0 | grep wl_proxy_marshal_flags
+
+Current NVIDIA Container Toolkit releases inject
+`libnvidia-egl-wayland2.so.1` from the host. Ubuntu Focal's Wayland 1.18 lacks
+the `wl_proxy_marshal_flags` symbol that library uses, causing Gazebo and other
+Qt processes to exit with code 127. The Mobipick Noetic base image supplies a
+checksum-pinned Wayland 1.20 runtime under `/usr/local/lib`; rebuild the Docker
+image hierarchy after that base changes.
+
+If EGL reports `Permission denied` for `/dev/dri/renderD128`, restart the GUI
+from the updated checkout before launching the simulation. The GUI reads the
+numeric owners of the host render and card devices and passes them as
+supplemental container groups; hard-coding the image's `render` or `video`
+group IDs is insufficient because host IDs vary.
 
 With display.mode set to wayland, verify:
 

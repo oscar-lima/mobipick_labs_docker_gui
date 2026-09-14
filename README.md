@@ -686,12 +686,31 @@ and X11 on Xorg. If the native transport is unavailable, automatic mode falls
 back to the other transport. Set `display.mode: x11` for an older image that
 does not contain Qt's Wayland platform plugin.
 
+Gazebo and RViz from ROS Noetic are exceptions. Their OGRE 1.9 renderer uses
+GLX and requires an X11 parent window, so the GUI launches those applications
+through XWayland on a Wayland desktop. On NVIDIA hosts it also enables PRIME
+render offload and selects the NVIDIA GLX vendor. This avoids both the native
+Wayland `Invalid parentWindowHandle` failure and the accelerated XWayland
+viewport appearing black.
+
 The GUI adds display mounts to each `docker compose run`; the compose file no
 longer mounts all of `/run/user`. X11 authorization uses a mounted Xauthority
 cookie when one is available and otherwise grants the selected container user
 temporary access with `xhost`. Native Wayland requires the image to contain
 Qt's Wayland platform plugin. Host-user images newly built by the setup wizard
 install `qtwayland5`.
+
+Focal-based NVIDIA images also need Wayland client 1.20 or newer. Current
+NVIDIA Container Toolkit releases inject `libnvidia-egl-wayland2.so.1`, which
+uses `wl_proxy_marshal_flags`; Focal's Wayland 1.18 does not export that
+symbol. The Mobipick Noetic base-image hierarchy supplies the compatible
+runtime. Rebuild the hierarchy after updating that base image.
+
+The GUI also reads the owning groups of the host's `/dev/dri/renderD*` and
+`/dev/dri/card*` devices and adds those numeric groups to every Compose
+service. This lets the host-matching non-root container user open the GPU
+devices even when the host and image assign different IDs to `render` and
+`video`.
 
 The container entrypoint creates a private `XDG_RUNTIME_DIR` with mode `0700`
 for the effective container user. When an interactive terminal changes from

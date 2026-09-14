@@ -128,14 +128,30 @@ In remote ROS master mode, RViz connects to the selected external ROS master.
 
 The GUI automatically forwards available X11/XWayland and native Wayland
 sockets into containers. Automatic mode follows the native desktop session:
-RViz and Gazebo use native Wayland on a Wayland desktop and X11 on Xorg. If
+ordinary Qt tools use native Wayland on a Wayland desktop and X11 on Xorg. If
 the native transport is unavailable, it falls back to the other transport.
+ROS Noetic's Gazebo and RViz use X11/XWayland because their OGRE renderer
+creates a GLX child window. On NVIDIA Wayland sessions, the GUI also selects
+NVIDIA PRIME render offload for these applications to prevent a black 3D
+viewport.
 
 Advanced users can set `display.mode` to `x11` or `wayland` in their GUI
 settings override to force a backend. Use `x11` as a compatibility option for
-older images or applications. Native Wayland requires the selected Docker
-image to include the Qt Wayland platform plugin. Screen recording continues
-to require X11 or XWayland.
+older images or applications. The Gazebo and RViz launch actions retain their
+required GLX compatibility override when automatic mode is active. Native
+Wayland requires the selected Docker image to include the Qt Wayland platform
+plugin. Screen recording continues to require X11 or XWayland.
+
+Focal-based NVIDIA images must also provide Wayland client 1.20 or newer for
+compatibility with the EGL-Wayland v2 library injected by current NVIDIA
+drivers. If several Qt applications exit with code 127 and report an undefined
+`wl_proxy_marshal_flags` symbol in `libnvidia-egl-wayland2.so.1`, rebuild the
+Mobipick Docker image hierarchy from its updated Noetic base image.
+
+The GUI grants containers the host's numeric `render` and `video` device
+groups automatically. If EGL reports `Permission denied` for a device below
+`/dev/dri`, restart the GUI after updating it so newly launched containers
+receive those supplemental groups.
 
 Each container user receives a private runtime directory with the ownership
 and permissions expected by Qt and other XDG-aware programs. Terminals update

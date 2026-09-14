@@ -23,15 +23,60 @@ do not issue X11-only or unsupported Wayland activation/placement requests
 unconditionally.
 
 Container display routing is a user-space compatibility invariant. In
-`display.mode: auto`, a Wayland session with a usable Wayland socket must
-select native Wayland (`QT_QPA_PLATFORM=wayland`) even when `DISPLAY` and
-XWayland are available. Do not change automatic mode to prefer X11/XCB on a
-Wayland session: on NVIDIA systems this can leave Gazebo's menus and sidebar
-visible while its OGRE 3D viewport is black. Xorg sessions must continue to
-select X11/XCB, and `display.mode: x11` must remain an explicit compatibility
-override for images without Qt's Wayland platform plugin. Preserve regression
-tests for both session types whenever changing display detection or container
-display environment variables.
+`display.mode: auto`, expose both usable transports and let ordinary Qt tools
+follow the native session. ROS Noetic's Gazebo and RViz builds are a special
+case: their OGRE 1.9 renderer creates an X11 GLX child window and cannot use a
+native Wayland parent. On Wayland sessions with XWayland available, their
+launches must override `QT_QPA_PLATFORM=xcb`. On NVIDIA hosts they must also
+set `__NV_PRIME_RENDER_OFFLOAD=1` and `__GLX_VENDOR_LIBRARY_NAME=nvidia` so
+XWayland selects accelerated NVIDIA GLX; losing that selection can leave
+Gazebo's menus and sidebar visible while its 3D viewport is black. Do not
+force these OGRE applications onto native Wayland: RViz reports `Invalid
+parentWindowHandle` and Gazebo aborts.
+
+Xorg sessions must continue to select X11/XCB, and `display.mode: x11` must
+remain an explicit compatibility override. Native Wayland Qt applications on
+NVIDIA require `qtwayland5` and a container `libwayland-client` that exports
+`wl_proxy_marshal_flags` (Wayland 1.20 or newer), because current NVIDIA
+Container Toolkit releases inject `libnvidia-egl-wayland2.so.1`. Non-root
+containers must also receive the numeric groups owning the host's
+`/dev/dri/renderD*` and `/dev/dri/card*` nodes; do not assume the container's
+`render` and `video` group IDs match the host. Keep the ABI compatibility in
+the Noetic base image hierarchy and the device-group and OGRE GLX mapping in
+the GUI's Compose launch path. Preserve regression tests for both session
+types whenever changing display detection, base-image graphics libraries, or
+container display environment variables.
+
+### Gazebo and RViz display regression lessons
+
+Treat the Qt window, OGRE child window, GL loader, and GPU device access as
+separate layers. A visible menu bar or `Using Wayland-EGL` only proves that Qt
+created its top-level window; it does not prove that OGRE can create or render
+the embedded 3D viewport. Classify failures by their evidence before changing
+display routing:
+
+- `wl_proxy_marshal_flags` with exit 127 is a Wayland client ABI mismatch.
+- `/dev/dri/renderD*` permission errors mean the host graphics GIDs were not
+  propagated into the container.
+- `Invalid parentWindowHandle` or a Gazebo abort after Wayland-EGL means the
+  GLX-only OGRE build received a native Wayland parent.
+- Normal menus with a black 3D viewport on NVIDIA XWayland mean accelerated
+  NVIDIA GLX selection is missing or broken; retain the PRIME and GLX vendor
+  overrides on the Gazebo and RViz launch paths.
+
+Do not declare a display fix complete from package presence, symbol checks,
+unit tests, or successful Qt startup alone. After display-related changes,
+run both Gazebo and RViz in an actual Wayland session, confirm that each 3D
+viewport renders, inspect the process logs for GLX/EGL errors, and repeat the
+smoke check on Xorg. Stop the simulator immediately after the observation.
+Keep this manual runtime check alongside the automated transport, environment,
+Compose-group, and privilege-drop regression tests.
+
+The proven NVIDIA Wayland baseline is: expose both Wayland and XWayland,
+launch ordinary compatible Qt tools natively, launch Gazebo and RViz with
+XCB plus NVIDIA PRIME/GLX selection, and add the host DRI device GIDs to the
+container. Preserve that complete combination; changing one part requires the
+full runtime check above before calling the user-space behavior fixed.
 
 ## Testing Guidelines
 Add regression tests under a top-level `tests/` package (create it if missing) and mirror the package path (e.g., `tests/mobipick_gui/test_process_tab.py`). Use `pytest` plus `pytest-qt` for widget exercises, and stub Docker subprocesses with `unittest.mock` so tests run without containers. Name tests after the scenario (`test_roscore_button_disables_when_process_stops`) and include a smoke test that launches the application headless to verify resource loading.

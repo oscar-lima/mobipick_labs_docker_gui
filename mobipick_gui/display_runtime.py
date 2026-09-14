@@ -1,6 +1,7 @@
 """Select host display transports for GUI applications in containers."""
 from __future__ import annotations
 
+import grp
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -9,6 +10,8 @@ from typing import Mapping
 from .window_control import session_type
 
 X11_SOCKET_DIR = Path('/tmp/.X11-unix')
+DRI_DEVICE_DIR = Path('/dev/dri')
+NVIDIA_VERSION_FILE = Path('/proc/driver/nvidia/version')
 CONTAINER_XAUTHORITY = '/tmp/mobipick.Xauthority'
 CONTAINER_WAYLAND_SOCKET = '/tmp/mobipick-wayland.sock'
 
@@ -23,6 +26,80 @@ class DisplayRuntime:
     x11_available: bool
     xauthority_mounted: bool
     warnings: tuple[str, ...]
+
+
+def graphics_device_group_environment(
+    dri_device_dir: Path = DRI_DEVICE_DIR,
+) -> dict[str, str]:
+    """Return host graphics group IDs for Docker Compose interpolation.
+
+    Device ownership is authoritative because group names and numeric IDs can
+    differ between the host and container. Named host groups are only used
+    when no matching DRI node is present.
+    """
+    primary_gid = os.getgid()
+    return {
+        'MOBIPICK_RENDER_GID': str(
+            _graphics_group_id(
+                dri_device_dir,
+                'renderD*',
+                'render',
+                primary_gid,
+            )
+        ),
+        'MOBIPICK_VIDEO_GID': str(
+            _graphics_group_id(
+                dri_device_dir,
+                'card*',
+                'video',
+                primary_gid,
+            )
+        ),
+    }
+
+
+def ogre_glx_environment(
+    display_runtime: DisplayRuntime,
+    *,
+    nvidia_version_file: Path = NVIDIA_VERSION_FILE,
+) -> dict[str, str]:
+    """Use XWayland for Noetic's GLX-only OGRE render windows.
+
+    Qt can create a native Wayland window, but Ubuntu Focal's OGRE 1.9 GL
+    renderer expects its parent handle to belong to X11. NVIDIA containers on
+    a Wayland desktop also need GLX vendor selection for accelerated XWayland.
+    """
+    if (
+        display_runtime.backend != 'wayland'
+        or not display_runtime.x11_available
+    ):
+        return {}
+    environment = {'QT_QPA_PLATFORM': 'xcb'}
+    if nvidia_version_file.is_file():
+        environment.update(
+            {
+                '__NV_PRIME_RENDER_OFFLOAD': '1',
+                '__GLX_VENDOR_LIBRARY_NAME': 'nvidia',
+            }
+        )
+    return environment
+
+
+def _graphics_group_id(
+    device_dir: Path,
+    device_pattern: str,
+    group_name: str,
+    default_gid: int,
+) -> int:
+    try:
+        for device in sorted(device_dir.glob(device_pattern)):
+            return device.stat().st_gid
+    except OSError:
+        pass
+    try:
+        return grp.getgrnam(group_name).gr_gid
+    except KeyError:
+        return default_gid
 
 
 def detect_display_runtime(

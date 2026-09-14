@@ -349,6 +349,11 @@ def _prepare_runtime_directory(uid: int, gid: int) -> Path | None:
 def main(argv: list[str]) -> "None":
     uid = _parse_int(os.environ.get("MOBIPICK_UID"), 0)
     gid = _parse_int(os.environ.get("MOBIPICK_GID"), uid)
+    supplemental_gids = {gid}
+    for variable in ("MOBIPICK_RENDER_GID", "MOBIPICK_VIDEO_GID"):
+        graphics_gid = _parse_int(os.environ.get(variable), -1)
+        if graphics_gid >= 0:
+            supplemental_gids.add(graphics_gid)
 
     command = argv[1:] or ["bash"]
 
@@ -410,7 +415,7 @@ def main(argv: list[str]) -> "None":
         if candidate == Path("/"):
             break
 
-    os.setgroups([gid])
+    os.setgroups(sorted(supplemental_gids))
     os.setgid(gid)
     os.setuid(uid)
 

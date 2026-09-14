@@ -1,12 +1,16 @@
 from __future__ import annotations
 
-import socket
 from pathlib import Path
+import socket
+from types import SimpleNamespace
 
 from mobipick_gui.display_runtime import (
     CONTAINER_XAUTHORITY,
     CONTAINER_WAYLAND_SOCKET,
+    DisplayRuntime,
     detect_display_runtime,
+    graphics_device_group_environment,
+    ogre_glx_environment,
 )
 
 
@@ -14,6 +18,77 @@ def _wayland_socket(path: Path) -> socket.socket:
     server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     server.bind(str(path))
     return server
+
+
+def test_graphics_groups_follow_dri_device_ownership(tmp_path):
+    dri_dir = tmp_path / 'dri'
+    dri_dir.mkdir()
+    render_node = dri_dir / 'renderD128'
+    card_node = dri_dir / 'card1'
+    render_node.touch()
+    card_node.touch()
+
+    environment = graphics_device_group_environment(dri_dir)
+
+    assert environment == {
+        'MOBIPICK_RENDER_GID': str(render_node.stat().st_gid),
+        'MOBIPICK_VIDEO_GID': str(card_node.stat().st_gid),
+    }
+
+
+def test_graphics_groups_fall_back_to_named_host_groups(
+    tmp_path,
+    monkeypatch,
+):
+    group_ids = {'render': 992, 'video': 44}
+    monkeypatch.setattr(
+        'mobipick_gui.display_runtime.grp.getgrnam',
+        lambda name: SimpleNamespace(gr_gid=group_ids[name]),
+    )
+
+    environment = graphics_device_group_environment(tmp_path / 'missing')
+
+    assert environment == {
+        'MOBIPICK_RENDER_GID': '992',
+        'MOBIPICK_VIDEO_GID': '44',
+    }
+
+
+def test_ogre_uses_nvidia_glx_through_xwayland(tmp_path):
+    runtime = DisplayRuntime(
+        backend='wayland',
+        environment={'QT_QPA_PLATFORM': 'wayland'},
+        mounts=(),
+        x11_available=True,
+        xauthority_mounted=False,
+        warnings=(),
+    )
+    nvidia_version = tmp_path / 'nvidia-version'
+    nvidia_version.touch()
+
+    environment = ogre_glx_environment(
+        runtime,
+        nvidia_version_file=nvidia_version,
+    )
+
+    assert environment == {
+        'QT_QPA_PLATFORM': 'xcb',
+        '__NV_PRIME_RENDER_OFFLOAD': '1',
+        '__GLX_VENDOR_LIBRARY_NAME': 'nvidia',
+    }
+
+
+def test_ogre_keeps_native_backend_without_xwayland():
+    runtime = DisplayRuntime(
+        backend='wayland',
+        environment={'QT_QPA_PLATFORM': 'wayland'},
+        mounts=(),
+        x11_available=False,
+        xauthority_mounted=False,
+        warnings=(),
+    )
+
+    assert ogre_glx_environment(runtime) == {}
 
 
 def test_auto_uses_x11_and_mounts_xauthority(tmp_path):

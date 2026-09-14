@@ -89,6 +89,8 @@ def test_privilege_drop_prepares_runtime_for_target_uid(
 
     monkeypatch.setenv('MOBIPICK_UID', str(target_uid))
     monkeypatch.setenv('MOBIPICK_GID', str(target_gid))
+    monkeypatch.setenv('MOBIPICK_RENDER_GID', '992')
+    monkeypatch.setenv('MOBIPICK_VIDEO_GID', '44')
     monkeypatch.setenv('MOBIPICK_HOST_HOME', str(tmp_path / 'home'))
     monkeypatch.setattr(ENTER_HOST_SHELL.os, 'getuid', lambda: 0)
     monkeypatch.setattr(ENTER_HOST_SHELL.os, 'getgid', lambda: 0)
@@ -139,7 +141,7 @@ def test_privilege_drop_prepares_runtime_for_target_uid(
 
     assert events[:4] == [
         ('runtime', target_uid, target_gid),
-        ('groups', [target_gid]),
+        ('groups', [44, 992, target_gid]),
         ('gid', target_gid),
         ('uid', target_uid),
     ]

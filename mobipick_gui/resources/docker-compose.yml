@@ -6,6 +6,9 @@ services:
     working_dir: ${MOBIPICK_CONTAINER_WORKDIR:-/tmp}
     entrypoint: ${MOBIPICK_CONTAINER_ENTRYPOINT:-/usr/local/bin/entrypoint_user.sh}
     user: "${MOBIPICK_CONTAINER_USER:-root}"
+    group_add:
+      - "${MOBIPICK_RENDER_GID:-0}"
+      - "${MOBIPICK_VIDEO_GID:-0}"
     deploy:
       resources:
         reservations:
@@ -58,6 +61,9 @@ services:
     working_dir: ${MOBIPICK_CONTAINER_WORKDIR:-/tmp}
     entrypoint: ${MOBIPICK_CONTAINER_ENTRYPOINT:-/usr/local/bin/entrypoint_user.sh}
     user: "${MOBIPICK_CONTAINER_USER:-root}"
+    group_add:
+      - "${MOBIPICK_RENDER_GID:-0}"
+      - "${MOBIPICK_VIDEO_GID:-0}"
     deploy:
       resources:
         reservations:
@@ -101,6 +107,9 @@ services:
     working_dir: ${MOBIPICK_CONTAINER_WORKDIR:-/tmp}
     entrypoint: ${MOBIPICK_CONTAINER_ENTRYPOINT:-/usr/local/bin/entrypoint_user.sh}
     user: "${MOBIPICK_CONTAINER_USER:-root}"
+    group_add:
+      - "${MOBIPICK_RENDER_GID:-0}"
+      - "${MOBIPICK_VIDEO_GID:-0}"
     deploy:
       resources:
         reservations:

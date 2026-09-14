@@ -95,7 +95,12 @@ from .config import (
     writable_workspace_docker_cp_config_path,
 )
 from .documentation_dialog import DocumentationDialog
-from .display_runtime import DisplayRuntime, detect_display_runtime
+from .display_runtime import (
+    DisplayRuntime,
+    detect_display_runtime,
+    graphics_device_group_environment,
+    ogre_glx_environment,
+)
 from .external_links import open_external_url
 from .settings_transfer import export_settings, import_settings
 
@@ -7263,6 +7268,7 @@ CMD ["bash"]
         overrides: Optional[dict[str, str]] = None,
         *,
         container_name: str | None = None,
+        ogre_glx: bool = False,
     ) -> list[str]:
         display_runtime = self._display_runtime()
         for warning in display_runtime.warnings:
@@ -7275,7 +7281,10 @@ CMD ["bash"]
                 ['--volume', f'{source}:{target}:{access}']
             )
         compose_env = dict(CONFIG['process']['compose_run_env'])
+        compose_env.update(graphics_device_group_environment())
         compose_env.update(display_runtime.environment)
+        if ogre_glx:
+            compose_env.update(ogre_glx_environment(display_runtime))
         workspace_env = self._workspace_runtime_env()
         effective_workspace_env = dict(workspace_env)
         if overrides:
@@ -7508,6 +7517,8 @@ CMD ["bash"]
                 effective_workspace_env[str(key)] = str(value)
         for key, value in CONFIG['process']['qprocess_env'].items():
             env.insert(str(key), str(value))
+        for key, value in graphics_device_group_environment().items():
+            env.insert(key, value)
         for key, value in workspace_env.items():
             env.insert(str(key), str(value))
         for key, value in self._image_runtime_env(
@@ -7548,6 +7559,7 @@ CMD ["bash"]
             env = {str(k): str(v) for k, v in env.items()}
         for key, value in CONFIG['process']['qprocess_env'].items():
             env[str(key)] = str(value)
+        env.update(graphics_device_group_environment())
         workspace_env = self._workspace_runtime_env()
         for key, value in workspace_env.items():
             env[str(key)] = str(value)
@@ -10947,7 +10959,7 @@ CMD ["bash"]
             args = [
                 'compose', 'run', '--rm', '--name', self._sim_container_name,
                 '--label', f'mobipick.exec={exec_id}', '--label', f'mobipick.tab={tab.key}',
-                *self._compose_env_args(),
+                *self._compose_env_args(ogre_glx=True),
                 'mobipick',
                 'bash',
                 '-lc',
@@ -11433,7 +11445,10 @@ CMD ["bash"]
             args = [
                 'compose', 'run', '--rm', '--name', tab.container_name,
                 '--label', f'mobipick.exec={exec_id}', '--label', f'mobipick.tab={tab.key}',
-                *self._compose_env_args(container_name=tab.container_name),
+                *self._compose_env_args(
+                    container_name=tab.container_name,
+                    ogre_glx=True,
+                ),
                 self._ros_tool_service(),
                 'bash',
                 '-lc',
