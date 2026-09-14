@@ -23,6 +23,7 @@ from mobipick_gui.config import (
 )
 import mobipick_gui.main_window as main_window_module
 from mobipick_gui.main_window import (
+    ButtonImportSelectionDialog,
     ButtonProfileDialog,
     DockerCpContainerPathDialog,
     DockerCpContainerSelectDialog,
@@ -310,7 +311,7 @@ def test_button_profile_dialog_configures_args_in_popup(monkeypatch, tmp_path):
     app.processEvents()
 
 
-def test_button_profile_dialog_imports_workspace_as_independent_copy(
+def test_button_profile_dialog_cherry_picks_workspace_buttons(
     monkeypatch,
     tmp_path,
 ):
@@ -344,7 +345,28 @@ def test_button_profile_dialog_imports_workspace_as_independent_copy(
     )
     original_source = source.read_text(encoding='utf-8')
     dialog = ButtonProfileDialog(
-        [],
+        [
+            {
+                'key': 'sim',
+                'label': 'Sim',
+                'kind': 'builtin',
+                'action': 'sim',
+                'command': 'roslaunch target simulation.launch',
+            },
+            {
+                'key': 'target_tool',
+                'label': 'Target Tool',
+                'kind': 'command',
+                'command': 'rosrun target existing.py',
+            },
+            {
+                'key': 'rviz',
+                'label': 'RViz',
+                'kind': 'builtin',
+                'action': 'rviz',
+                'command': 'rosrun rviz target.rviz',
+            },
+        ],
         tmp_path / 'current_buttons.yaml',
         target,
         workspace_profiles=[('source_ws', source)],
@@ -355,22 +377,68 @@ def test_button_profile_dialog_imports_workspace_as_independent_copy(
         lambda *args: ('source_ws', True),
     )
 
+    class FakeSelectionDialog:
+        def __init__(self, workspace_name, entries, parent):
+            assert workspace_name == 'source_ws'
+            assert parent is dialog
+            self.entries = entries
+
+        def exec_(self):
+            return QDialog.Accepted
+
+        def selected_entries(self):
+            return [
+                entry
+                for entry in self.entries
+                if entry['key'] == 'source_tool'
+            ]
+
+    monkeypatch.setattr(
+        main_window_module,
+        'ButtonImportSelectionDialog',
+        FakeSelectionDialog,
+    )
+
     dialog._import_workspace_profile()
 
     imported = dialog.button_layout()
     assert [entry['key'] for entry in imported] == [
         'sim',
-        'source_tool',
+        'target_tool',
         'rviz',
+        'source_tool',
     ]
+    assert imported[0]['command'] == 'roslaunch target simulation.launch'
+    assert imported[2]['command'] == 'rosrun rviz target.rviz'
+    assert imported[3]['command'] == 'rosrun source tool.py'
+    assert 'Imported 1 button(s)' in dialog.path_label.text()
     assert 'Saves a copy to:' in dialog.path_label.text()
 
     command_column = dialog._field_column('command')
-    dialog.table.item(1, command_column).setText('rosrun target tool.py')
+    dialog.table.item(3, command_column).setText('rosrun target tool.py')
     save_button_layout(target, dialog.button_layout())
 
     assert source.read_text(encoding='utf-8') == original_source
     assert 'rosrun target tool.py' in target.read_text(encoding='utf-8')
+
+    dialog.deleteLater()
+    app.processEvents()
+
+
+def test_button_import_selection_dialog_supports_individual_choices():
+    app = QApplication.instance() or QApplication([])
+    dialog = ButtonImportSelectionDialog(
+        'source_ws',
+        [
+            {'key': 'first', 'label': 'First', 'command': 'first command'},
+            {'key': 'second', 'label': 'Second', 'command': 'second command'},
+        ],
+    )
+
+    dialog._set_all_checked(False)
+    dialog.list_widget.item(1).setCheckState(Qt.Checked)
+
+    assert [entry['key'] for entry in dialog.selected_entries()] == ['second']
 
     dialog.deleteLater()
     app.processEvents()

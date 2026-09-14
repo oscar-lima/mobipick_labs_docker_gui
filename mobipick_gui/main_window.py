@@ -774,6 +774,86 @@ class ButtonArgumentsDialog(QDialog):
         super().accept()
 
 
+class ButtonImportSelectionDialog(QDialog):
+    """Choose individual toolbar buttons to copy from a workspace."""
+
+    def __init__(
+        self,
+        workspace_name: str,
+        entries: list[dict],
+        parent: QWidget | None = None,
+    ):
+        super().__init__(parent)
+        self.setWindowTitle('Choose Toolbar Buttons')
+        self.resize(620, 420)
+
+        root = QVBoxLayout(self)
+        note = QLabel(
+            f'Select the buttons to copy from workspace "{workspace_name}". '
+            'A selected button replaces the active workspace button with the '
+            'same key; new keys are added.'
+        )
+        note.setWordWrap(True)
+        root.addWidget(note)
+
+        self.list_widget = QListWidget()
+        for entry in entries:
+            key = str(entry.get('key') or '').strip()
+            label = str(entry.get('label') or key).strip()
+            command = str(entry.get('command') or '').strip()
+            text = f'{label} ({key})'
+            if command:
+                text += f' — {command}'
+            item = QListWidgetItem(text)
+            item.setFlags(
+                item.flags()
+                | Qt.ItemIsUserCheckable
+            )
+            item.setCheckState(Qt.Checked)
+            item.setData(Qt.UserRole, copy.deepcopy(entry))
+            self.list_widget.addItem(item)
+        root.addWidget(self.list_widget, 1)
+
+        selection_actions = QHBoxLayout()
+        select_all = QPushButton('Select All')
+        select_all.clicked.connect(lambda: self._set_all_checked(True))
+        selection_actions.addWidget(select_all)
+        clear_all = QPushButton('Clear All')
+        clear_all.clicked.connect(lambda: self._set_all_checked(False))
+        selection_actions.addWidget(clear_all)
+        selection_actions.addStretch(1)
+        root.addLayout(selection_actions)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.Ok | QDialogButtonBox.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        root.addWidget(buttons)
+
+    def _set_all_checked(self, checked: bool) -> None:
+        state = Qt.Checked if checked else Qt.Unchecked
+        for row in range(self.list_widget.count()):
+            self.list_widget.item(row).setCheckState(state)
+
+    def selected_entries(self) -> list[dict]:
+        return [
+            copy.deepcopy(item.data(Qt.UserRole))
+            for row in range(self.list_widget.count())
+            if (item := self.list_widget.item(row)).checkState() == Qt.Checked
+        ]
+
+    def accept(self) -> None:
+        if not self.selected_entries():
+            QMessageBox.information(
+                self,
+                'Import Toolbar Buttons',
+                'Select at least one button to import.',
+            )
+            return
+        super().accept()
+
+
 class ButtonProfileDialog(QDialog):
     """Edit the configurable top-row command buttons."""
 
@@ -1028,6 +1108,21 @@ class ButtonProfileDialog(QDialog):
         self._update_stop_command_column_visibility()
         self.table.apply_column_widths()
 
+    def _merge_imported_rows(self, imported: list[dict]) -> None:
+        entries = self.button_layout()
+        positions = {
+            str(entry.get('key') or '').strip(): index
+            for index, entry in enumerate(entries)
+        }
+        for entry in imported:
+            key = str(entry.get('key') or '').strip()
+            if key in positions:
+                entries[positions[key]] = copy.deepcopy(entry)
+            else:
+                positions[key] = len(entries)
+                entries.append(copy.deepcopy(entry))
+        self._replace_rows(entries)
+
     def _configure_selected_arguments(self) -> None:
         row = self._selected_row()
         if row < 0:
@@ -1191,11 +1286,31 @@ class ButtonProfileDialog(QDialog):
                 f'Failed to import buttons from workspace "{name}":\n{exc}',
             )
             return
-        self._replace_rows(entries)
-        if self.table.rowCount():
-            self.table.selectRow(0)
+        selection_dialog = ButtonImportSelectionDialog(
+            str(name),
+            entries,
+            self,
+        )
+        if selection_dialog.exec_() != QDialog.Accepted:
+            return
+        selected_entries = selection_dialog.selected_entries()
+        self._merge_imported_rows(selected_entries)
+        imported_keys = {
+            str(entry.get('key') or '').strip()
+            for entry in selected_entries
+        }
+        selected_row = next(
+            (
+                row
+                for row in range(self.table.rowCount())
+                if self._row_key(row) in imported_keys
+            ),
+            -1,
+        )
+        if selected_row >= 0:
+            self.table.selectRow(selected_row)
         self.path_label.setText(
-            f'Imported from workspace: {name}\n'
+            f'Imported {len(selected_entries)} button(s) from workspace: {name}\n'
             f'Source: {source}\n'
             f'Saves a copy to: {self._save_path}'
         )

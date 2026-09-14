@@ -419,11 +419,12 @@ The tab search is separate from the documentation window search.
   **Sim** and **RViz** cannot be removed, but their commands can be changed.
   **Roscore** and **Terminal**
   are fixed buttons and cannot be edited from this profile. Use **Import from
-  Workspace...** to copy all buttons from another registered workspace into
-  the editor. The copy is saved in the active workspace's own profile, so
-  changing it later does not affect the source workspace. Use **Load Profile**
-  or **Export Profile** to import or save a complete button configuration as
-  one YAML file.
+  Workspace...** to choose individual buttons from another registered
+  workspace. Imported buttons replace buttons with matching keys or are added
+  when their keys are new; all unselected buttons remain unchanged. The copy
+  is saved in the active workspace's own profile, so changing it later does
+  not affect the source workspace. Use **Load Profile** or **Export Profile**
+  to import or save a complete button configuration as one YAML file.
 - **Setup Wizard** opens the setup flow. It opens automatically at startup only
   when no Docker image matching the configured discovery filters is installed,
   including after setup was previously completed. If the configured default is
