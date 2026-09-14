@@ -65,6 +65,25 @@ def test_compose_env_names_desktop_entry_only_when_requested(
     ]
 
 
+@pytest.mark.parametrize('backend', ['x11', 'wayland'])
+def test_compose_env_blocks_host_desktop_notifications(
+    monkeypatch,
+    backend,
+):
+    harness = _env_harness(monkeypatch, backend)
+
+    env_args = harness._compose_env_args(
+        {'DBUS_SESSION_BUS_ADDRESS': 'unix:path=/run/user/1000/bus'}
+    )
+
+    assert 'DBUS_SESSION_BUS_ADDRESS=unix:path=/run/mobipick-no-session-bus' in (
+        env_args
+    )
+    assert 'DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus' not in (
+        env_args
+    )
+
+
 def _launch_harness(events: list) -> SimpleNamespace:
     class FakeTab:
         key = 'rqt'

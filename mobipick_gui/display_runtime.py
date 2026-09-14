@@ -15,6 +15,7 @@ DRI_DEVICE_DIR = Path('/dev/dri')
 NVIDIA_VERSION_FILE = Path('/proc/driver/nvidia/version')
 CONTAINER_XAUTHORITY = '/tmp/mobipick.Xauthority'
 CONTAINER_WAYLAND_SOCKET = '/tmp/mobipick-wayland.sock'
+BLOCKED_SESSION_BUS_ADDRESS = 'unix:path=/run/mobipick-no-session-bus'
 
 
 @dataclass(frozen=True)
@@ -27,6 +28,17 @@ class DisplayRuntime:
     x11_available: bool
     xauthority_mounted: bool
     warnings: tuple[str, ...]
+
+
+def blocked_desktop_notification_environment() -> dict[str, str]:
+    """Prevent container applications from reaching desktop notifications.
+
+    Freedesktop notifications are delivered over the desktop session bus.
+    Supplying an explicit unreachable address also prevents D-Bus from
+    autolaunching a new session bus whose notification windows could appear
+    on the forwarded X11 or Wayland display.
+    """
+    return {'DBUS_SESSION_BUS_ADDRESS': BLOCKED_SESSION_BUS_ADDRESS}
 
 
 def graphics_device_group_environment(

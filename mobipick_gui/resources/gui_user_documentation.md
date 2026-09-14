@@ -163,6 +163,10 @@ command launched from the terminal inherits it. Native Wayland links the
 selected host Wayland socket into that directory; unrelated host session
 sockets are not exposed.
 
+Applications launched inside these containers cannot send desktop
+notifications to the host. This also applies to commands run from terminals
+opened by the GUI.
+
 If RViz prints `MESA-LOADER: failed to retrieve device information` and exits
 with code 139, the display connection was established and the likely problem
 is OpenGL/GPU passthrough rather than a missing Wayland socket. Check

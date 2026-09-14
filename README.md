@@ -791,6 +791,11 @@ GUI mounts only the selected host socket and links it into the active user's
 private directory. This prevents Qt runtime ownership warnings without
 exposing the rest of the host user's runtime directory.
 
+Container launches also receive an unreachable D-Bus session address. This
+prevents applications opened by the GUI, including commands started in its
+container terminals, from delivering desktop notifications on the host. The
+GUI applies this isolation after command-specific environment overrides.
+
 Recreate already-running GUI containers and terminals after upgrading so they
 start with the updated entrypoint and privilege-drop helper.
 

@@ -103,6 +103,7 @@ from .desktop_launcher import (
 )
 from .display_runtime import (
     DisplayRuntime,
+    blocked_desktop_notification_environment,
     container_hostname_environment,
     detect_display_runtime,
     graphics_device_group_environment,
@@ -7359,6 +7360,10 @@ CMD ["bash"]
         if overrides:
             for key, value in overrides.items():
                 compose_env[str(key)] = str(value)
+        # This is a host-integration boundary, not a configurable command
+        # default. Apply it last so per-command overrides cannot reconnect a
+        # container application to the host desktop notification service.
+        compose_env.update(blocked_desktop_notification_environment())
         for key, value in compose_env.items():
             if key in {
                 'MOBIPICK_WORKSPACE_COMPAT_ROOTS',
