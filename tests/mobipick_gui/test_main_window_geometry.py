@@ -4,11 +4,21 @@ from types import MethodType
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
+import pytest
 from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QApplication, QMainWindow
+from PyQt5.QtWidgets import (
+    QApplication,
+    QMainWindow,
+    QPushButton,
+    QSizePolicy,
+)
 
 import mobipick_gui.main_window as main_window_module
-from mobipick_gui.main_window import MainWindow
+from mobipick_gui import window_control
+from mobipick_gui.main_window import (
+    MainWindow,
+    _configure_expanding_toolbar_button,
+)
 from mobipick_gui.window_utils import MaximizableDialog
 
 
@@ -104,6 +114,33 @@ def test_restore_window_state_applies_geometry_and_maximized():
     assert window.geometry().width() == 800
     assert window.geometry().height() == 600
     assert window.windowState() & Qt.WindowMaximized
+
+    window.deleteLater()
+    app.processEvents()
+
+
+@pytest.mark.parametrize('desktop_session', ['x11', 'wayland'])
+def test_roscore_transient_text_does_not_increase_button_width(
+    monkeypatch,
+    desktop_session,
+):
+    monkeypatch.setenv('XDG_SESSION_TYPE', desktop_session)
+    assert window_control.session_type() == desktop_session
+
+    app = QApplication.instance() or QApplication([])
+    window = QMainWindow()
+    button = QPushButton('Start Roscore', window)
+    _configure_expanding_toolbar_button(button)
+    assert button.sizePolicy().horizontalPolicy() == QSizePolicy.Expanding
+    start_width = button.sizeHint().width()
+
+    button.setText('Starting...')
+    assert button.sizeHint().width() <= start_width
+
+    button.setText('Stop Roscore')
+    stop_width = button.sizeHint().width()
+    button.setText('Stopping...')
+    assert button.sizeHint().width() <= stop_width
 
     window.deleteLater()
     app.processEvents()

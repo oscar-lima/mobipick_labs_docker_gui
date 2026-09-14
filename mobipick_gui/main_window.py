@@ -10841,7 +10841,7 @@ CMD ["bash"]
         if self._roscore_stopping:
             return
         self._log_info('starting roscore master')
-        self.set_roscore_visual('yellow', 'Starting Roscore...', False)
+        self.set_roscore_visual('yellow', 'Starting...', False)
         self._ensure_network(log_key='roscore')
         tab = self._ensure_tab('roscore', 'Roscore', closable=False)
         tab.container_name = self._roscore_container_name
@@ -10868,7 +10868,7 @@ CMD ["bash"]
         self._roscore_stopping = True
         self._stop_auto_launch_stack(preserve_host_commands=True)
         self._log_info('stopping roscore master')
-        self.set_roscore_visual('yellow', 'Shutting down...', enabled=False)
+        self.set_roscore_visual('yellow', 'Stopping...', enabled=False)
 
         sim_tab = self.tasks.get('sim')
         sim_running = bool(sim_tab and sim_tab.is_running())
@@ -11248,7 +11248,7 @@ CMD ["bash"]
 
     def _update_roscore_status(self, *, force: bool = False, names: set[str] | None = None):
         if self._roscore_stopping:
-            self.set_roscore_visual('yellow', 'Shutting down...', enabled=False)
+            self.set_roscore_visual('yellow', 'Stopping...', enabled=False)
             return
 
         running = self._roscore_running_cached or self.tasks['roscore'].is_running()
