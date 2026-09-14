@@ -4,6 +4,7 @@ from unittest.mock import MagicMock
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
+import pytest
 from PyQt5.QtWidgets import QApplication, QMessageBox
 
 from mobipick_gui.config import CONFIG
@@ -32,6 +33,81 @@ def test_workspace_manager_opens_detached_from_main_window(monkeypatch):
     assert dialog_class.call_args.args[1] is None
     assert window._workspace_dialog is dialog
     dialog.show.assert_called_once_with()
+
+
+def test_workspace_manager_selects_requested_workspace_when_already_open():
+    dialog = MagicMock()
+    window = MagicMock()
+    window._workspace_dialog = dialog
+
+    MainWindow._open_workspace_manager(window, 'gpt_ws')
+
+    dialog.refresh.assert_called_once_with('gpt_ws')
+    window.bring_window_to_front.assert_called_once_with(dialog)
+
+
+@pytest.mark.parametrize('desktop_session', ['x11', 'wayland'])
+def test_missing_workspace_image_can_open_selected_workspace_settings(
+    monkeypatch,
+    desktop_session,
+):
+    clicked_button = object()
+    messages = []
+
+    class FakeMessageBox:
+        Warning = object()
+        ActionRole = object()
+        Ok = object()
+
+        def __init__(self, parent):
+            self.parent = parent
+            self.text = ''
+            messages.append(self)
+
+        def setIcon(self, icon):
+            self.icon = icon
+
+        def setWindowTitle(self, title):
+            self.title = title
+
+        def setText(self, text):
+            self.text = text
+
+        def addButton(self, button, role=None):
+            if button == 'Open Workspace Settings':
+                return clicked_button
+            return object()
+
+        def setDefaultButton(self, button):
+            self.default_button = button
+
+        def exec_(self):
+            return 0
+
+        def clickedButton(self):
+            return clicked_button
+
+    monkeypatch.setenv('XDG_SESSION_TYPE', desktop_session)
+    monkeypatch.setattr(main_window_module, 'QMessageBox', FakeMessageBox)
+    workspace = RosWorkspace(
+        name='gpt_ws',
+        path='/tmp/gpt_ws',
+        image='example/missing:image',
+    )
+    window = MagicMock()
+    window._workspace_registry.active = 'rae_ws'
+    window._workspace_registry.get.return_value = workspace
+    window._workspace_processes_running.return_value = False
+    window._workspace_match_image.return_value = ''
+    window._workspace_image.return_value = 'example/missing:image'
+    window._image_choices = ['example/installed:image']
+
+    assert not MainWindow._activate_workspace(window, 'gpt_ws')
+
+    assert len(messages) == 1
+    assert 'example/missing:image' in messages[0].text
+    window._open_workspace_manager.assert_called_once_with('gpt_ws')
+    window._populate_workspace_combo.assert_called_once_with()
 
 
 def test_workspace_switch_requires_confirmation_and_rebuilds_tabs(

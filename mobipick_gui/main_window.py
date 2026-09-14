@@ -4926,14 +4926,24 @@ class MainWindow(QMainWindow):
             or self._workspace_image(name)
         )
         if target_image and target_image not in self._image_choices:
-            QMessageBox.warning(
-                self,
-                'ROS 1 Workspace',
+            message = QMessageBox(self)
+            message.setIcon(QMessageBox.Warning)
+            message.setWindowTitle('ROS 1 Workspace')
+            message.setText(
                 f'The Docker image configured for this workspace is not '
                 f'installed:\n\n{target_image}\n\n'
                 'Install it or update the workspace settings before switching.',
             )
+            configure_button = message.addButton(
+                'Open Workspace Settings',
+                QMessageBox.ActionRole,
+            )
+            message.addButton(QMessageBox.Ok)
+            message.setDefaultButton(QMessageBox.Ok)
+            message.exec_()
             self._populate_workspace_combo()
+            if message.clickedButton() == configure_button:
+                self._open_workspace_manager(name)
             return False
 
         current_name = self._workspace_registry.active or 'Docker image default'
@@ -5103,8 +5113,10 @@ class MainWindow(QMainWindow):
         self._set_auto_launch_recording_hint(state)
         self._update_buttons()
 
-    def _open_workspace_manager(self) -> None:
+    def _open_workspace_manager(self, select_name: str = '') -> None:
         if self._workspace_dialog:
+            if select_name:
+                self._workspace_dialog.refresh(select_name)
             self.bring_window_to_front(self._workspace_dialog)
             return
         dialog = WorkspaceManagerDialog(
@@ -5124,6 +5136,8 @@ class MainWindow(QMainWindow):
         )
         dialog.finished.connect(self._on_workspace_manager_closed)
         self._workspace_dialog = dialog
+        if select_name:
+            dialog.refresh(select_name)
         dialog.show()
 
     def _apply_imported_workspace_settings(self) -> None:

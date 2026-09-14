@@ -31,6 +31,9 @@ when the selected image supports host workspaces.
   image can mount it.
 - The GUI asks for confirmation before switching, because switching clears the
   current tabs and log output.
+- If the configured Docker image is not installed, **Open Workspace Settings**
+  opens the workspace manager with that workspace selected so you can update
+  its Docker image.
 
 Use **Configure Workspaces** to add, create, import, export, build, and activate
 workspaces.
