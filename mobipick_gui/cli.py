@@ -5,12 +5,15 @@ import argparse
 import os
 import signal
 import sys
+from pathlib import Path
 from typing import Sequence
 
-from PyQt5.QtCore import qInstallMessageHandler
+from PyQt5.QtCore import QCoreApplication, qInstallMessageHandler
+from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import QApplication
 
 from . import MainWindow, trigger_sigint
+from .config import PROJECT_ROOT
 from .window_control import install_gnome_extension, session_type
 
 
@@ -20,9 +23,64 @@ _QT_SOCKET_NOTIFIER_THREAD_WARNING = (
 _QT_WAYLAND_ACTIVATION_WARNING = (
     'Wayland does not support QWindow::requestActivate()'
 )
+_APPLICATION_DESKTOP_ID = 'mobipick-labs-docker-gui'
+_APPLICATION_ICON = PROJECT_ROOT / 'images' / 'mobipick_icon.png'
 
 
-def _create_application(arguments: list[str]) -> QApplication:
+def _desktop_exec_argument(value: str) -> str:
+    """Quote one argument for a freedesktop desktop entry Exec field."""
+    escaped = value.replace('\\', '\\\\')
+    for character in ('"', '`', '$'):
+        escaped = escaped.replace(character, f'\\{character}')
+    return f'"{escaped}"'
+
+
+def _desktop_launch_command(argv0: str | None = None) -> str:
+    """Return a launcher command matching the current GUI invocation."""
+    raw_launcher = argv0 if argv0 is not None else sys.argv[0]
+    launcher = Path(raw_launcher).expanduser()
+    if launcher.suffix == '.py':
+        arguments = (sys.executable, str(launcher.resolve()))
+    else:
+        arguments = (str(launcher.resolve()),)
+    return ' '.join(_desktop_exec_argument(value) for value in arguments)
+
+
+def _install_user_desktop_entry(
+    *,
+    environ: dict[str, str] | None = None,
+    argv0: str | None = None,
+) -> Path:
+    """Install desktop metadata used to associate the window and its icon."""
+    env = os.environ if environ is None else environ
+    data_home = str(env.get('XDG_DATA_HOME') or '').strip()
+    base = (
+        Path(data_home).expanduser()
+        if data_home
+        else Path.home() / '.local' / 'share'
+    )
+    target = base / 'applications' / f'{_APPLICATION_DESKTOP_ID}.desktop'
+    content = (
+        '[Desktop Entry]\n'
+        'Type=Application\n'
+        'Name=Mobipick Labs Control\n'
+        'Comment=Control the Mobipick Labs Docker simulation\n'
+        f'Exec={_desktop_launch_command(argv0)}\n'
+        f'Icon={_APPLICATION_ICON.resolve()}\n'
+        'Terminal=false\n'
+        'Categories=Development;Robotics;\n'
+        f'StartupWMClass={_APPLICATION_DESKTOP_ID}\n'
+    )
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if not target.exists() or target.read_text(encoding='utf-8') != content:
+        target.write_text(content, encoding='utf-8')
+    return target
+
+
+def _create_application(
+    arguments: list[str],
+    desktop_session: str | None = None,
+) -> QApplication:
     """Create the application while hiding known benign Qt warnings.
 
     Some Qt 5 Wayland installations emit the socket-notifier thread warning
@@ -33,7 +91,9 @@ def _create_application(arguments: list[str]) -> QApplication:
     messages so genuine application warnings stay visible.
     """
     previous_handler = None
-    wayland_session = session_type() == 'wayland'
+    current_session = desktop_session or session_type()
+    wayland_session = current_session == 'wayland'
+    QCoreApplication.setApplicationName(_APPLICATION_DESKTOP_ID)
 
     def startup_message_handler(message_type, context, message):
         if message == _QT_SOCKET_NOTIFIER_THREAD_WARNING:
@@ -49,6 +109,9 @@ def _create_application(arguments: list[str]) -> QApplication:
     application = None
     try:
         application = QApplication(arguments)
+        if current_session == 'wayland':
+            application.setDesktopFileName(_APPLICATION_DESKTOP_ID)
+        application.setWindowIcon(QIcon(str(_APPLICATION_ICON)))
         platform_name = getattr(application, 'platformName', None)
         if callable(platform_name):
             wayland_session = str(platform_name()).lower().startswith('wayland')
@@ -189,6 +252,8 @@ def remote_control_overrides(parsed_args: argparse.Namespace) -> dict:
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the Qt application."""
 
+    desktop_session = session_type()
+
     if argv is None:
         argv = sys.argv[1:]
 
@@ -204,11 +269,24 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 1
         return 0
 
-    app = _create_application([sys.argv[0]] + qt_args)
+    if desktop_session in {'x11', 'wayland'}:
+        try:
+            _install_user_desktop_entry()
+        except OSError as exc:
+            print(
+                f'Failed to install desktop application metadata: {exc}',
+                file=sys.stderr,
+            )
+
+    app = _create_application(
+        [sys.argv[0]] + qt_args,
+        desktop_session=desktop_session,
+    )
     window = MainWindow(
         verbosity=verbosity,
         remote_control=remote_control_overrides(parsed_args),
     )
+    window.setWindowIcon(app.windowIcon())
     window.show()
 
     def _handle_sigint(_sig, _frame):

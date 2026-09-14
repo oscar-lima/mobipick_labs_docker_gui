@@ -70,6 +70,12 @@ excluded from package data and source distribution output.
 state, menu actions, process tabs, workspace/image selection, recording state,
 and shutdown sequence.
 
+At startup, the GUI refreshes its per-user desktop entry at
+`~/.local/share/applications/mobipick-labs-docker-gui.desktop` (or below
+`XDG_DATA_HOME`). Its desktop-file ID and `StartupWMClass` match the stable Qt
+application identity, allowing X11 window managers and Wayland compositors to
+associate console-launched windows with the bundled Mobipick icon.
+
 Runtime commands are executed in two ways:
 
 - Long-running tasks use `QProcess` through `ProcessTab`. Output is merged,

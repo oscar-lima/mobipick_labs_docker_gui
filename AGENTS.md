@@ -16,11 +16,16 @@ Follow PEP 8 with four-space indents and keep functions under 80 columns where p
 Dialogs and tool windows must use responsive horizontal sizing for long user-editable values such as file paths, commands, Docker image tags, and workspace paths. Form rows with `QLineEdit` path or command fields must give those fields an expanding horizontal size policy and a sensible initial/minimum width based on realistic content, not a narrow default dialog width. For `QTableWidget` and `QTreeWidget` views, assign at least one content-heavy column a `QHeaderView.Stretch` resize mode instead of leaving important fields at fixed widths; resize-to-contents columns should be limited to compact labels, buttons, status, and short identifiers. When adding or adjusting a window, verify that widening the window makes the relevant path or command fields wider without requiring the user to drag column separators manually.
 
 All desktop-window changes must remain compatible with both Xorg and Wayland.
-Inspect `XDG_SESSION_TYPE`, with `WAYLAND_DISPLAY` and `DISPLAY` as fallbacks,
-before choosing window-management behavior. Reuse the session helpers in
+Before investigating or changing any desktop-window or display behavior, the
+first diagnostic step must be to inspect `XDG_SESSION_TYPE`, with
+`WAYLAND_DISPLAY` and `DISPLAY` as fallbacks. Do not infer the session type
+from symptoms. Reuse the session helpers in
 `mobipick_gui.window_control` and the cached session flags on `MainWindow`;
+all such changes must remain fully functional on both Xorg and Wayland. Branch
+at runtime on the detected session and run behavior tailored to that backend;
 do not issue X11-only or unsupported Wayland activation/placement requests
-unconditionally.
+unconditionally. Add or preserve regression coverage for both session types
+whenever desktop-window or display behavior changes.
 
 Container display routing is a user-space compatibility invariant. In
 `display.mode: auto`, expose both usable transports and let ordinary Qt tools

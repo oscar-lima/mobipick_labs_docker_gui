@@ -8,6 +8,7 @@ include mobipick_gui/resources/gui_user_documentation.md
 recursive-include mobipick_gui/resources/config *.yaml
 recursive-include mobipick_gui/resources/gnome-shell-extension *.json *.js
 include mobipick_gui/resources/empty_workspace/.gitkeep
+include mobipick_gui/resources/images/mobipick_icon.png
 include mobipick_gui/resources/scripts/enter_host_shell.py
 include mobipick_gui/resources/scripts/ros_workspace_setup.bash
 include mobipick_gui/resources/scripts/terminal.bashrc
