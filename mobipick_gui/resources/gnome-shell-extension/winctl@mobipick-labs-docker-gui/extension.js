@@ -31,6 +31,10 @@ const IFACE = `
       <arg type="s" name="id" direction="in"/>
       <arg type="b" name="ok" direction="out"/>
     </method>
+    <method name="ClearAttention">
+      <arg type="s" name="id" direction="in"/>
+      <arg type="b" name="ok" direction="out"/>
+    </method>
     <method name="Unmaximize">
       <arg type="s" name="id" direction="in"/>
       <arg type="b" name="ok" direction="out"/>
@@ -46,7 +50,7 @@ const IFACE = `
   </interface>
 </node>`;
 
-const PROTOCOL_VERSION = 2;
+const PROTOCOL_VERSION = 3;
 
 function isNormalWindow(win) {
     return win.get_window_type() === Meta.WindowType.NORMAL && !win.skip_taskbar;
@@ -134,6 +138,14 @@ export default class MobipickWinCtl extends Extension {
         if (!win)
             return false;
         win.activate(global.get_current_time());
+        return true;
+    }
+
+    ClearAttention(id) {
+        const win = findWindow(id);
+        if (!win)
+            return false;
+        win.unset_demands_attention();
         return true;
     }
 

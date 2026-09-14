@@ -166,6 +166,9 @@ sockets are not exposed.
 Applications launched inside these containers cannot send desktop
 notifications to the host. This also applies to commands run from terminals
 opened by the GUI.
+The GUI also suppresses GNOME's own "application is ready" banners while
+container application windows are opening. Other desktop applications keep
+their normal attention and notification behavior.
 
 If RViz prints `MESA-LOADER: failed to retrieve device information` and exits
 with code 139, the display connection was established and the likely problem
@@ -530,9 +533,10 @@ the **Install Source** tab.
 - **Save Window State** records visible windows so the GUI can reapply the
   layout during later Auto Launch runs. The helper closes automatically after
   the layout is saved. On X11 sessions this needs `wmctrl` and `xprop`; on a
-  GNOME Wayland session install the bundled GNOME Shell extension once with
+  GNOME Wayland session install the bundled GNOME Shell extension with
   `mobipick-labs-docker-gui --install-gnome-window-extension` and log out and
-  back in. The setup wizard's dependency page detects when it is needed and
+  back in. Repeat this after GUI upgrades so GNOME Shell loads extension
+  changes. The setup wizard's dependency page detects when it is needed and
   includes that command in its generated Host Dependencies commands.
 
 ### Automation

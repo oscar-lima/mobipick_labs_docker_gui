@@ -4,5 +4,5 @@
   "description": "D-Bus window enumeration and placement for the Mobipick Labs Docker GUI window layout replay on GNOME Wayland (wmctrl replacement).",
   "shell-version": ["45", "46", "47", "48"],
   "url": "https://github.com/ozkrelo/mobipick_labs_docker_gui",
-  "version": 2
+  "version": 3
 }

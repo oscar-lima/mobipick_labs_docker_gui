@@ -2851,6 +2851,13 @@ class MainWindow(QMainWindow):
             ),
         )
         self._window_layout_manager.record_baseline(exclude_titles={self.windowTitle()})
+        self._window_attention_suppression_deadline = 0.0
+        self._window_attention_timer = QTimer(self)
+        self._window_attention_timer.setInterval(100)
+        self._window_attention_timer.setTimerType(Qt.PreciseTimer)
+        self._window_attention_timer.timeout.connect(
+            self._suppress_managed_window_attention
+        )
         self._window_layout_dialog: QDialog | None = None
         self._recording_cfg = CONFIG.get('recording', {})
         self._recording_default_checked = bool(
@@ -10800,8 +10807,38 @@ CMD ["bash"]
             self._xhost_principal = None
 
     def _claim_xhost(self, tab: ProcessTab, token: str, *, log_key: str | None = None):
+        self._arm_managed_window_attention_suppression()
         claimed = self._grant_x(token, log_key=log_key or tab.key)
         tab.xhost_token = token if claimed else None
+
+    def _arm_managed_window_attention_suppression(self) -> None:
+        """Suppress shell attention banners while container windows appear."""
+        manager = getattr(self, '_window_layout_manager', None)
+        timer = getattr(self, '_window_attention_timer', None)
+        if manager is None or timer is None:
+            return
+        if not timer.isActive() and not manager.begin_attention_suppression():
+            return
+        duration_ms = max(5000, int(self._window_layout_delay_ms) + 2000)
+        self._window_attention_suppression_deadline = max(
+            self._window_attention_suppression_deadline,
+            time.monotonic() + (duration_ms / 1000.0),
+        )
+        self._suppress_managed_window_attention()
+        if not timer.isActive():
+            timer.start()
+
+    def _suppress_managed_window_attention(self) -> None:
+        """Clear attention on windows created during a GUI launch interval."""
+        manager = getattr(self, '_window_layout_manager', None)
+        timer = getattr(self, '_window_attention_timer', None)
+        if manager is None or timer is None:
+            return
+        if time.monotonic() >= self._window_attention_suppression_deadline:
+            timer.stop()
+            manager.end_attention_suppression()
+            return
+        manager.suppress_new_window_attention()
 
     def _release_xhost(self, tab: ProcessTab, *, log_key: str | None = None):
         token = getattr(tab, 'xhost_token', None)

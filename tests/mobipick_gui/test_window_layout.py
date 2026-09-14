@@ -295,6 +295,23 @@ def test_gnome_backend_set_above_calls_extension(monkeypatch):
     assert calls[-1][-1] == 'false'
 
 
+def test_gnome_backend_clear_attention_calls_extension(monkeypatch):
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(list(cmd))
+        return subprocess.CompletedProcess(cmd, 0, stdout='(true,)\n', stderr='')
+
+    monkeypatch.setattr(window_control.shutil, 'which', lambda name: f'/usr/bin/{name}')
+    monkeypatch.setattr(subprocess, 'run', fake_run)
+
+    assert GnomeWaylandWindowBackend().clear_attention('42') is True
+    assert calls[-1][-2:] == [
+        'org.gnome.Shell.Extensions.MobipickWinCtl.ClearAttention',
+        "'42'",
+    ]
+
+
 def test_x11_backend_set_above_uses_wmctrl(monkeypatch):
     calls: list[list[str]] = []
 
@@ -307,6 +324,61 @@ def test_x11_backend_set_above_uses_wmctrl(monkeypatch):
     backend = X11WindowBackend()
     assert backend.set_above('0x1', True) is True
     assert calls[-1] == ['wmctrl', '-i', '-r', '0x1', '-b', 'add,above']
+
+
+def test_x11_backend_clear_attention_uses_wmctrl(monkeypatch):
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(list(cmd))
+        return subprocess.CompletedProcess(cmd, 0, stdout='', stderr='')
+
+    monkeypatch.setattr(window_control.shutil, 'which', lambda name: f'/usr/bin/{name}')
+    monkeypatch.setattr(subprocess, 'run', fake_run)
+
+    assert X11WindowBackend().clear_attention('0x1') is True
+    assert calls[-1] == [
+        'wmctrl', '-i', '-r', '0x1', '-b',
+        'remove,demands_attention',
+    ]
+
+
+def test_attention_suppression_only_clears_new_windows(tmp_path):
+    class FakeBackend:
+        available = True
+        name = 'fake'
+
+        def __init__(self):
+            self.windows = [
+                WindowInfo('old', 'Editor', 0, 1, 0, 0, 100, 100, []),
+            ]
+            self.cleared: list[str] = []
+
+        def list_windows(self, **_kwargs):
+            return list(self.windows)
+
+        def clear_attention(self, wid):
+            self.cleared.append(wid)
+            return True
+
+    backend = FakeBackend()
+    manager = WindowLayoutManager(tmp_path / 'layout.yaml', backend=backend)
+
+    assert manager.begin_attention_suppression() is True
+    backend.windows.append(
+        WindowInfo('new', 'Command GUI', 0, 2, 0, 0, 100, 100, [])
+    )
+
+    assert manager.suppress_new_window_attention() == 1
+    assert manager.suppress_new_window_attention() == 0
+    assert backend.cleared == ['new']
+
+    manager.end_attention_suppression()
+    backend.windows.append(
+        WindowInfo('later', 'Browser', 0, 3, 0, 0, 100, 100, [])
+    )
+    assert manager.suppress_new_window_attention() == 0
+    assert backend.cleared == ['new']
 
 
 def test_window_backends_activate_without_qt_request(monkeypatch):

@@ -254,6 +254,13 @@ class X11WindowBackend:
         self._run_wmctrl(['-i', '-a', wid])
         return self._wmctrl_available
 
+    def clear_attention(self, wid: str) -> bool:
+        """Remove the X11 urgency state that produces desktop banners."""
+        self._run_wmctrl(
+            ['-i', '-r', wid, '-b', 'remove,demands_attention']
+        )
+        return self._wmctrl_available
+
     def set_above(self, wid: str, above: bool = True) -> bool:
         action = 'add' if above else 'remove'
         self._run_wmctrl(['-i', '-r', wid, '-b', f'{action},above'])
@@ -406,6 +413,11 @@ class GnomeWaylandWindowBackend:
 
     def activate(self, wid: str) -> bool:
         result = self._call('Activate', str(wid))
+        return bool(result and result[0])
+
+    def clear_attention(self, wid: str) -> bool:
+        """Remove Mutter's attention state from a managed window."""
+        result = self._call('ClearAttention', str(wid))
         return bool(result and result[0])
 
     def set_above(self, wid: str, above: bool = True) -> bool:

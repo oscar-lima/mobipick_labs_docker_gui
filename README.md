@@ -616,11 +616,12 @@ Window layout capture uses `WindowLayoutManager` on top of a backend from
 `xprop`. On Wayland sessions those tools only see XWayland windows, so the
 backend talks over D-Bus to the GNOME Shell extension shipped in
 `mobipick_gui/resources/gnome-shell-extension/` (installed with
-`mobipick-labs-docker-gui --install-gnome-window-extension`; GNOME Shell only
-loads new extensions after a fresh login). The extension exposes
-`ListWindows`, `MoveResize`, `SetWorkspace`, `Activate`, `Unmaximize`, and
-`SetAbove` on `/org/gnome/Shell/Extensions/MobipickWinCtl`, and windows are
-addressed by the Mutter window id. `MainWindow.keep_window_above` uses
+`mobipick-labs-docker-gui --install-gnome-window-extension`; rerun this after
+GUI upgrades because GNOME Shell only loads extension changes after a fresh
+login). The extension exposes `ListWindows`, `MoveResize`, `SetWorkspace`,
+`Activate`, `ClearAttention`, `Unmaximize`, and `SetAbove` on
+`/org/gnome/Shell/Extensions/MobipickWinCtl`, and windows are addressed by the
+Mutter window id. `MainWindow.keep_window_above` uses
 `SetAbove` for the always-on-top helper windows, since Wayland ignores
 `Qt.WindowStaysOnTopHint`. When the extension is not available on Wayland the manager
 falls back to `wmctrl` for XWayland windows.
@@ -798,6 +799,10 @@ Container launches also receive an unreachable D-Bus session address. This
 prevents applications opened by the GUI, including commands started in its
 container terminals, from delivering desktop notifications on the host. The
 GUI applies this isolation after command-specific environment overrides.
+During GUI-managed launches, the window controller also clears attention from
+new windows. This suppresses desktop-generated "application is ready" banners,
+which do not travel over the application's D-Bus connection. Xorg uses
+`wmctrl`; Wayland uses the bundled GNOME Shell extension.
 
 Recreate already-running GUI containers and terminals after upgrading so they
 start with the updated entrypoint and privilege-drop helper.

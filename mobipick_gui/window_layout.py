@@ -56,6 +56,9 @@ class WindowLayoutManager:
         self._last_capture_ids: set[str] = set()
         self._baseline_ids: set[str] = set()
         self._baseline_signatures: set[tuple[str, tuple[str, ...]]] = set()
+        self._attention_suppression_active = False
+        self._attention_ignored_ids: set[str] = set()
+        self._attention_cleared_ids: set[str] = set()
         self._start_ts = time.monotonic()
 
     def record_baseline(self, *, exclude_titles: Iterable[str] | None = None):
@@ -99,6 +102,37 @@ class WindowLayoutManager:
     def set_apply_delay_ms(self, delay_ms: int) -> None:
         """Update the wait time used before auto-applying saved layouts."""
         self._apply_delay_ms = max(0, int(delay_ms or 0))
+
+    def begin_attention_suppression(self) -> bool:
+        """Treat windows appearing from now on as GUI-launched windows."""
+        if not self._backend.available:
+            return False
+        windows = self._enumerate_windows()
+        self._attention_ignored_ids = {win.wid for win in windows}
+        self._attention_cleared_ids.clear()
+        self._attention_suppression_active = True
+        return True
+
+    def suppress_new_window_attention(self) -> int:
+        """Clear attention from newly discovered GUI-launched windows once."""
+        if not self._attention_suppression_active:
+            return 0
+        cleared = 0
+        for win in self._enumerate_windows():
+            if win.wid in self._attention_ignored_ids:
+                continue
+            if win.wid in self._attention_cleared_ids:
+                continue
+            self._attention_cleared_ids.add(win.wid)
+            if self._backend.clear_attention(win.wid):
+                cleared += 1
+        return cleared
+
+    def end_attention_suppression(self) -> None:
+        """Stop classifying newly appearing windows as GUI-launched."""
+        self._attention_suppression_active = False
+        self._attention_ignored_ids.clear()
+        self._attention_cleared_ids.clear()
 
     @property
     def backend_name(self) -> str:
