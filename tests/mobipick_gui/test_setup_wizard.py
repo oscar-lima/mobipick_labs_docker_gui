@@ -61,6 +61,7 @@ def test_wizard_collects_source_workspace_selection(tmp_path):
     assert selection.source_image == 'ozkrelo/x_mobipick_labs:host_user_from_1.2'
     assert selection.image_blacklist == ['*n8n*']
     assert selection.public_image_pull_mode == 'gui'
+    assert selection.install_desktop_launcher is True
 
     wizard.public_image_pull_mode.setCurrentIndex(
         wizard.public_image_pull_mode.findData('manual')
@@ -108,6 +109,8 @@ def test_wizard_setup_guide_learn_more_explains_checkboxes(tmp_path):
     assert 'container user matching your host user' in details
     assert 'Clone and build mobipick_labs from source on this PC' in details
     assert 'Creates a host workspace for mobipick_labs' in details
+    assert 'Install the app launcher and add it to the Ubuntu dock' in details
+    assert 'one-click launching' in details
     assert 'Remember setup as completed' in details
     assert 'wizard remains available from the Tools menu' in details
 
@@ -959,6 +962,15 @@ def test_setup_wizard_persists_custom_image_profile(
         'save_user_config_update',
         lambda updates: saved.setdefault('updates', updates),
     )
+    launcher_calls = []
+    monkeypatch.setattr(
+        main_window_module,
+        'install_desktop_launcher',
+        lambda: (
+            launcher_calls.append(True)
+            or (tmp_path / 'mobipick-labs-docker-gui.desktop', True)
+        ),
+    )
 
     app = QApplication.instance() or QApplication([])
     window = MainWindow(verbosity=1)
@@ -977,6 +989,7 @@ def test_setup_wizard_persists_custom_image_profile(
         target_image='ozkrelo/x_mobipick_labs:gpt_ws_from_host_user',
         compatible_workspace='gpt_ws',
         remember_completion=True,
+        install_desktop_launcher=True,
     )
 
     window._apply_setup_wizard(selection)
@@ -992,6 +1005,7 @@ def test_setup_wizard_persists_custom_image_profile(
     )
     assert started['pulls'] == ['ozkrelo/x_mobipick_labs:noetic-v1.1']
     assert started['build'] is selection
+    assert launcher_calls == [True]
 
     window.deleteLater()
     app.processEvents()

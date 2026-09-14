@@ -95,6 +95,7 @@ from .config import (
     writable_workspace_docker_cp_config_path,
 )
 from .documentation_dialog import DocumentationDialog
+from .desktop_launcher import install_desktop_launcher
 from .display_runtime import (
     DisplayRuntime,
     detect_display_runtime,
@@ -6081,11 +6082,35 @@ class MainWindow(QMainWindow):
             self._images_cfg.get('profiles', [])
         )
 
+        launcher_success = True
+        launcher_summary = ''
+        if selection.install_desktop_launcher:
+            try:
+                desktop_file, pinned = install_desktop_launcher()
+                dock_status = (
+                    'added to the Ubuntu dock'
+                    if pinned
+                    else 'already present in the Ubuntu dock'
+                )
+                launcher_summary = (
+                    f'Installed application launcher: {desktop_file} '
+                    f'({dock_status}).'
+                )
+                self._log_info(launcher_summary)
+            except OSError as exc:
+                launcher_success = False
+                launcher_summary = (
+                    f'Failed to install the application launcher: {exc}'
+                )
+                self._log_info(launcher_summary)
+
         if wizard is not None:
             self._run_setup_wizard_sequence(
                 wizard,
                 selection,
                 pull_public_images_automatically=pull_public_images_automatically,
+                launcher_success=launcher_success,
+                launcher_summary=launcher_summary,
             )
             return True
 
@@ -6142,6 +6167,8 @@ class MainWindow(QMainWindow):
         selection: SetupWizardSelection,
         *,
         pull_public_images_automatically: bool,
+        launcher_success: bool = True,
+        launcher_summary: str = '',
     ) -> None:
         wizard.begin_setup()
         self._setup_wizard_process_tabs.clear()
@@ -6155,6 +6182,8 @@ class MainWindow(QMainWindow):
             )
         else:
             summary.append('Image blacklist: no patterns configured.')
+        if launcher_summary:
+            summary.append(launcher_summary)
         steps: deque[tuple[str, Callable[[Callable[[int], None]], bool]]] = deque()
 
         if pull_public_images_automatically:
@@ -6220,7 +6249,7 @@ class MainWindow(QMainWindow):
             self._load_available_images(show_feedback=False)
             self._log_info('setup wizard settings saved')
             wizard.complete_setup(
-                success=success,
+                success=success and launcher_success,
                 summary_lines=summary,
             )
 

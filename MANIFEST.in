@@ -12,4 +12,5 @@ include mobipick_gui/resources/images/mobipick_icon.png
 include mobipick_gui/resources/scripts/enter_host_shell.py
 include mobipick_gui/resources/scripts/ros_workspace_setup.bash
 include mobipick_gui/resources/scripts/terminal.bashrc
+include install_desktop_launcher.sh
 recursive-include mobipick_gui/resources/skills SKILL.md

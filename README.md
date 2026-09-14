@@ -76,6 +76,23 @@ At startup, the GUI refreshes its per-user desktop entry at
 application identity, allowing X11 window managers and Wayland compositors to
 associate console-launched windows with the bundled Mobipick icon.
 
+To also add the launcher to the Ubuntu/GNOME dock for one-click startup, run
+the checkout helper:
+
+```bash
+./install_desktop_launcher.sh
+```
+
+Package installs provide the equivalent command:
+
+```bash
+mobipick-labs-docker-gui --install-desktop-launcher
+```
+
+The command preserves the existing dock favorites, is safe to run repeatedly,
+and only changes files and settings for the current user. The Setup Wizard
+offers the same action as a checked-by-default setup choice.
+
 Runtime commands are executed in two ways:
 
 - Long-running tasks use `QProcess` through `ProcessTab`. Output is merged,
@@ -396,6 +413,9 @@ table evidence. The wizard can then
 pull public images on the host PC with streamed output, pause for a manual pull
 confirmation, choose a default image, build a host-user development image, and
 clone/build `DFKI-NI/mobipick_labs` from source in a host-mounted workspace.
+Its setup choices also include installing the application launcher and adding
+it to the Ubuntu/GNOME dock. This choice is enabled by default and can be
+cleared on non-GNOME desktops or when launchers are managed separately.
 Each optional wizard page has a skip button.
 The summary page can launch the stock Docker Compose simulation as an isolated
 display smoke test and capture its combined terminal output. It disables host

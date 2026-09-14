@@ -5,7 +5,6 @@ import argparse
 import os
 import signal
 import sys
-from pathlib import Path
 from typing import Sequence
 
 from PyQt5.QtCore import QCoreApplication, qInstallMessageHandler
@@ -13,7 +12,12 @@ from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import QApplication
 
 from . import MainWindow, trigger_sigint
-from .config import PROJECT_ROOT
+from .desktop_launcher import (
+    APPLICATION_DESKTOP_ID as _APPLICATION_DESKTOP_ID,
+    APPLICATION_ICON as _APPLICATION_ICON,
+    install_desktop_launcher,
+    install_user_desktop_entry as _install_user_desktop_entry,
+)
 from .window_control import install_gnome_extension, session_type
 
 
@@ -23,58 +27,6 @@ _QT_SOCKET_NOTIFIER_THREAD_WARNING = (
 _QT_WAYLAND_ACTIVATION_WARNING = (
     'Wayland does not support QWindow::requestActivate()'
 )
-_APPLICATION_DESKTOP_ID = 'mobipick-labs-docker-gui'
-_APPLICATION_ICON = PROJECT_ROOT / 'images' / 'mobipick_icon.png'
-
-
-def _desktop_exec_argument(value: str) -> str:
-    """Quote one argument for a freedesktop desktop entry Exec field."""
-    escaped = value.replace('\\', '\\\\')
-    for character in ('"', '`', '$'):
-        escaped = escaped.replace(character, f'\\{character}')
-    return f'"{escaped}"'
-
-
-def _desktop_launch_command(argv0: str | None = None) -> str:
-    """Return a launcher command matching the current GUI invocation."""
-    raw_launcher = argv0 if argv0 is not None else sys.argv[0]
-    launcher = Path(raw_launcher).expanduser()
-    if launcher.suffix == '.py':
-        arguments = (sys.executable, str(launcher.resolve()))
-    else:
-        arguments = (str(launcher.resolve()),)
-    return ' '.join(_desktop_exec_argument(value) for value in arguments)
-
-
-def _install_user_desktop_entry(
-    *,
-    environ: dict[str, str] | None = None,
-    argv0: str | None = None,
-) -> Path:
-    """Install desktop metadata used to associate the window and its icon."""
-    env = os.environ if environ is None else environ
-    data_home = str(env.get('XDG_DATA_HOME') or '').strip()
-    base = (
-        Path(data_home).expanduser()
-        if data_home
-        else Path.home() / '.local' / 'share'
-    )
-    target = base / 'applications' / f'{_APPLICATION_DESKTOP_ID}.desktop'
-    content = (
-        '[Desktop Entry]\n'
-        'Type=Application\n'
-        'Name=Mobipick Labs Control\n'
-        'Comment=Control the Mobipick Labs Docker simulation\n'
-        f'Exec={_desktop_launch_command(argv0)}\n'
-        f'Icon={_APPLICATION_ICON.resolve()}\n'
-        'Terminal=false\n'
-        'Categories=Development;Robotics;\n'
-        f'StartupWMClass={_APPLICATION_DESKTOP_ID}\n'
-    )
-    target.parent.mkdir(parents=True, exist_ok=True)
-    if not target.exists() or target.read_text(encoding='utf-8') != content:
-        target.write_text(content, encoding='utf-8')
-    return target
 
 
 def _create_application(
@@ -134,6 +86,14 @@ def _build_parser() -> argparse.ArgumentParser:
         type=int,
         choices=[1, 2, 3],
         help='Verbosity level (1=min, 3=max). If no value provided defaults to 3.',
+    )
+    parser.add_argument(
+        '--install-desktop-launcher',
+        action='store_true',
+        help=(
+            'Install the per-user application launcher, add it to the '
+            'GNOME/Ubuntu dock, then exit.'
+        ),
     )
     parser.add_argument(
         '--install-gnome-window-extension',
@@ -260,6 +220,22 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
     parsed_args, qt_args = parser.parse_known_args(list(argv))
     verbosity = parsed_args.verbosity or 1
+
+    if parsed_args.install_desktop_launcher:
+        try:
+            desktop_file, pinned = install_desktop_launcher()
+        except OSError as exc:
+            print(
+                f'Failed to install the desktop launcher: {exc}',
+                file=sys.stderr,
+            )
+            return 1
+        print(f'Installed desktop launcher: {desktop_file}')
+        if pinned:
+            print('Added Mobipick Labs Control to the GNOME/Ubuntu dock.')
+        else:
+            print('Mobipick Labs Control is already pinned to the dock.')
+        return 0
 
     if parsed_args.install_gnome_window_extension:
         try:

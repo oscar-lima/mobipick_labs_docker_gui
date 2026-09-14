@@ -56,6 +56,7 @@ class SetupWizardSelection:
     source_image: str = ''
     activate_source_workspace: bool = False
     public_image_pull_mode: str = 'gui'
+    install_desktop_launcher: bool = False
 
 
 @dataclass
@@ -147,6 +148,10 @@ class ImageSetupWizard(QWizard):
             'Clone and build mobipick_labs from source on this PC'
         )
         self.install_source_workspace.setChecked(install_source_default)
+        self.install_desktop_launcher = QCheckBox(
+            'Install the app launcher and add it to the Ubuntu dock'
+        )
+        self.install_desktop_launcher.setChecked(True)
         self.remember_completion = QCheckBox('Remember setup as completed')
         self.remember_completion.setChecked(True)
 
@@ -327,6 +332,7 @@ class ImageSetupWizard(QWizard):
         intro_layout.addWidget(self.pull_public_images)
         intro_layout.addWidget(self.build_custom_image)
         intro_layout.addWidget(self.install_source_workspace)
+        intro_layout.addWidget(self.install_desktop_launcher)
         intro_layout.addWidget(self.remember_completion)
         intro_buttons = QHBoxLayout()
         self.setup_options_help_button = QPushButton(
@@ -790,6 +796,9 @@ class ImageSetupWizard(QWizard):
             public_image_pull_mode=str(
                 self.public_image_pull_mode.currentData() or 'gui'
             ),
+            install_desktop_launcher=(
+                self.install_desktop_launcher.isChecked()
+            ),
         )
 
     def _selected_host_dependencies(self) -> list[HostDependency]:
@@ -1194,6 +1203,14 @@ class ImageSetupWizard(QWizard):
                 'output. Use this when you want a local source checkout for '
                 'development or experiments. Skip it for image-only use or '
                 'when you already manage the workspace yourself.',
+            ),
+            (
+                self.install_desktop_launcher,
+                'Installs Mobipick Labs Control in your desktop application '
+                'menu and adds it to the Ubuntu/GNOME dock for one-click '
+                'launching. The operation only changes your user account and '
+                'does not require sudo. Skip it on a non-GNOME desktop or if '
+                'you prefer to manage launchers yourself.',
             ),
             (
                 self.remember_completion,

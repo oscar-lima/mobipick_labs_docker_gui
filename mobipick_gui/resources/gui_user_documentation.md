@@ -432,6 +432,11 @@ The tab search is separate from the documentation window search.
   dependency. If a check still fails, **Open Bug Report** prepares the
   standard diagnostics so you can copy, save, email, or open a prefilled
   GitHub issue.
+  On the **Setup Guide** page, **Install the app launcher and add it to the
+  Ubuntu dock** creates a current-user application-menu entry and pins it to
+  the Ubuntu/GNOME dock for one-click startup. It is selected by default,
+  requires no `sudo`, preserves existing dock favorites, and is safe to run
+  again. Clear it on non-GNOME desktops or when you manage launchers yourself.
   After the host dependencies, the **NVIDIA Container Toolkit** page links to
   NVIDIA's official installation guide and provides buttons to open the guide,
   copy its URL, and copy the terminal test command. Complete the guide before

@@ -1,5 +1,7 @@
 import sys
 
+import pytest
+
 from mobipick_gui import cli
 
 
@@ -163,3 +165,27 @@ def test_install_user_desktop_entry_matches_x11_application_id(tmp_path):
     assert f'Exec="{sys.executable}" "{launcher}"\n' in content
     assert f'Icon={cli._APPLICATION_ICON.resolve()}\n' in content
     assert 'StartupWMClass=mobipick-labs-docker-gui\n' in content
+
+
+def test_install_desktop_launcher_option_exits_without_starting_qt(
+    monkeypatch,
+    tmp_path,
+    capsys,
+):
+    target = tmp_path / 'mobipick-labs-docker-gui.desktop'
+    monkeypatch.setattr(cli, 'session_type', lambda: 'x11')
+    monkeypatch.setattr(
+        cli,
+        'install_desktop_launcher',
+        lambda: (target, True),
+    )
+    monkeypatch.setattr(
+        cli,
+        '_create_application',
+        lambda *_args, **_kwargs: pytest.fail('Qt must not start'),
+    )
+
+    assert cli.main(['--install-desktop-launcher']) == 0
+    output = capsys.readouterr().out
+    assert str(target) in output
+    assert 'Added Mobipick Labs Control' in output
