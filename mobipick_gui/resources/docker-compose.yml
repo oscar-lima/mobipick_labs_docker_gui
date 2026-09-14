@@ -1,6 +1,9 @@
 services:
   mobipick:
-    hostname: mobipick
+    # The GUI sets MOBIPICK_CONTAINER_HOSTNAME to the host's hostname so GNOME
+    # does not treat Gazebo windows as remote, and launches with --use-aliases
+    # so the "mobipick" alias below keeps resolving for GAZEBO_MASTER_URI.
+    hostname: ${MOBIPICK_CONTAINER_HOSTNAME:-mobipick}
     # gazebo server
     image: ${MOBIPICK_IMAGE:-ozkrelo/x_mobipick_labs:noetic-v1.1}
     working_dir: ${MOBIPICK_CONTAINER_WORKDIR:-/tmp}
@@ -55,7 +58,9 @@ services:
           - mobipick
 
   mobipick_cmd:
-    # hostname: mobipick # from mobipick service above
+    # Same host hostname as the mobipick service so GNOME does not treat
+    # RViz/RQt windows as remote; empty keeps Docker's default.
+    hostname: ${MOBIPICK_CONTAINER_HOSTNAME:-}
     # gazebo server
     image: ${MOBIPICK_IMAGE:-ozkrelo/x_mobipick_labs:noetic-v1.1}
     working_dir: ${MOBIPICK_CONTAINER_WORKDIR:-/tmp}

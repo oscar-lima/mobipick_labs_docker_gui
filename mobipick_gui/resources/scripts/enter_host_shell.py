@@ -350,10 +350,15 @@ def main(argv: list[str]) -> "None":
     uid = _parse_int(os.environ.get("MOBIPICK_UID"), 0)
     gid = _parse_int(os.environ.get("MOBIPICK_GID"), uid)
     supplemental_gids = {gid}
-    for variable in ("MOBIPICK_RENDER_GID", "MOBIPICK_VIDEO_GID"):
+    graphics_groups = []
+    for variable, group_prefix in (
+        ("MOBIPICK_RENDER_GID", "mobipick-render"),
+        ("MOBIPICK_VIDEO_GID", "mobipick-video"),
+    ):
         graphics_gid = _parse_int(os.environ.get(variable), -1)
         if graphics_gid >= 0:
             supplemental_gids.add(graphics_gid)
+            graphics_groups.append((graphics_gid, group_prefix))
 
     command = argv[1:] or ["bash"]
 
@@ -396,6 +401,12 @@ def main(argv: list[str]) -> "None":
     home_path, rc_source = _select_home(os.environ.get("MOBIPICK_HOST_HOME"))
 
     _ensure_group(gid, requested_group)
+    for graphics_gid, group_prefix in graphics_groups:
+        if graphics_gid != gid:
+            _ensure_group(
+                graphics_gid,
+                f"{group_prefix}-{graphics_gid}",
+            )
     user_name = _ensure_user(uid, gid, requested_user, home_path)
     _ensure_home_ownership(home_path, uid, gid)
     _ensure_rc_stub(home_path, rc_source, uid, gid)

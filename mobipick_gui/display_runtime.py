@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import grp
 import os
+import socket
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping
@@ -56,6 +57,30 @@ def graphics_device_group_environment(
             )
         ),
     }
+
+
+def container_hostname_environment(
+    compose_run_env: Mapping[str, str],
+) -> dict[str, str]:
+    """Return Compose interpolation values that keep tool windows local.
+
+    Mutter treats an X11 or XWayland window whose ``WM_CLIENT_MACHINE``
+    differs from the compositor's hostname as remote, and GNOME Shell never
+    matches remote windows to desktop entries, so they only ever show the
+    generic executable icon.  Qt fills that property from the container's
+    hostname, so one-off tool containers run with the host's hostname.
+
+    ROS nodes are unaffected while they advertise container IPs.  When the
+    configuration advertises hostnames instead, the disposable Docker
+    hostname is kept so peers can still resolve the node URIs.
+    """
+    use_ip = str(compose_run_env.get('MOBIPICK_ROS_USE_IP', '1')).strip()
+    if use_ip != '1':
+        return {}
+    hostname = socket.gethostname().strip()
+    if not hostname:
+        return {}
+    return {'MOBIPICK_CONTAINER_HOSTNAME': hostname}
 
 
 def ogre_glx_environment(

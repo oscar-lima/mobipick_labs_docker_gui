@@ -8,6 +8,7 @@ from mobipick_gui.display_runtime import (
     CONTAINER_XAUTHORITY,
     CONTAINER_WAYLAND_SOCKET,
     DisplayRuntime,
+    container_hostname_environment,
     detect_display_runtime,
     graphics_device_group_environment,
     ogre_glx_environment,
@@ -52,6 +53,38 @@ def test_graphics_groups_fall_back_to_named_host_groups(
         'MOBIPICK_RENDER_GID': '992',
         'MOBIPICK_VIDEO_GID': '44',
     }
+
+
+def test_container_hostname_follows_host_when_ros_advertises_ips(monkeypatch):
+    monkeypatch.setattr(
+        'mobipick_gui.display_runtime.socket.gethostname',
+        lambda: 'lab-desktop',
+    )
+
+    assert container_hostname_environment({'MOBIPICK_ROS_USE_IP': '1'}) == {
+        'MOBIPICK_CONTAINER_HOSTNAME': 'lab-desktop'
+    }
+    assert container_hostname_environment({}) == {
+        'MOBIPICK_CONTAINER_HOSTNAME': 'lab-desktop'
+    }
+
+
+def test_container_hostname_is_kept_when_ros_advertises_hostnames(monkeypatch):
+    monkeypatch.setattr(
+        'mobipick_gui.display_runtime.socket.gethostname',
+        lambda: 'lab-desktop',
+    )
+
+    assert container_hostname_environment({'MOBIPICK_ROS_USE_IP': '0'}) == {}
+
+
+def test_container_hostname_is_omitted_without_a_host_name(monkeypatch):
+    monkeypatch.setattr(
+        'mobipick_gui.display_runtime.socket.gethostname',
+        lambda: '',
+    )
+
+    assert container_hostname_environment({'MOBIPICK_ROS_USE_IP': '1'}) == {}
 
 
 def test_ogre_uses_nvidia_glx_through_xwayland(tmp_path):

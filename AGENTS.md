@@ -39,6 +39,23 @@ Gazebo's menus and sidebar visible while its 3D viewport is black. Do not
 force these OGRE applications onto native Wayland: RViz reports `Invalid
 parentWindowHandle` and Gazebo aborts.
 
+Container tool windows only get icons through host desktop entries. GNOME
+Shell 45 and newer ignore `_NET_WM_ICON`, so the GUI installs hidden
+`mobipick-rviz`, `mobipick-rqt`, and `mobipick-gazebo` entries from
+`desktop_launcher.TOOL_DESKTOP_ENTRIES` and matches windows by X11 `WM_CLASS`
+or Wayland `app_id`: a `StartupWMClass` hit on either WM_CLASS part wins,
+then the desktop-file ID of the `RESOURCE_NAME` instance name that GUI
+launches set as a fallback for rqt plugin windows. X11 and XWayland windows
+additionally must not look remote: Mutter compares `WM_CLIENT_MACHINE` with
+the host's hostname, so the `mobipick` and `mobipick_cmd` services
+interpolate `MOBIPICK_CONTAINER_HOSTNAME` (exported by
+`display_runtime.container_hostname_environment`) as their hostname, and the
+simulation is started with `docker compose run --use-aliases` so its
+`mobipick` alias keeps resolving for `GAZEBO_MASTER_URI`. When adding a
+container tool launch or changing its Qt platform, keep that table, the
+launch's `desktop_entry`, and the Compose hostname in sync, and verify the
+dock icon on both Xorg and Wayland.
+
 Xorg sessions must continue to select X11/XCB, and `display.mode: x11` must
 remain an explicit compatibility override. Native Wayland Qt applications on
 NVIDIA require `qtwayland5` and a container `libwayland-client` that exports

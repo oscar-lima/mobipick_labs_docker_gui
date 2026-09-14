@@ -76,6 +76,50 @@ At startup, the GUI refreshes its per-user desktop entry at
 application identity, allowing X11 window managers and Wayland compositors to
 associate console-launched windows with the bundled Mobipick icon.
 
+The same refresh installs hidden `mobipick-rviz.desktop`, `mobipick-rqt.desktop`,
+and `mobipick-gazebo.desktop` entries next to it. GNOME Shell 45 and newer
+ignore the `_NET_WM_ICON` that RViz, rqt, and Gazebo set on their own windows,
+and containers cannot register desktop entries on the host, so without these
+entries the dock and Alt-Tab switcher show a generic gear for every container
+tool window. Each entry is `NoDisplay`, has an inert `Exec`, and matches
+windows by identity: `StartupWMClass=rviz` and `StartupWMClass=gazebo` cover
+RViz and the Gazebo client (both always X11/XWayland because of OGRE; gzclient
+names its Qt application `gazebo`), while the RQt entry uses
+`StartupWMClass=python3`, the `app_id` that Qt 5.12 reports for every
+Python-based rqt tool on native Wayland. GNOME resolves a `StartupWMClass` hit
+on either WM_CLASS part before it falls back to the desktop-file ID, so GUI
+launches use the ID as a fallback identity: the RQt Tables button, custom
+buttons and Custom Command entries that invoke an rqt tool
+(`desktop_launcher.desktop_entry_for_command`), and the Sim button set
+`RESOURCE_NAME=mobipick-rqt` in the container. Qt's XCB platform uses that as
+the WM_CLASS instance, so rqt plugin windows (`rqt_tables_demo`, `rqt_graph`,
+the sim's `rqt_robot_steering`, ...) resolve to the RQt entry while Gazebo and
+RViz windows from the same launch keep their own icons. Windows launched from
+terminal tabs keep their own WM_CLASS and therefore only match when it equals
+one of the `StartupWMClass` values above.
+
+Matching has a second precondition on X11 and XWayland: Mutter marks a window
+whose `WM_CLIENT_MACHINE` differs from the compositor's hostname as remote, and
+GNOME Shell never associates remote windows with desktop entries. Qt fills that
+property from the container hostname, so the GUI exports
+`MOBIPICK_CONTAINER_HOSTNAME=<host hostname>` to every `docker compose`
+process; the `mobipick_cmd` service interpolates it as
+`hostname: ${MOBIPICK_CONTAINER_HOSTNAME:-}` and the `mobipick` simulation
+service as `hostname: ${MOBIPICK_CONTAINER_HOSTNAME:-mobipick}`. Manual Compose
+invocations leave the variable unset and keep the previous hostnames. Because
+`GAZEBO_MASTER_URI` and the fallback `ROS_MASTER_URI` point at `mobipick`, the
+GUI starts the simulation with `docker compose run --use-aliases` so the
+service's `mobipick` network alias resolves inside the sim container and from
+the tool containers (Docker's embedded DNS otherwise resolves it through the
+container hostname). The variable is only exported while `MOBIPICK_ROS_USE_IP`
+is `1` (the default), because nodes that advertise hostnames instead of IPs
+must keep a hostname their peers can resolve. As a visible side effect, prompts
+inside container terminals show the host's hostname. The tool entries live in
+`mobipick_gui.desktop_launcher.TOOL_DESKTOP_ENTRIES`; extend that table when
+adding a new container tool launch. The bundled `rviz_icon.png`,
+`rqt_icon.png`, and `gazebo_icon.svg` are copies of the upstream ROS Noetic
+rviz, rqt_gui, and Gazebo 11 icons.
+
 To also add the launcher to the Ubuntu/GNOME dock for one-click startup, run
 the checkout helper:
 

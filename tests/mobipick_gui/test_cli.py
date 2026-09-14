@@ -189,3 +189,94 @@ def test_install_desktop_launcher_option_exits_without_starting_qt(
     output = capsys.readouterr().out
     assert str(target) in output
     assert 'Added Mobipick Labs Control' in output
+
+
+@pytest.mark.parametrize('desktop_session', ['x11', 'wayland'])
+def test_main_refreshes_tool_desktop_entries_on_every_session_type(
+    monkeypatch,
+    desktop_session,
+):
+    events = []
+
+    class FakeApplication:
+        def windowIcon(self):
+            return 'icon'
+
+        def exec_(self):
+            events.append('exec')
+            return 0
+
+    class FakeWindow:
+        def __init__(self, **_kwargs):
+            events.append('window')
+
+        def setWindowIcon(self, icon):
+            events.append(('window_icon', icon))
+
+        def show(self):
+            events.append('show')
+
+    monkeypatch.setattr(cli, 'session_type', lambda: desktop_session)
+    monkeypatch.setattr(
+        cli,
+        '_install_user_desktop_entry',
+        lambda: events.append('application_entry'),
+    )
+    monkeypatch.setattr(
+        cli,
+        '_install_tool_desktop_entries',
+        lambda: events.append('tool_entries'),
+    )
+    monkeypatch.setattr(
+        cli,
+        '_create_application',
+        lambda *_args, **_kwargs: FakeApplication(),
+    )
+    monkeypatch.setattr(cli, 'MainWindow', FakeWindow)
+    monkeypatch.setattr(cli.signal, 'signal', lambda *_args: None)
+
+    assert cli.main([]) == 0
+    assert events[:2] == ['application_entry', 'tool_entries']
+    assert events[-1] == 'exec'
+
+
+def test_main_reports_desktop_metadata_failure_and_still_starts(
+    monkeypatch,
+    capsys,
+):
+    events = []
+
+    class FakeApplication:
+        def windowIcon(self):
+            return 'icon'
+
+        def exec_(self):
+            return 0
+
+    class FakeWindow:
+        def __init__(self, **_kwargs):
+            events.append('window')
+
+        def setWindowIcon(self, icon):
+            pass
+
+        def show(self):
+            pass
+
+    def fail_tool_entries():
+        raise OSError('read-only applications directory')
+
+    monkeypatch.setattr(cli, 'session_type', lambda: 'x11')
+    monkeypatch.setattr(cli, '_install_user_desktop_entry', lambda: None)
+    monkeypatch.setattr(cli, '_install_tool_desktop_entries', fail_tool_entries)
+    monkeypatch.setattr(
+        cli,
+        '_create_application',
+        lambda *_args, **_kwargs: FakeApplication(),
+    )
+    monkeypatch.setattr(cli, 'MainWindow', FakeWindow)
+    monkeypatch.setattr(cli.signal, 'signal', lambda *_args: None)
+
+    assert cli.main([]) == 0
+    assert events == ['window']
+    assert 'read-only applications directory' in capsys.readouterr().err

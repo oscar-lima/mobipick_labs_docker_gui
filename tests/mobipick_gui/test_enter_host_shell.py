@@ -86,6 +86,7 @@ def test_privilege_drop_prepares_runtime_for_target_uid(
     target_uid = 1001
     target_gid = 1002
     events = []
+    ensured_groups = []
 
     monkeypatch.setenv('MOBIPICK_UID', str(target_uid))
     monkeypatch.setenv('MOBIPICK_GID', str(target_gid))
@@ -94,7 +95,11 @@ def test_privilege_drop_prepares_runtime_for_target_uid(
     monkeypatch.setenv('MOBIPICK_HOST_HOME', str(tmp_path / 'home'))
     monkeypatch.setattr(ENTER_HOST_SHELL.os, 'getuid', lambda: 0)
     monkeypatch.setattr(ENTER_HOST_SHELL.os, 'getgid', lambda: 0)
-    monkeypatch.setattr(ENTER_HOST_SHELL, '_ensure_group', lambda *_args: None)
+    monkeypatch.setattr(
+        ENTER_HOST_SHELL,
+        '_ensure_group',
+        lambda gid, name: ensured_groups.append((gid, name)),
+    )
     monkeypatch.setattr(
         ENTER_HOST_SHELL,
         '_ensure_user',
@@ -145,6 +150,63 @@ def test_privilege_drop_prepares_runtime_for_target_uid(
         ('gid', target_gid),
         ('uid', target_uid),
     ]
+    assert ensured_groups == [
+        (target_gid, 'hostgrp1002'),
+        (992, 'mobipick-render-992'),
+        (44, 'mobipick-video-44'),
+    ]
+
+
+def test_privilege_drop_does_not_duplicate_primary_graphics_group(
+    monkeypatch,
+    tmp_path,
+):
+    ensured_groups = []
+
+    monkeypatch.setenv('MOBIPICK_UID', '1001')
+    monkeypatch.setenv('MOBIPICK_GID', '992')
+    monkeypatch.setenv('MOBIPICK_RENDER_GID', '992')
+    monkeypatch.setenv('MOBIPICK_VIDEO_GID', '992')
+    monkeypatch.setenv('MOBIPICK_HOST_HOME', str(tmp_path / 'home'))
+    monkeypatch.setattr(ENTER_HOST_SHELL.os, 'getuid', lambda: 0)
+    monkeypatch.setattr(ENTER_HOST_SHELL.os, 'getgid', lambda: 0)
+    monkeypatch.setattr(
+        ENTER_HOST_SHELL,
+        '_ensure_group',
+        lambda gid, name: ensured_groups.append((gid, name)),
+    )
+    monkeypatch.setattr(
+        ENTER_HOST_SHELL,
+        '_ensure_user',
+        lambda *_args: 'host-user',
+    )
+    monkeypatch.setattr(
+        ENTER_HOST_SHELL,
+        '_select_home',
+        lambda _hint: (tmp_path / 'home', None),
+    )
+    for helper in (
+        '_ensure_home_ownership',
+        '_ensure_rc_stub',
+        '_ensure_shadow_entry',
+        '_enable_passwordless_sudo',
+        '_relax_permissions',
+        '_prepare_runtime_directory',
+    ):
+        monkeypatch.setattr(ENTER_HOST_SHELL, helper, lambda *_args: None)
+    monkeypatch.setattr(ENTER_HOST_SHELL.os, 'setgroups', lambda _groups: None)
+    monkeypatch.setattr(ENTER_HOST_SHELL.os, 'setgid', lambda _gid: None)
+    monkeypatch.setattr(ENTER_HOST_SHELL.os, 'setuid', lambda _uid: None)
+
+    def fake_execvp(*_args):
+        raise RuntimeError('exec called')
+
+    monkeypatch.setattr(ENTER_HOST_SHELL.os, 'execvp', fake_execvp)
+
+    with pytest.raises(RuntimeError, match='exec called'):
+        ENTER_HOST_SHELL.main(['enter_host_shell.py', 'bash'])
+
+    assert ensured_groups == [(992, 'hostgrp992')]
 
 
 def test_root_command_keeps_runtime_owned_by_root(monkeypatch):

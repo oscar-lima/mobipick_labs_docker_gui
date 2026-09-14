@@ -437,6 +437,19 @@ The tab search is separate from the documentation window search.
   the Ubuntu/GNOME dock for one-click startup. It is selected by default,
   requires no `sudo`, preserves existing dock favorites, and is safe to run
   again. Clear it on non-GNOME desktops or when you manage launchers yourself.
+  Independently of that choice, every GUI start also refreshes hidden
+  per-user desktop entries for RViz, RQt, and Gazebo so that the dock,
+  Alt-Tab switcher, and overview show their real icons instead of a generic
+  gear for windows opened from the containers. The entries do not appear in
+  the application grid and cannot start the tools by themselves; use the GUI
+  buttons. Custom buttons and custom commands that run an rqt tool get the
+  RQt icon as well, and so do the rqt panels started by the Sim button.
+  Native-Wayland RQt windows are recognized by the `python3` identity that
+  Qt reports for them, so other Python Qt programs without their own desktop
+  entry may show the RQt icon while they run. Because GNOME only matches
+  windows that come from the local host, the simulation and tool containers
+  now run with the host's hostname; prompts inside container terminals show
+  that name instead of a container ID.
   After the host dependencies, the **NVIDIA Container Toolkit** page links to
   NVIDIA's official installation guide and provides buttons to open the guide,
   copy its URL, and copy the terminal test command. Complete the guide before

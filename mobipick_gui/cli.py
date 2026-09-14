@@ -16,6 +16,7 @@ from .desktop_launcher import (
     APPLICATION_DESKTOP_ID as _APPLICATION_DESKTOP_ID,
     APPLICATION_ICON as _APPLICATION_ICON,
     install_desktop_launcher,
+    install_tool_desktop_entries as _install_tool_desktop_entries,
     install_user_desktop_entry as _install_user_desktop_entry,
 )
 from .window_control import install_gnome_extension, session_type
@@ -248,6 +249,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if desktop_session in {'x11', 'wayland'}:
         try:
             _install_user_desktop_entry()
+            _install_tool_desktop_entries()
         except OSError as exc:
             print(
                 f'Failed to install desktop application metadata: {exc}',

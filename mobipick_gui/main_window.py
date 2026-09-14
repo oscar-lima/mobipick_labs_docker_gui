@@ -95,9 +95,15 @@ from .config import (
     writable_workspace_docker_cp_config_path,
 )
 from .documentation_dialog import DocumentationDialog
-from .desktop_launcher import install_desktop_launcher
+from .desktop_launcher import (
+    RQT_DESKTOP_ID,
+    desktop_entry_for_command,
+    install_desktop_launcher,
+    tool_window_environment,
+)
 from .display_runtime import (
     DisplayRuntime,
+    container_hostname_environment,
     detect_display_runtime,
     graphics_device_group_environment,
     ogre_glx_environment,
@@ -5797,7 +5803,8 @@ class MainWindow(QMainWindow):
         self._ensure_network(log_key='log')
         self._claim_xhost(tab, 'setup-wizard-simulation-test', log_key='log')
         args = [
-            'compose', 'run', '--rm', '--name', tab.container_name,
+            'compose', 'run', '--rm', '--use-aliases',
+            '--name', tab.container_name,
             '--label', f'mobipick.exec={exec_id}',
             '--label', 'mobipick.tab=setup-wizard-simulation-test',
             *self._compose_env_args(
@@ -7270,7 +7277,10 @@ CMD ["bash"]
                 args = [
                     'compose', 'run', '--rm', '--name', tab.container_name,
                     '--label', f'mobipick.exec={exec_id}', '--label', f'mobipick.tab={key}',
-                    *self._compose_env_args(container_name=tab.container_name),
+                    *self._compose_env_args(
+                        container_name=tab.container_name,
+                        desktop_entry=desktop_entry_for_command(full_command),
+                    ),
                     service, 'bash', '-lc', wrapped
                 ]
                 tab.start_program('docker', args)
@@ -7298,6 +7308,7 @@ CMD ["bash"]
         *,
         container_name: str | None = None,
         ogre_glx: bool = False,
+        desktop_entry: str | None = None,
     ) -> list[str]:
         display_runtime = self._display_runtime()
         for warning in display_runtime.warnings:
@@ -7314,6 +7325,8 @@ CMD ["bash"]
         compose_env.update(display_runtime.environment)
         if ogre_glx:
             compose_env.update(ogre_glx_environment(display_runtime))
+        if desktop_entry:
+            compose_env.update(tool_window_environment(desktop_entry))
         workspace_env = self._workspace_runtime_env()
         effective_workspace_env = dict(workspace_env)
         if overrides:
@@ -7548,6 +7561,10 @@ CMD ["bash"]
             env.insert(str(key), str(value))
         for key, value in graphics_device_group_environment().items():
             env.insert(key, value)
+        for key, value in container_hostname_environment(
+            CONFIG['process']['compose_run_env']
+        ).items():
+            env.insert(key, value)
         for key, value in workspace_env.items():
             env.insert(str(key), str(value))
         for key, value in self._image_runtime_env(
@@ -7589,6 +7606,11 @@ CMD ["bash"]
         for key, value in CONFIG['process']['qprocess_env'].items():
             env[str(key)] = str(value)
         env.update(graphics_device_group_environment())
+        env.update(
+            container_hostname_environment(
+                CONFIG['process']['compose_run_env']
+            )
+        )
         workspace_env = self._workspace_runtime_env()
         for key, value in workspace_env.items():
             env[str(key)] = str(value)
@@ -10985,10 +11007,18 @@ CMD ["bash"]
 
             self._claim_xhost(tab, 'sim', log_key=tab.key)
 
+            # --use-aliases keeps "mobipick" resolvable for the Gazebo master
+            # URI now that the container carries the host's hostname; the RQt
+            # identity only reaches the launch's rqt panels because Gazebo and
+            # RViz windows are claimed by their own StartupWMClass first.
             args = [
-                'compose', 'run', '--rm', '--name', self._sim_container_name,
+                'compose', 'run', '--rm', '--use-aliases',
+                '--name', self._sim_container_name,
                 '--label', f'mobipick.exec={exec_id}', '--label', f'mobipick.tab={tab.key}',
-                *self._compose_env_args(ogre_glx=True),
+                *self._compose_env_args(
+                    ogre_glx=True,
+                    desktop_entry=RQT_DESKTOP_ID,
+                ),
                 'mobipick',
                 'bash',
                 '-lc',
@@ -11532,7 +11562,10 @@ CMD ["bash"]
             args = [
                 'compose', 'run', '--rm', '--name', tab.container_name,
                 '--label', f'mobipick.exec={exec_id}', '--label', f'mobipick.tab={tab.key}',
-                *self._compose_env_args(container_name=tab.container_name),
+                *self._compose_env_args(
+                    container_name=tab.container_name,
+                    desktop_entry=RQT_DESKTOP_ID,
+                ),
                 self._ros_tool_service(),
                 'bash',
                 '-lc',
@@ -11775,7 +11808,10 @@ CMD ["bash"]
             args = [
                 'compose', 'run', '--rm', '--name', tab.container_name,
                 '--label', f'mobipick.exec={exec_id}', '--label', f'mobipick.tab={key_target}',
-                *self._compose_env_args(container_name=tab.container_name),
+                *self._compose_env_args(
+                    container_name=tab.container_name,
+                    desktop_entry=desktop_entry_for_command(text),
+                ),
                 self._ros_tool_service(), 'bash', '-lc', wrapped
             ]
             tab.start_program('docker', args)

@@ -140,6 +140,35 @@ def test_graphics_group_ids_reach_all_compose_launch_environments(
     app.processEvents()
 
 
+def test_host_hostname_reaches_compose_process_environments(
+    tmp_path,
+    monkeypatch,
+):
+    image = 'ozkrelo/x_mobipick_labs:noetic-v1.2'
+    registry_path, _ = _write_registry(tmp_path, image)
+    monkeypatch.setattr(
+        main_window_module,
+        'container_hostname_environment',
+        lambda _compose_run_env: {'MOBIPICK_CONTAINER_HOSTNAME': 'lab-desktop'},
+    )
+    app, window = _create_window(monkeypatch, registry_path, [image])
+
+    process_env = window._build_process_environment()
+    subprocess_env = window._prepare_run_env({})['env']
+    env_args = window._compose_env_args()
+
+    # Compose interpolates the hostname from the process environment; the
+    # container itself does not need the variable.
+    assert process_env.value('MOBIPICK_CONTAINER_HOSTNAME') == 'lab-desktop'
+    assert subprocess_env['MOBIPICK_CONTAINER_HOSTNAME'] == 'lab-desktop'
+    assert not any(
+        arg.startswith('MOBIPICK_CONTAINER_HOSTNAME=') for arg in env_args
+    )
+
+    window.deleteLater()
+    app.processEvents()
+
+
 def test_public_root_image_uses_baked_workspace_for_private_workspace(
     tmp_path,
     monkeypatch,
