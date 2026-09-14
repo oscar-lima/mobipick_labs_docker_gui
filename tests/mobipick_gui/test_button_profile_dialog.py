@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
@@ -307,6 +308,97 @@ def test_button_profile_dialog_configures_args_in_popup(monkeypatch, tmp_path):
 
     dialog.deleteLater()
     app.processEvents()
+
+
+def test_button_profile_dialog_imports_workspace_as_independent_copy(
+    monkeypatch,
+    tmp_path,
+):
+    app = QApplication.instance() or QApplication([])
+    source = tmp_path / 'source_buttons.yaml'
+    target = tmp_path / 'target_buttons.yaml'
+    save_button_layout(
+        source,
+        [
+            {
+                'key': 'sim',
+                'label': 'Sim',
+                'kind': 'builtin',
+                'action': 'sim',
+                'command': 'roslaunch source simulation.launch',
+            },
+            {
+                'key': 'source_tool',
+                'label': 'Source Tool',
+                'kind': 'command',
+                'command': 'rosrun source tool.py',
+            },
+            {
+                'key': 'rviz',
+                'label': 'RViz',
+                'kind': 'builtin',
+                'action': 'rviz',
+                'command': 'rosrun rviz rviz',
+            },
+        ],
+    )
+    original_source = source.read_text(encoding='utf-8')
+    dialog = ButtonProfileDialog(
+        [],
+        tmp_path / 'current_buttons.yaml',
+        target,
+        workspace_profiles=[('source_ws', source)],
+    )
+    monkeypatch.setattr(
+        main_window_module.QInputDialog,
+        'getItem',
+        lambda *args: ('source_ws', True),
+    )
+
+    dialog._import_workspace_profile()
+
+    imported = dialog.button_layout()
+    assert [entry['key'] for entry in imported] == [
+        'sim',
+        'source_tool',
+        'rviz',
+    ]
+    assert 'Saves a copy to:' in dialog.path_label.text()
+
+    command_column = dialog._field_column('command')
+    dialog.table.item(1, command_column).setText('rosrun target tool.py')
+    save_button_layout(target, dialog.button_layout())
+
+    assert source.read_text(encoding='utf-8') == original_source
+    assert 'rosrun target tool.py' in target.read_text(encoding='utf-8')
+
+    dialog.deleteLater()
+    app.processEvents()
+
+
+def test_workspace_button_profile_sources_excludes_active_workspace(tmp_path):
+    source = tmp_path / 'source.yaml'
+    harness = SimpleNamespace(
+        _workspace_registry=SimpleNamespace(
+            active='target_ws',
+            workspaces=[
+                SimpleNamespace(
+                    name='source_ws',
+                    button_config=str(source),
+                ),
+                SimpleNamespace(
+                    name='target_ws',
+                    button_config=str(tmp_path / 'target.yaml'),
+                ),
+            ],
+        )
+    )
+
+    profiles = main_window_module.MainWindow._workspace_button_profile_sources(
+        harness
+    )
+
+    assert profiles == [('source_ws', source)]
 
 
 def test_generic_arg_controls_are_hidden_without_config_and_append_values():

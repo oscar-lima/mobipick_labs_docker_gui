@@ -503,11 +503,14 @@ column is shown only when at least one button uses host execution. Its cells
 are enabled only for host command buttons, and the command runs after the GUI
 sends SIGINT to the original command process.
 
-Use **Load Profile** and **Export Profile** in that dialog to move complete
-button configurations as one YAML file. The automatic save location is the
-per-user XDG config directory so an installed package is never modified at
-runtime; exporting is the way to place a profile in a private repository or
-share it with another setup.
+Use **Import from Workspace...** to select another registered workspace and
+copy all of its toolbar buttons into the editor. Saving writes an independent
+profile for the active workspace, so later edits do not change the source
+workspace. Use **Load Profile** and **Export Profile** to move complete button
+configurations as one YAML file. The automatic save location is the per-user
+XDG config directory so an installed package is never modified at runtime;
+exporting is the way to place a profile in a private repository or share it
+with another setup.
 
 Button entries can be:
 

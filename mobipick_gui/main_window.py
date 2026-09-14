@@ -42,6 +42,7 @@ from PyQt5.QtWidgets import (
     QFormLayout,
     QHBoxLayout,
     QHeaderView,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -796,6 +797,8 @@ class ButtonProfileDialog(QDialog):
         source_path: Path,
         save_path: Path,
         parent: QWidget | None = None,
+        *,
+        workspace_profiles: list[tuple[str, Path]] | None = None,
     ):
         # Establish the normal top-level window type before
         # MaximizableDialog adds its window-manager hints. Changing the type
@@ -807,6 +810,7 @@ class ButtonProfileDialog(QDialog):
         self._owner = parent
         self._source_path = source_path
         self._save_path = save_path
+        self._workspace_profiles = dict(workspace_profiles or [])
 
         root = QVBoxLayout(self)
         note = QLabel(
@@ -817,11 +821,11 @@ class ButtonProfileDialog(QDialog):
         note.setWordWrap(True)
         root.addWidget(note)
 
-        path_label = QLabel(
+        self.path_label = QLabel(
             f'Loaded from: {source_path}\nSaves to: {save_path}'
         )
-        path_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        root.addWidget(path_label)
+        self.path_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        root.addWidget(self.path_label)
 
         self.table = ButtonProfileTable(self.COLUMNS)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
@@ -856,6 +860,15 @@ class ButtonProfileDialog(QDialog):
         load_button = QPushButton('Load Profile')
         load_button.clicked.connect(self._load_profile)
         actions.addWidget(load_button)
+        self.import_workspace_button = QPushButton('Import from Workspace...')
+        self.import_workspace_button.setToolTip(
+            'Copy toolbar buttons from another registered workspace'
+        )
+        self.import_workspace_button.setEnabled(bool(self._workspace_profiles))
+        self.import_workspace_button.clicked.connect(
+            self._import_workspace_profile
+        )
+        actions.addWidget(self.import_workspace_button)
         export_button = QPushButton('Export Profile')
         export_button.clicked.connect(self._export_profile)
         actions.addWidget(export_button)
@@ -1141,6 +1154,51 @@ class ButtonProfileDialog(QDialog):
             return
         self._replace_rows(entries)
         self.table.selectRow(0)
+        self.path_label.setText(
+            f'Loaded from: {source}\nSaves to: {self._save_path}'
+        )
+
+    def _import_workspace_profile(self) -> None:
+        """Load another workspace's buttons for an independent save."""
+        names = list(self._workspace_profiles)
+        if not names:
+            return
+        name, accepted = QInputDialog.getItem(
+            self,
+            'Import Toolbar Buttons',
+            'Copy buttons from workspace:',
+            names,
+            0,
+            False,
+        )
+        if not accepted or not name:
+            return
+        source = self._workspace_profiles[str(name)]
+        if not source.is_file():
+            QMessageBox.warning(
+                self,
+                'Toolbar Buttons',
+                f'The button profile for workspace "{name}" does not exist:\n'
+                f'{source}',
+            )
+            return
+        try:
+            entries = load_button_layout(source)
+        except Exception as exc:
+            QMessageBox.warning(
+                self,
+                'Toolbar Buttons',
+                f'Failed to import buttons from workspace "{name}":\n{exc}',
+            )
+            return
+        self._replace_rows(entries)
+        if self.table.rowCount():
+            self.table.selectRow(0)
+        self.path_label.setText(
+            f'Imported from workspace: {name}\n'
+            f'Source: {source}\n'
+            f'Saves a copy to: {self._save_path}'
+        )
 
     def _remove_selected_row(self) -> None:
         row = self._selected_row()
@@ -4228,6 +4286,30 @@ class MainWindow(QMainWindow):
             return writable_button_config_path(source_path)
         return writable_workspace_button_config_path(source_path, workspace.name)
 
+    def _workspace_button_profile_sources(self) -> list[tuple[str, Path]]:
+        """Return other registered workspaces and their effective profiles."""
+        default_path = Path(
+            str(CONFIG.get('buttons', {}).get('config_file') or '')
+            or BUTTON_CONFIG_FILE
+        ).expanduser()
+        if not default_path.is_absolute():
+            default_path = PROJECT_ROOT / default_path
+
+        profiles: list[tuple[str, Path]] = []
+        active_name = self._workspace_registry.active
+        for workspace in self._workspace_registry.workspaces:
+            if workspace.name == active_name:
+                continue
+            path = (
+                Path(workspace.button_config).expanduser()
+                if workspace.button_config
+                else default_path
+            )
+            if not path.is_absolute():
+                path = PROJECT_ROOT / path
+            profiles.append((workspace.name, path))
+        return profiles
+
     def _workspace_docker_cp_config_path(self) -> Path:
         workspace = self._workspace_registry.active_workspace()
         if workspace is None:
@@ -4249,6 +4331,7 @@ class MainWindow(QMainWindow):
             source_path,
             save_path,
             self,
+            workspace_profiles=self._workspace_button_profile_sources(),
         )
         if dialog.exec_() != QDialog.Accepted:
             return
