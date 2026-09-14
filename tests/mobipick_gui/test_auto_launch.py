@@ -132,6 +132,66 @@ def test_auto_launch_progress_synchronizes_native_robot_race(monkeypatch):
     app.processEvents()
 
 
+def test_auto_launch_progress_uses_robot_race_user_setting(monkeypatch):
+    monkeypatch.delenv('ROBOT_RACE', raising=False)
+    monkeypatch.setitem(
+        main_window_module.CONFIG['launch_sequence'],
+        'robot_race',
+        True,
+    )
+    app = QApplication.instance() or QApplication([])
+    progress = AutoLaunchProgressWindow()
+
+    assert progress.robot_animation is not None
+    assert progress.robot_animation.is_available
+
+    progress.dismiss()
+    app.processEvents()
+
+
+def test_robot_race_environment_overrides_user_setting(monkeypatch):
+    monkeypatch.setenv('ROBOT_RACE', 'false')
+    monkeypatch.setitem(
+        main_window_module.CONFIG['launch_sequence'],
+        'robot_race',
+        True,
+    )
+    app = QApplication.instance() or QApplication([])
+    progress = AutoLaunchProgressWindow()
+
+    assert progress.robot_animation is None
+
+    progress.dismiss()
+    app.processEvents()
+
+
+def test_auto_launch_recreates_progress_after_robot_race_toggle(monkeypatch):
+    monkeypatch.delenv('ROBOT_RACE', raising=False)
+    app = QApplication.instance() or QApplication([])
+    harness = QWidget()
+    previous = AutoLaunchProgressWindow(
+        harness,
+        robot_race_enabled=False,
+    )
+    harness._auto_launch_progress = previous
+    harness._robot_race_enabled = True
+    harness.bring_window_to_front = lambda _window: None
+    harness.keep_window_above = lambda _window: None
+    harness._show_auto_launch_progress = MethodType(
+        MainWindow._show_auto_launch_progress,
+        harness,
+    )
+
+    harness._show_auto_launch_progress(1.0)
+
+    assert harness._auto_launch_progress is not previous
+    assert harness._auto_launch_progress.robot_animation is not None
+
+    harness._auto_launch_progress.dismiss()
+    harness.deleteLater()
+    app.processEvents()
+
+
 def test_auto_launch_progress_includes_window_layout_milestone():
     app = QApplication.instance() or QApplication([])
     now = {'ns': 0}

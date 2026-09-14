@@ -324,12 +324,15 @@ Bundled defaults live under `mobipick_gui/resources/config/`.
 `config/gui_settings.yaml` is merged over them, then the per-user
 `gui_settings.yaml` is merged last.
 
-Important environment overrides:
+Important local configuration and environment overrides:
 
 - `MOBIPICK_GUI_DATA_ROOT` points the package at an alternate resources root.
 - `MOBIPICK_GUI_CONFIG` points to an alternate per-user GUI settings file.
-- `ROBOT_RACE=true` replaces Auto Launch progress bars with full-resolution
-  synchronized robot animations. The default is `false`.
+- `launch_sequence.robot_race: true` in the per-user `gui_settings.yaml`
+  replaces Auto Launch progress bars with full-resolution synchronized robot
+  animations. `ROBOT_RACE=true` remains available as an environment override.
+  The default is `false`; the setting can also be changed under **Tools >
+  Automation > Use Robot Race Animations**.
 - `MOBIPICK_WORKSPACE_CONFIG` points to an alternate workspace registry.
 - `XDG_CONFIG_HOME` and `XDG_DATA_HOME` control the default per-user roots.
 

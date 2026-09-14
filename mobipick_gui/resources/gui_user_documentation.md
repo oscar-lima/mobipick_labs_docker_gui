@@ -250,8 +250,12 @@ left running so you can verify it normally.
 
 When you start Auto Launch, an always-on-top progress window opens in the center
 of the main window and shows the time remaining until the demo is ready. By
-default, it uses normal progress bars. Start the GUI with `ROBOT_RACE=true` to
-replace the overall and per-process bars with full-resolution robot animations.
+default, it uses normal progress bars. Set `launch_sequence.robot_race: true`
+in your per-user `gui_settings.yaml` to replace the overall and per-process
+bars with full-resolution robot animations. `ROBOT_RACE=true` remains
+available as an environment override for terminal launches. You can change
+the same per-user preference from **Tools > Automation > Use Robot Race
+Animations**; the choice applies to the next Auto Launch run.
 Waiting robots remain at the start, launching robots advance with their
 readiness time, and ready or already-running robots finish their lane. Legacy
 profiles show their configured launch times as milestones. Advanced profiles
@@ -535,6 +539,9 @@ the **Install Source** tab.
 
 - **Configure Auto Launch** opens the sequence editor for Auto Launch and the
   extra recording start delay.
+- **Use Robot Race Animations** persistently replaces Auto Launch progress bars
+  with synchronized robot animations for the current user. The choice applies
+  to the next Auto Launch run.
 
 ### Remote Control
 

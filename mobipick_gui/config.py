@@ -376,6 +376,7 @@ CONFIG_DEFAULTS: Dict[str, Dict] = {
         'start_text': 'Start Auto Launch',
         'stop_text': 'Stop Auto Launch',
         'tooltip': 'Launch the configured startup sequence',
+        'robot_race': False,
         'retry_delay_ms': 750,
         'max_retry_attempts': 6,
     },

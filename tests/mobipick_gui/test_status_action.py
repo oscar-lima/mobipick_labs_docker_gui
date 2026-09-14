@@ -7,6 +7,7 @@ from PyQt5.QtGui import QKeySequence
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QApplication, QDialog, QPushButton, QToolTip
 
+import mobipick_gui.main_window as main_window_module
 from mobipick_gui.config import CONFIG
 from mobipick_gui.main_window import MainWindow
 
@@ -56,6 +57,60 @@ def test_update_status_is_menu_only(tmp_path, monkeypatch):
         button.text()
         for button in window.findChildren(QPushButton)
     }
+
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_robot_race_menu_action_persists_user_preference(tmp_path, monkeypatch):
+    monkeypatch.setenv(
+        'MOBIPICK_WORKSPACE_CONFIG',
+        str(tmp_path / 'workspaces.yaml'),
+    )
+    monkeypatch.delenv('ROBOT_RACE', raising=False)
+    monkeypatch.setitem(CONFIG['launch_sequence'], 'robot_race', False)
+    monkeypatch.setattr(
+        MainWindow,
+        '_discover_filtered_image_records',
+        lambda self: ([{'ref': CONFIG['images']['default']}], None),
+    )
+    monkeypatch.setattr(
+        MainWindow,
+        'update_sim_status_from_poll',
+        lambda self, force=False: None,
+    )
+    saved = []
+
+    def save_preference(updates):
+        saved.append(updates)
+        CONFIG['launch_sequence'].update(updates['launch_sequence'])
+
+    monkeypatch.setattr(
+        main_window_module,
+        'save_user_config_update',
+        save_preference,
+    )
+
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow(
+        verbosity=1,
+        remote_control={'enabled': False},
+    )
+    window.poll_timer.stop()
+    window._sigint_timer.stop()
+
+    tools_menu = _top_menu(window, 'Tools')
+    match = _find_menu_action(tools_menu, 'Use Robot Race Animations')
+
+    assert match is not None
+    _, action = match
+    assert not action.isChecked()
+    action.trigger()
+
+    assert action.isChecked()
+    assert saved == [{'launch_sequence': {'robot_race': True}}]
+    assert window._robot_race_enabled is True
+    assert 'next Auto Launch run' in action.toolTip()
 
     window.deleteLater()
     app.processEvents()

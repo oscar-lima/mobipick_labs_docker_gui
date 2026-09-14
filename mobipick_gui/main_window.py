@@ -1300,10 +1300,26 @@ class ButtonProfileDialog(QDialog):
         super().accept()
 
 
+def _robot_race_is_enabled() -> bool:
+    """Return the effective Auto Launch robot-animation preference."""
+    robot_race_env = os.environ.get('ROBOT_RACE')
+    if robot_race_env is not None:
+        return robot_race_env.strip().lower() == 'true'
+    configured = CONFIG.get('launch_sequence', {}).get('robot_race', False)
+    if isinstance(configured, str):
+        return configured.strip().lower() in {'1', 'true', 'yes', 'on'}
+    return bool(configured)
+
+
 class AutoLaunchProgressWindow(QWidget):
     """Centered countdown and per-process Auto Launch progress display."""
 
-    def __init__(self, parent: QWidget | None = None):
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        *,
+        robot_race_enabled: bool | None = None,
+    ):
         super().__init__(parent, Qt.Tool | Qt.WindowStaysOnTopHint)
         self.setWindowTitle('Auto Launch Progress')
         self.setMinimumWidth(520)
@@ -1312,7 +1328,9 @@ class AutoLaunchProgressWindow(QWidget):
         self._clock = time.monotonic_ns
         self._process_rows: list[dict] = []
         self._robot_race_enabled = (
-            os.environ.get('ROBOT_RACE', '').strip().lower() == 'true'
+            _robot_race_is_enabled()
+            if robot_race_enabled is None
+            else bool(robot_race_enabled)
         )
         self._robot_gif_path = (
             PROJECT_ROOT / 'gif' / 'robot_progress_crash.gif'
@@ -2653,6 +2671,8 @@ class MainWindow(QMainWindow):
                 'remote_control.enabled in gui_settings.yaml'
             )
         self._remote_control_action: QAction | None = None
+        self._robot_race_action: QAction | None = None
+        self._robot_race_enabled = _robot_race_is_enabled()
 
         window_cfg = CONFIG['window']
         self.setWindowTitle(window_cfg['title'])
@@ -3188,6 +3208,36 @@ class MainWindow(QMainWindow):
         if self._remote_control_settings.get('enabled'):
             self._start_remote_control()
 
+    # ---------- Automation preferences ----------
+
+    def _on_robot_race_toggled(self, checked: bool) -> None:
+        previous = self._robot_race_enabled
+        self._robot_race_enabled = checked
+        try:
+            save_user_config_update({
+                'launch_sequence': {'robot_race': checked},
+            })
+        except Exception as exc:
+            self._robot_race_enabled = previous
+            action = self._robot_race_action
+            if action is not None:
+                action.blockSignals(True)
+                try:
+                    action.setChecked(previous)
+                finally:
+                    action.blockSignals(False)
+            self._append_gui_html(
+                'log',
+                '<i>Failed to save Robot Race preference: '
+                f'{html.escape(str(exc))}</i>',
+            )
+            return
+        self._log_info(
+            'Robot Race animations enabled'
+            if checked
+            else 'Robot Race animations disabled'
+        )
+
     # ---------- Remote control ----------
 
     def _remote_emit(self, name: str, /, **data) -> None:
@@ -3450,6 +3500,26 @@ class MainWindow(QMainWindow):
             'Configure Auto Launch',
             self._open_auto_launch_wizard,
         )
+        self._robot_race_action = self._add_checkable_menu_action(
+            automation_menu,
+            'Use Robot Race Animations',
+            self._on_robot_race_toggled,
+        )
+        self._robot_race_action.blockSignals(True)
+        try:
+            self._robot_race_action.setChecked(self._robot_race_enabled)
+        finally:
+            self._robot_race_action.blockSignals(False)
+        robot_race_tooltip = (
+            'Persistently replace Auto Launch progress bars with robot '
+            'animations; applies to the next Auto Launch run'
+        )
+        self._robot_race_action.setProperty(
+            'mobipick_menu_tooltip',
+            robot_race_tooltip,
+        )
+        self._robot_race_action.setToolTip(robot_race_tooltip)
+        self._robot_race_action.setStatusTip(robot_race_tooltip)
 
         remote_menu = self._add_menu(tools_menu, 'Remote Control')
         self._remote_control_action = self._add_checkable_menu_action(
@@ -9920,8 +9990,19 @@ CMD ["bash"]
         processes: list[dict] | None = None,
     ) -> None:
         """Show the always-on-top readiness countdown."""
+        if (
+            self._auto_launch_progress is not None
+            and self._auto_launch_progress._robot_race_enabled
+            != self._robot_race_enabled
+        ):
+            self._auto_launch_progress.dismiss()
+            self._auto_launch_progress.deleteLater()
+            self._auto_launch_progress = None
         if self._auto_launch_progress is None:
-            self._auto_launch_progress = AutoLaunchProgressWindow(self)
+            self._auto_launch_progress = AutoLaunchProgressWindow(
+                self,
+                robot_race_enabled=self._robot_race_enabled,
+            )
         self._auto_launch_progress.start_countdown(total_seconds, processes)
         self.bring_window_to_front(self._auto_launch_progress)
         self.keep_window_above(self._auto_launch_progress)

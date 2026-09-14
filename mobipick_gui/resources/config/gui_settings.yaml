@@ -69,6 +69,9 @@ process:
     ROSCONSOLE_FORMAT: '[${severity}] [${walltime:%H:%M:%S}] [${node}]: ${message}'  # use the same ROS format in containers
     MOBIPICK_ROS_USE_IP: "1"                  # advertise container bridge IPs instead of disposable Docker hostnames
 
+launch_sequence:
+  robot_race: false                           # replace Auto Launch progress bars with robot animations
+
 terminal:
   launcher: "gnome-terminal --title \"{title}\" -- bash -lc \"{command}\""  # external terminal command template
   title: "Mobipick Terminal"                # substituted into the launcher template
