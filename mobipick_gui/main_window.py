@@ -879,37 +879,54 @@ class ButtonProfileDialog(QDialog):
         parent: QWidget | None = None,
         *,
         workspace_profiles: list[tuple[str, Path]] | None = None,
+        read_only: bool = False,
     ):
         # Establish the normal top-level window type before
         # MaximizableDialog adds its window-manager hints. Changing the type
         # afterwards can leave some window managers treating this as a dialog
         # whose maximize controls do not act on the window.
         super().__init__(None, Qt.Window)
-        self.setWindowTitle('Configure Toolbar Buttons')
+        self.setWindowTitle(
+            'Toolbar Button Commands'
+            if read_only
+            else 'Configure Toolbar Buttons'
+        )
         self.resize(960, 560)
         self._owner = parent
         self._source_path = source_path
         self._save_path = save_path
         self._workspace_profiles = dict(workspace_profiles or [])
+        self._read_only = read_only
 
         root = QVBoxLayout(self)
-        note = QLabel(
-            'Roscore and Terminal are always present and are not editable here. '
-            'Every listed button runs its command in its own tab. Sim and RViz '
-            'cannot be removed. Stop Command is used by Host command buttons.'
-        )
+        if read_only:
+            note_text = (
+                'Workspace processes are running, so the active toolbar profile '
+                'is shown read-only. Stop them before changing these commands.'
+            )
+        else:
+            note_text = (
+                'Roscore and Terminal are always present and are not editable '
+                'here. Every listed button runs its command in its own tab. Sim '
+                'and RViz cannot be removed. Stop Command is used by Host command '
+                'buttons.'
+            )
+        note = QLabel(note_text)
         note.setWordWrap(True)
         root.addWidget(note)
 
-        self.path_label = QLabel(
-            f'Loaded from: {source_path}\nSaves to: {save_path}'
-        )
+        path_text = f'Loaded from: {source_path}'
+        if not read_only:
+            path_text += f'\nSaves to: {save_path}'
+        self.path_label = QLabel(path_text)
         self.path_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         root.addWidget(self.path_label)
 
         self.table = ButtonProfileTable(self.COLUMNS)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)
+        if read_only:
+            self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         root.addWidget(self.table, 1)
 
         for entry in entries:
@@ -955,10 +972,17 @@ class ButtonProfileDialog(QDialog):
         actions.addStretch(1)
         root.addLayout(actions)
 
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.Save | QDialogButtonBox.Cancel
-        )
-        buttons.accepted.connect(self.accept)
+        if read_only:
+            for index in range(actions.count() - 1):
+                widget = actions.itemAt(index).widget()
+                if widget is not None:
+                    widget.setVisible(False)
+            buttons = QDialogButtonBox(QDialogButtonBox.Close)
+        else:
+            buttons = QDialogButtonBox(
+                QDialogButtonBox.Save | QDialogButtonBox.Cancel
+            )
+            buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         root.addWidget(buttons)
 
@@ -970,7 +994,10 @@ class ButtonProfileDialog(QDialog):
         for column, (field, _label) in enumerate(self.COLUMNS):
             if field in self.BOOL_FIELDS:
                 item = QTableWidgetItem()
-                item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsUserCheckable)
+                flags = Qt.ItemIsEnabled | Qt.ItemIsSelectable
+                if not self._read_only:
+                    flags |= Qt.ItemIsUserCheckable
+                item.setFlags(flags)
                 item.setCheckState(
                     Qt.Checked if bool(entry.get(field, False)) else Qt.Unchecked
                 )
@@ -978,7 +1005,7 @@ class ButtonProfileDialog(QDialog):
                 value = entry.get(field, '')
                 item = QTableWidgetItem('' if value is None else str(value))
                 flags = Qt.ItemIsEnabled | Qt.ItemIsSelectable
-                if not (
+                if not self._read_only and not (
                     locked
                     and field in {'key', 'kind', 'action'}
                 ):
@@ -1015,11 +1042,10 @@ class ButtonProfileDialog(QDialog):
                 hidden_command = str(stop_item.data(Qt.UserRole) or '')
                 if not stop_item.text() and hidden_command:
                     stop_item.setText(hidden_command)
-                stop_item.setFlags(
-                    Qt.ItemIsEnabled
-                    | Qt.ItemIsSelectable
-                    | Qt.ItemIsEditable
-                )
+                flags = Qt.ItemIsEnabled | Qt.ItemIsSelectable
+                if not self._read_only:
+                    flags |= Qt.ItemIsEditable
+                stop_item.setFlags(flags)
                 stop_item.setToolTip('Command to run when this Host button stops')
             else:
                 if stop_item.text():
@@ -1354,14 +1380,17 @@ class ButtonProfileDialog(QDialog):
         for column, (field, _label) in enumerate(self.COLUMNS):
             if field in self.BOOL_FIELDS:
                 item = QTableWidgetItem()
-                item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsUserCheckable)
+                flags = Qt.ItemIsEnabled | Qt.ItemIsSelectable
+                if not self._read_only:
+                    flags |= Qt.ItemIsUserCheckable
+                item.setFlags(flags)
                 item.setCheckState(
                     Qt.Checked if bool(entry.get(field, False)) else Qt.Unchecked
                 )
             else:
                 item = QTableWidgetItem(str(entry.get(field, '') or ''))
                 flags = Qt.ItemIsEnabled | Qt.ItemIsSelectable
-                if not (
+                if not self._read_only and not (
                     locked
                     and field in {'key', 'kind', 'action'}
                 ):
@@ -4432,13 +4461,7 @@ class MainWindow(QMainWindow):
         return writable_workspace_docker_cp_config_path(workspace.name)
 
     def _open_button_profile_dialog(self) -> None:
-        if self._workspace_processes_running():
-            QMessageBox.warning(
-                self,
-                'Toolbar Buttons',
-                'Stop running workspace processes before editing toolbar buttons.',
-            )
-            return
+        read_only = self._workspace_processes_running()
         source_path = self._resolved_button_config_path()
         save_path = self._button_profile_save_path(source_path)
         dialog = ButtonProfileDialog(
@@ -4447,7 +4470,11 @@ class MainWindow(QMainWindow):
             save_path,
             self,
             workspace_profiles=self._workspace_button_profile_sources(),
+            read_only=read_only,
         )
+        if read_only:
+            dialog.exec_()
+            return
         if dialog.exec_() != QDialog.Accepted:
             return
         button_layout = dialog.button_layout()
