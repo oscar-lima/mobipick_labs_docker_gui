@@ -13149,15 +13149,20 @@ CMD ["bash"]
             except (TypeError, ValueError):
                 pass
         self._restore_maximized = bool(window_cfg.get('maximized'))
-        if self._restore_maximized:
-            self.setWindowState(self.windowState() | Qt.WindowMaximized)
 
     def show_with_restored_state(self) -> None:
-        """Show the window using the saved window-manager state."""
+        """Show the window using the saved window-manager state.
+
+        The window is first mapped at its saved normal geometry and only then
+        maximized from the event loop.  Mutter (GNOME on X11) ignores a
+        maximized request sent together with an explicit geometry before the
+        window is mapped, so ``showMaximized()`` alone leaves the window at its
+        normal size.  Maximizing after the map keeps the saved geometry as the
+        window's normal geometry, so un-maximizing returns to it.
+        """
+        self.show()
         if self._restore_maximized:
-            self.showMaximized()
-        else:
-            self.show()
+            QTimer.singleShot(0, self.showMaximized)
 
     def _save_window_state(self) -> None:
         geometry = self.normalGeometry()

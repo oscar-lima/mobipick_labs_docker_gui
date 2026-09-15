@@ -100,7 +100,7 @@ def test_save_window_state_persists_geometry(monkeypatch):
     app.processEvents()
 
 
-def test_restore_window_state_applies_geometry_and_maximized():
+def test_restore_window_state_applies_geometry_and_defers_maximized():
     app = QApplication.instance() or QApplication([])
     window = QMainWindow()
 
@@ -113,39 +113,67 @@ def test_restore_window_state_applies_geometry_and_maximized():
     assert window.geometry().y() == 40
     assert window.geometry().width() == 800
     assert window.geometry().height() == 600
-    assert window.windowState() & Qt.WindowMaximized
+    # Maximizing is deferred until the window is mapped; requesting it before
+    # the map is ignored by Mutter on X11.
+    assert not window.windowState() & Qt.WindowMaximized
+    assert window._restore_maximized is True
 
     window.deleteLater()
     app.processEvents()
 
 
 @pytest.mark.parametrize(
-    ('maximized', 'expected_show'),
-    [(False, 'normal'), (True, 'maximized')],
+    ('maximized', 'expected_calls'),
+    [(False, ['show']), (True, ['show', 'showMaximized'])],
 )
-def test_show_with_restored_state_uses_explicit_window_manager_transition(
+def test_show_with_restored_state_maximizes_after_the_window_is_mapped(
     maximized,
-    expected_show,
+    expected_calls,
 ):
     app = QApplication.instance() or QApplication([])
 
     class RecordingWindow(QMainWindow):
         def __init__(self):
             super().__init__()
-            self.shown_as = None
+            self.calls = []
 
         def show(self):
-            self.shown_as = 'normal'
+            self.calls.append('show')
 
         def showMaximized(self):  # noqa: N802 - Qt API
-            self.shown_as = 'maximized'
+            self.calls.append('showMaximized')
 
     window = RecordingWindow()
     window._restore_maximized = maximized
 
     MainWindow.show_with_restored_state(window)
 
-    assert window.shown_as == expected_show
+    # The maximize request must not be issued synchronously with show(): the
+    # window manager only honours it once the window has been mapped.
+    assert window.calls == ['show']
+    app.processEvents()
+    assert window.calls == expected_calls
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_show_with_restored_state_keeps_saved_normal_geometry_when_maximized():
+    app = QApplication.instance() or QApplication([])
+    window = QMainWindow()
+    MainWindow._restore_window_state(
+        window,
+        {'geometry': [20, 40, 800, 600], 'maximized': True},
+    )
+
+    MainWindow.show_with_restored_state(window)
+    app.processEvents()
+
+    assert window.windowState() & Qt.WindowMaximized
+    normal = window.normalGeometry()
+    assert (normal.x(), normal.y(), normal.width(), normal.height()) == (
+        20, 40, 800, 600,
+    )
+    window.close()
     window.deleteLater()
     app.processEvents()
 
