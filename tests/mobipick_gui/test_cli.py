@@ -213,8 +213,8 @@ def test_main_refreshes_tool_desktop_entries_on_every_session_type(
         def setWindowIcon(self, icon):
             events.append(('window_icon', icon))
 
-        def show(self):
-            events.append('show')
+        def show_with_restored_state(self):
+            events.append('show_restored')
 
     monkeypatch.setattr(cli, 'session_type', lambda: desktop_session)
     monkeypatch.setattr(
@@ -237,6 +237,7 @@ def test_main_refreshes_tool_desktop_entries_on_every_session_type(
 
     assert cli.main([]) == 0
     assert events[:2] == ['application_entry', 'tool_entries']
+    assert 'show_restored' in events
     assert events[-1] == 'exec'
 
 
@@ -260,7 +261,7 @@ def test_main_reports_desktop_metadata_failure_and_still_starts(
         def setWindowIcon(self, icon):
             pass
 
-        def show(self):
+        def show_with_restored_state(self):
             pass
 
     def fail_tool_entries():

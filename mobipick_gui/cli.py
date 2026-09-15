@@ -265,7 +265,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         remote_control=remote_control_overrides(parsed_args),
     )
     window.setWindowIcon(app.windowIcon())
-    window.show()
+    window.show_with_restored_state()
 
     def _handle_sigint(_sig, _frame):
         trigger_sigint()

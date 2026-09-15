@@ -13148,8 +13148,16 @@ CMD ["bash"]
                 self.setGeometry(*[int(value) for value in geometry])
             except (TypeError, ValueError):
                 pass
-        if window_cfg.get('maximized'):
+        self._restore_maximized = bool(window_cfg.get('maximized'))
+        if self._restore_maximized:
             self.setWindowState(self.windowState() | Qt.WindowMaximized)
+
+    def show_with_restored_state(self) -> None:
+        """Show the window using the saved window-manager state."""
+        if self._restore_maximized:
+            self.showMaximized()
+        else:
+            self.show()
 
     def _save_window_state(self) -> None:
         geometry = self.normalGeometry()

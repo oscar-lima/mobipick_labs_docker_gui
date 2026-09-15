@@ -119,6 +119,37 @@ def test_restore_window_state_applies_geometry_and_maximized():
     app.processEvents()
 
 
+@pytest.mark.parametrize(
+    ('maximized', 'expected_show'),
+    [(False, 'normal'), (True, 'maximized')],
+)
+def test_show_with_restored_state_uses_explicit_window_manager_transition(
+    maximized,
+    expected_show,
+):
+    app = QApplication.instance() or QApplication([])
+
+    class RecordingWindow(QMainWindow):
+        def __init__(self):
+            super().__init__()
+            self.shown_as = None
+
+        def show(self):
+            self.shown_as = 'normal'
+
+        def showMaximized(self):  # noqa: N802 - Qt API
+            self.shown_as = 'maximized'
+
+    window = RecordingWindow()
+    window._restore_maximized = maximized
+
+    MainWindow.show_with_restored_state(window)
+
+    assert window.shown_as == expected_show
+    window.deleteLater()
+    app.processEvents()
+
+
 @pytest.mark.parametrize('desktop_session', ['x11', 'wayland'])
 def test_roscore_transient_text_does_not_increase_button_width(
     monkeypatch,
