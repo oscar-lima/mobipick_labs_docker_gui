@@ -243,6 +243,9 @@ percentage of that duration (for example, 30%). If a dependency is already
 running when Auto Launch begins, it is treated as ready immediately. Advanced
 profiles are saved with `mode: advanced` and a `processes` list; existing YAML
 files without those fields continue to load in Legacy mode.
+Unchecking an Advanced process excludes it from Auto Launch without discarding
+its readiness duration or dependency settings; those values return when the
+configuration window is reopened.
 
 To measure a readiness duration experimentally, stop the process first and
 click **Measure** in its Advanced row. The GUI launches that process immediately

@@ -1770,6 +1770,7 @@ class AutoLaunchWizard(QDialog):
         mode: str = 'legacy',
         measurement_launcher: Callable[[str], bool] | None = None,
         parent: QWidget | None = None,
+        process_settings: list[dict] | None = None,
     ):
         super().__init__(parent)
         self.setWindowTitle('Configure Auto Launch')
@@ -1852,19 +1853,26 @@ class AutoLaunchWizard(QDialog):
         header.setSectionResizeMode(5, QHeaderView.Stretch)
         header.setSectionResizeMode(6, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(7, QHeaderView.ResizeToContents)
+        saved_process_settings = (
+            process_settings if process_settings is not None else processes
+        )
         advanced_by_key = {
             str(entry.get('button')): entry
-            for entry in (processes or [])
+            for entry in (saved_process_settings or [])
             if isinstance(entry, dict) and entry.get('button')
         }
         selected_legacy = set(existing)
         for row_index, (key, label) in enumerate(buttons):
             current = advanced_by_key.get(key, {})
             enabled = QCheckBox()
-            enabled.setChecked(
-                key in advanced_by_key
-                or (not advanced_by_key and key in selected_legacy)
-            )
+            if 'enabled' in current:
+                row_enabled = bool(current['enabled'])
+            else:
+                row_enabled = (
+                    key in advanced_by_key
+                    or (not advanced_by_key and key in selected_legacy)
+                )
+            enabled.setChecked(row_enabled)
             self._advanced_table.setCellWidget(row_index, 0, enabled)
             self._advanced_table.setItem(row_index, 1, QTableWidgetItem(label))
             duration = QDoubleSpinBox()
@@ -2028,13 +2036,24 @@ class AutoLaunchWizard(QDialog):
 
     def processes(self) -> list[dict]:
         """Return enabled dependency-aware process definitions."""
+        return [
+            {
+                key: value
+                for key, value in entry.items()
+                if key != 'enabled'
+            }
+            for entry in self.process_settings()
+            if entry['enabled']
+        ]
+
+    def process_settings(self) -> list[dict]:
+        """Return dependency-aware settings for enabled and disabled rows."""
         result = []
         for row in self._advanced_rows:
-            if not row['enabled'].isChecked():
-                continue
             result.append(
                 {
                     'button': row['key'],
+                    'enabled': row['enabled'].isChecked(),
                     'duration_seconds': row['duration'].value(),
                     'depends_on': str(row['dependency'].currentData() or ''),
                     'dependency_type': str(
@@ -10265,6 +10284,11 @@ CMD ["bash"]
             self._launch_plan.get('mode', 'legacy') if isinstance(self._launch_plan, dict) else 'legacy',
             self._start_auto_launch_measurement,
             self,
+            process_settings=(
+                self._launch_plan.get('process_settings')
+                if isinstance(self._launch_plan, dict)
+                else None
+            ),
         )
         if dialog.exec_() != QDialog.Accepted:
             return
@@ -10285,6 +10309,7 @@ CMD ["bash"]
                 recording_delay,
                 mode=dialog.mode(),
                 processes=processes,
+                process_settings=dialog.process_settings(),
             )
         except OSError as exc:
             QMessageBox.warning(

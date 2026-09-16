@@ -588,6 +588,8 @@ The saved format stores:
 - `processes`: advanced button definitions with `duration_seconds`, optional
   `depends_on`, `dependency_type` (`hard` or `soft`), and
   `ready_percentage`;
+- `process_settings`: settings for all advanced rows, including disabled rows,
+  so temporarily unused dependency choices are retained;
 - `shutdown.order`: reverse or custom stop order;
 - optional `shutdown.skip`;
 - optional button text/tooltip metadata;

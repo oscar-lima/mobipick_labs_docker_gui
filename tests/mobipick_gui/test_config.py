@@ -474,6 +474,33 @@ def test_advanced_launch_sequence_round_trip(tmp_path):
     assert plan['processes'] == processes
 
 
+def test_disabled_advanced_process_settings_round_trip(tmp_path):
+    launches = tmp_path / 'advanced.yaml'
+    process_settings = [
+        {
+            'button': 'sim',
+            'enabled': False,
+            'duration_seconds': 20.0,
+            'depends_on': 'roscore',
+            'dependency_type': 'soft',
+            'ready_percentage': 30.0,
+        }
+    ]
+
+    save_launch_sequence_plan(
+        launches,
+        [],
+        [],
+        mode='advanced',
+        processes=[],
+        process_settings=process_settings,
+    )
+    plan = load_launch_sequence_plan(None, launches)
+
+    assert plan['processes'] == []
+    assert plan['process_settings'] == process_settings
+
+
 def test_relative_launch_config_can_load_user_config_fallback(monkeypatch, tmp_path):
     launch_dir = tmp_path / 'launch_sequences'
     monkeypatch.setattr(config_module, 'LAUNCH_SEQUENCE_DIR', launch_dir)

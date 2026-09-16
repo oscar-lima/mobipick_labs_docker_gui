@@ -346,6 +346,56 @@ def test_auto_launch_wizard_opens_advanced_profile():
     app.processEvents()
 
 
+def test_auto_launch_wizard_preserves_disabled_dependency_settings():
+    app = QApplication.instance() or QApplication([])
+    buttons = [('roscore', 'Roscore'), ('sim', 'Simulation')]
+    dialog = AutoLaunchWizard(
+        buttons,
+        [],
+        Path('/tmp/auto_launch_test.yaml'),
+        processes=[
+            {
+                'button': 'sim',
+                'duration_seconds': 12,
+                'depends_on': 'roscore',
+                'dependency_type': 'soft',
+                'ready_percentage': 40,
+            }
+        ],
+        mode='advanced',
+    )
+    dialog._advanced_rows[1]['enabled'].setChecked(False)
+
+    settings = dialog.process_settings()
+
+    assert dialog.processes() == []
+    assert settings[1] == {
+        'button': 'sim',
+        'enabled': False,
+        'duration_seconds': 12.0,
+        'depends_on': 'roscore',
+        'dependency_type': 'soft',
+        'ready_percentage': 40.0,
+    }
+    dialog.close()
+
+    reopened = AutoLaunchWizard(
+        buttons,
+        [],
+        Path('/tmp/auto_launch_test.yaml'),
+        processes=[],
+        process_settings=settings,
+        mode='advanced',
+    )
+    sim_row = reopened._advanced_rows[1]
+    assert not sim_row['enabled'].isChecked()
+    assert sim_row['dependency'].currentData() == 'roscore'
+    assert sim_row['dependency_type'].currentData() == 'soft'
+    assert sim_row['percentage'].value() == 40
+    reopened.close()
+    app.processEvents()
+
+
 def test_dependency_schedule_supports_hard_and_soft_dependencies():
     schedule = dependency_launch_schedule(
         [

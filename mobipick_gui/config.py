@@ -948,6 +948,7 @@ def load_launch_sequence_plan(
 
     timeline: list[dict] = []
     processes: list[dict] = []
+    process_settings: list[dict] = []
     mode = 'legacy'
     shutdown_order: list[str] = []
     button_cfg = dict(button_defaults)
@@ -961,6 +962,26 @@ def load_launch_sequence_plan(
                 processes = _normalize_processes(
                     data.get('processes', data.get('advanced', []))
                 )
+                raw_process_settings = data.get('process_settings')
+                if isinstance(raw_process_settings, list):
+                    for raw in raw_process_settings:
+                        normalized_entries = _normalize_processes([raw])
+                        if not normalized_entries:
+                            continue
+                        normalized = normalized_entries[0]
+                        raw_enabled = raw.get('enabled', True)
+                        if isinstance(raw_enabled, str):
+                            normalized['enabled'] = (
+                                raw_enabled.strip().lower()
+                                not in {'0', 'false', 'no', 'off'}
+                            )
+                        else:
+                            normalized['enabled'] = bool(raw_enabled)
+                        process_settings.append(normalized)
+                else:
+                    process_settings = [
+                        {**entry, 'enabled': True} for entry in processes
+                    ]
                 raw_mode = str(data.get('mode') or '').strip().lower()
                 if processes and raw_mode != 'legacy':
                     mode = 'advanced'
@@ -1011,6 +1032,7 @@ def load_launch_sequence_plan(
         'timeline': timeline,
         'mode': mode,
         'processes': processes,
+        'process_settings': process_settings,
         'shutdown_order': shutdown_order,
         'shutdown_skip': shutdown_skip,
         'button': button_cfg,
@@ -1042,6 +1064,7 @@ def save_launch_sequence_plan(
     *,
     mode: str = 'legacy',
     processes: list[dict] | None = None,
+    process_settings: list[dict] | None = None,
 ) -> Path:
     """Persist an auto-launch sequence to a user-writable YAML file."""
     destination = Path(path).expanduser()
@@ -1055,6 +1078,8 @@ def save_launch_sequence_plan(
     }
     if mode == 'advanced':
         data['processes'] = list(processes or [])
+    if process_settings is not None:
+        data['process_settings'] = list(process_settings)
     if button:
         data['button'] = {
             key: value
