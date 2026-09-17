@@ -368,6 +368,34 @@ def test_button_layout_round_trips_three_optional_generic_args(tmp_path):
     assert loaded['sim']['arg_3_applies'] is True
 
 
+def test_button_layout_saves_generic_arg_definition_only_where_it_applies(tmp_path):
+    target = tmp_path / 'generic_args.yaml'
+    base = {'kind': 'command', 'command': 'true'}
+    save_button_layout(
+        target,
+        [
+            {**base, 'key': 'a', 'label': 'A',
+             'arg_1_name': 'robot', 'arg_1_options': ['thor'], 'arg_1_applies': False,
+             'arg_2_name': 'unused', 'arg_2_options': ['x', 'y'], 'arg_2_applies': False},
+            {**base, 'key': 'b', 'label': 'B',
+             'arg_1_name': 'robot', 'arg_1_options': ['thor'], 'arg_1_applies': True,
+             'arg_2_name': 'unused', 'arg_2_options': ['x', 'y'], 'arg_2_applies': False},
+        ],
+    )
+
+    text = target.read_text(encoding='utf-8')
+    assert text.count('arg_1_name: robot') == 1
+    # a slot nobody applies yet keeps its definition on the first button
+    assert text.count('arg_2_name: unused') == 1
+
+    loaded = {entry['key']: entry for entry in load_button_layout(target)}
+    assert loaded['b']['arg_1_name'] == 'robot'
+    assert loaded['b']['arg_1_options'] == ['thor']
+    assert loaded['b']['arg_1_applies'] is True
+    assert loaded['a']['arg_2_name'] == 'unused'
+    assert loaded['a']['arg_2_options'] == ['x', 'y']
+
+
 def test_writable_button_config_path_avoids_packaged_resources(
     monkeypatch,
     tmp_path,
@@ -402,6 +430,17 @@ def test_writable_workspace_button_config_path_keeps_existing_workspace_copy(
     source = profile_dir / 'gpt_ws_button_commands_labs.yaml'
 
     assert writable_workspace_button_config_path(source, 'gpt_ws') == source
+
+
+def test_writable_workspace_button_config_path_saves_external_profile_in_place(
+    monkeypatch,
+    tmp_path,
+):
+    profile_dir = tmp_path / 'button_profiles'
+    monkeypatch.setattr(config_module, 'BUTTON_PROFILE_DIR', profile_dir)
+    source = tmp_path / 'my_ws' / 'src' / 'tool' / 'buttons.yaml'
+
+    assert writable_workspace_button_config_path(source, 'my_ws') == source
 
 
 def test_writable_workspace_docker_cp_config_path_is_workspace_specific(

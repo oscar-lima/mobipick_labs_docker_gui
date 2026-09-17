@@ -724,7 +724,14 @@ def writable_workspace_button_config_path(
     source: str | Path | None,
     workspace_name: str,
 ) -> Path:
-    """Return a workspace-specific writable button profile path."""
+    """Return a workspace-specific writable button profile path.
+
+    Packaged profiles (under the project root) and profiles in the shared
+    user profile directory get a workspace-prefixed copy in that directory.
+    A profile the user keeps elsewhere, e.g. inside a workspace repository,
+    is saved in place so that file stays the single source of truth (same
+    rule as writable_launch_sequence_path).
+    """
     raw_path = Path(source).expanduser() if source else BUTTON_CONFIG_FILE
     name = raw_path.name or BUTTON_CONFIG_FILE.name
     workspace = _safe_button_profile_part(workspace_name)
@@ -733,6 +740,11 @@ def writable_workspace_button_config_path(
         and raw_path.stem.startswith(f'{workspace}_')
     ):
         return raw_path
+    if raw_path.is_absolute() and raw_path.parent != BUTTON_PROFILE_DIR:
+        try:
+            raw_path.relative_to(PROJECT_ROOT)
+        except ValueError:
+            return raw_path
     return BUTTON_PROFILE_DIR / f'{workspace}_{name}'
 
 
@@ -776,15 +788,39 @@ def _button_entry_for_save(entry: dict) -> dict:
     return saved
 
 
+def _strip_unused_arg_definitions(saved: list[dict]) -> list[dict]:
+    """Keep each generic argument slot's name/options only where it applies.
+
+    The editor copies a slot's definition onto every button because the
+    dropdown is global; persisting that copy on buttons that do not use the
+    slot only bloats the profile. The loader takes the definition from the
+    first button that carries it, so it stays on the applying buttons - or on
+    the first button that defines it when no button applies yet.
+    """
+    for slot in GENERIC_BUTTON_ARG_SLOTS:
+        name_field = f'arg_{slot}_name'
+        options_field = f'arg_{slot}_options'
+        applies_field = f'arg_{slot}_applies'
+        defining = [entry for entry in saved if entry.get(name_field)]
+        if not defining:
+            continue
+        keep = [entry for entry in defining if entry.get(applies_field)] or defining[:1]
+        for entry in defining:
+            if entry not in keep:
+                entry.pop(name_field, None)
+                entry.pop(options_field, None)
+    return saved
+
+
 def save_button_layout(path: str | Path, entries: list[dict]) -> Path:
     """Persist a normalized button profile."""
     destination = Path(path).expanduser()
     destination.parent.mkdir(parents=True, exist_ok=True)
     data = {
-        'buttons': [
+        'buttons': _strip_unused_arg_definitions([
             _button_entry_for_save(entry)
             for entry in ensure_required_button_layout(entries)
-        ]
+        ])
     }
     temporary = destination.with_suffix(destination.suffix + '.tmp')
     with temporary.open('w', encoding='utf-8') as handle:
