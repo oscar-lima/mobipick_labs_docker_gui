@@ -413,8 +413,10 @@ The tab search is separate from the documentation window search.
   stop the button, after the GUI signals the original process. Check
   **Host** to run that button's command directly on the host instead of inside
   a Mobipick Docker container; saving writes this choice to the button profile.
-  While workspace processes are running, this action instead shows the active
-  commands read-only; stop the processes to enable editing.
+  You can edit and save the profile while workspace processes are running.
+  Changes apply to later launches. A running command keeps the launch and stop
+  settings with which it started; a removed button remains available until its
+  running command stops.
   Host commands do not check or automatically start Roscore. If the GUI's
   local Roscore is already running, the GUI gives each newly started Host
   command a matching `ROS_MASTER_URI` and a host-reachable `ROS_IP` so ROS

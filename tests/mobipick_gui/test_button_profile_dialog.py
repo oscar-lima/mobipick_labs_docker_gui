@@ -6,7 +6,6 @@ os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
-    QAbstractItemView,
     QApplication,
     QDialog,
     QDialogButtonBox,
@@ -99,7 +98,9 @@ def test_button_profile_dialog_is_a_maximizable_top_level_window(tmp_path):
     app.processEvents()
 
 
-def test_button_profile_dialog_is_read_only_while_processes_run(tmp_path):
+def test_button_profile_dialog_explains_changes_apply_to_future_launches(
+    tmp_path,
+):
     app = QApplication.instance() or QApplication([])
     dialog = ButtonProfileDialog(
         [
@@ -114,35 +115,33 @@ def test_button_profile_dialog_is_read_only_while_processes_run(tmp_path):
         ],
         Path(tmp_path / 'source.yaml'),
         Path(tmp_path / 'target.yaml'),
-        read_only=True,
     )
 
-    assert dialog.windowTitle() == 'Toolbar Button Commands'
-    assert dialog.table.editTriggers() == QAbstractItemView.NoEditTriggers
+    assert dialog.windowTitle() == 'Configure Toolbar Buttons'
     assert dialog.table.item(0, dialog._field_column('command')).text() == (
         'rosrun demo_package tool'
     )
-    assert all(
-        not dialog.table.item(0, column).flags() & Qt.ItemIsEditable
-        for column in range(dialog.table.columnCount())
-    )
-    assert not dialog.table.item(
+    assert dialog.table.item(
+        0,
+        dialog._field_column('command'),
+    ).flags() & Qt.ItemIsEditable
+    assert dialog.table.item(
         0,
         dialog._field_column('host'),
     ).flags() & Qt.ItemIsUserCheckable
-    assert all(
-        button.isHidden()
-        for button in dialog.findChildren(QPushButton)
-        if button.text() in {'Add Command', 'Load Profile', 'Export Profile'}
-    )
+    assert 'running commands keep' in dialog.findChildren(
+        main_window_module.QLabel,
+    )[0].text()
     button_box = dialog.findChild(QDialogButtonBox)
-    assert button_box.standardButtons() == QDialogButtonBox.Close
+    assert button_box.standardButtons() == (
+        QDialogButtonBox.Save | QDialogButtonBox.Cancel
+    )
 
     dialog.deleteLater()
     app.processEvents()
 
 
-def test_open_button_profile_dialog_falls_back_to_read_only_when_running(
+def test_open_button_profile_dialog_saves_without_resetting_running_tabs(
     monkeypatch,
     tmp_path,
 ):
@@ -156,21 +155,32 @@ def test_open_button_profile_dialog_falls_back_to_read_only_when_running(
             calls.append('shown')
             return QDialog.Accepted
 
+        def button_layout(self):
+            return [{'key': 'demo', 'command': 'new command'}]
+
     monkeypatch.setattr(main_window_module, 'ButtonProfileDialog', FakeDialog)
     source_path = tmp_path / 'source.yaml'
     save_path = tmp_path / 'save.yaml'
     harness = SimpleNamespace(
-        _workspace_processes_running=lambda: True,
         _resolved_button_config_path=lambda: source_path,
         _button_profile_save_path=lambda _source: save_path,
         _button_layout_for_editor=lambda: [{'key': 'demo'}],
         _workspace_button_profile_sources=lambda: [],
+        _remember_button_profile_path=lambda *args: calls.append('remembered'),
+        _reload_workspace_profile=lambda **kwargs: calls.append(
+            ('reloaded', kwargs)
+        ),
+        _create_workspace_tabs=lambda: calls.append('created-tabs'),
+        _apply_env_to_all_tabs=lambda: calls.append('applied-env'),
+        _log_info=lambda message: calls.append(('log', message)),
     )
 
     main_window_module.MainWindow._open_button_profile_dialog(harness)
 
-    assert calls[0][4]['read_only'] is True
+    assert 'read_only' not in calls[0][4]
     assert calls[1] == 'shown'
+    assert ('reloaded', {'preserve_processes': True}) in calls
+    assert 'created-tabs' in calls
 
 
 def test_button_profile_dialog_edits_and_saves_stop_command(tmp_path):

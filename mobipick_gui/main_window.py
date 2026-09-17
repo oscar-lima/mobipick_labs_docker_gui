@@ -879,45 +879,33 @@ class ButtonProfileDialog(QDialog):
         parent: QWidget | None = None,
         *,
         workspace_profiles: list[tuple[str, Path]] | None = None,
-        read_only: bool = False,
     ):
         # Establish the normal top-level window type before
         # MaximizableDialog adds its window-manager hints. Changing the type
         # afterwards can leave some window managers treating this as a dialog
         # whose maximize controls do not act on the window.
         super().__init__(None, Qt.Window)
-        self.setWindowTitle(
-            'Toolbar Button Commands'
-            if read_only
-            else 'Configure Toolbar Buttons'
-        )
+        self.setWindowTitle('Configure Toolbar Buttons')
         self.resize(960, 560)
         self._owner = parent
         self._source_path = source_path
         self._save_path = save_path
         self._workspace_profiles = dict(workspace_profiles or [])
-        self._read_only = read_only
 
         root = QVBoxLayout(self)
-        if read_only:
-            note_text = (
-                'Workspace processes are running, so the active toolbar profile '
-                'is shown read-only. Stop them before changing these commands.'
-            )
-        else:
-            note_text = (
-                'Roscore and Terminal are always present and are not editable '
-                'here. Every listed button runs its command in its own tab. Sim '
-                'and RViz cannot be removed. Stop Command is used by Host command '
-                'buttons.'
-            )
+        note_text = (
+            'Roscore and Terminal are always present and are not editable '
+            'here. Every listed button runs its command in its own tab. Sim '
+            'and RViz cannot be removed. Stop Command is used by Host command '
+            'buttons. Changes affect future launches; running commands keep '
+            'the settings with which they were started.'
+        )
         note = QLabel(note_text)
         note.setWordWrap(True)
         root.addWidget(note)
 
         path_text = f'Loaded from: {source_path}'
-        if not read_only:
-            path_text += f'\nSaves to: {save_path}'
+        path_text += f'\nSaves to: {save_path}'
         self.path_label = QLabel(path_text)
         self.path_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         root.addWidget(self.path_label)
@@ -925,8 +913,6 @@ class ButtonProfileDialog(QDialog):
         self.table = ButtonProfileTable(self.COLUMNS)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)
-        if read_only:
-            self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         root.addWidget(self.table, 1)
 
         for entry in entries:
@@ -972,17 +958,10 @@ class ButtonProfileDialog(QDialog):
         actions.addStretch(1)
         root.addLayout(actions)
 
-        if read_only:
-            for index in range(actions.count() - 1):
-                widget = actions.itemAt(index).widget()
-                if widget is not None:
-                    widget.setVisible(False)
-            buttons = QDialogButtonBox(QDialogButtonBox.Close)
-        else:
-            buttons = QDialogButtonBox(
-                QDialogButtonBox.Save | QDialogButtonBox.Cancel
-            )
-            buttons.accepted.connect(self.accept)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.Save | QDialogButtonBox.Cancel
+        )
+        buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         root.addWidget(buttons)
 
@@ -995,8 +974,7 @@ class ButtonProfileDialog(QDialog):
             if field in self.BOOL_FIELDS:
                 item = QTableWidgetItem()
                 flags = Qt.ItemIsEnabled | Qt.ItemIsSelectable
-                if not self._read_only:
-                    flags |= Qt.ItemIsUserCheckable
+                flags |= Qt.ItemIsUserCheckable
                 item.setFlags(flags)
                 item.setCheckState(
                     Qt.Checked if bool(entry.get(field, False)) else Qt.Unchecked
@@ -1005,7 +983,7 @@ class ButtonProfileDialog(QDialog):
                 value = entry.get(field, '')
                 item = QTableWidgetItem('' if value is None else str(value))
                 flags = Qt.ItemIsEnabled | Qt.ItemIsSelectable
-                if not self._read_only and not (
+                if not (
                     locked
                     and field in {'key', 'kind', 'action'}
                 ):
@@ -1043,8 +1021,7 @@ class ButtonProfileDialog(QDialog):
                 if not stop_item.text() and hidden_command:
                     stop_item.setText(hidden_command)
                 flags = Qt.ItemIsEnabled | Qt.ItemIsSelectable
-                if not self._read_only:
-                    flags |= Qt.ItemIsEditable
+                flags |= Qt.ItemIsEditable
                 stop_item.setFlags(flags)
                 stop_item.setToolTip('Command to run when this Host button stops')
             else:
@@ -1381,8 +1358,7 @@ class ButtonProfileDialog(QDialog):
             if field in self.BOOL_FIELDS:
                 item = QTableWidgetItem()
                 flags = Qt.ItemIsEnabled | Qt.ItemIsSelectable
-                if not self._read_only:
-                    flags |= Qt.ItemIsUserCheckable
+                flags |= Qt.ItemIsUserCheckable
                 item.setFlags(flags)
                 item.setCheckState(
                     Qt.Checked if bool(entry.get(field, False)) else Qt.Unchecked
@@ -1390,7 +1366,7 @@ class ButtonProfileDialog(QDialog):
             else:
                 item = QTableWidgetItem(str(entry.get(field, '') or ''))
                 flags = Qt.ItemIsEnabled | Qt.ItemIsSelectable
-                if not self._read_only and not (
+                if not (
                     locked
                     and field in {'key', 'kind', 'action'}
                 ):
@@ -3041,6 +3017,8 @@ class MainWindow(QMainWindow):
         self._button_widgets: dict[str, QPushButton] = {}
         self._config_buttons: dict[str, dict] = {}
         self._config_button_order: list[str] = []
+        self._active_config_button_configs: dict[str, dict] = {}
+        self._retired_config_button_keys: set[str] = set()
         self._auto_launch_running = False
         self._auto_launch_stopping = False
         self._auto_launch_timers: list[QTimer] = []
@@ -4480,7 +4458,6 @@ class MainWindow(QMainWindow):
         return writable_workspace_docker_cp_config_path(workspace.name)
 
     def _open_button_profile_dialog(self) -> None:
-        read_only = self._workspace_processes_running()
         source_path = self._resolved_button_config_path()
         save_path = self._button_profile_save_path(source_path)
         dialog = ButtonProfileDialog(
@@ -4489,11 +4466,7 @@ class MainWindow(QMainWindow):
             save_path,
             self,
             workspace_profiles=self._workspace_button_profile_sources(),
-            read_only=read_only,
         )
-        if read_only:
-            dialog.exec_()
-            return
         if dialog.exec_() != QDialog.Accepted:
             return
         button_layout = dialog.button_layout()
@@ -4512,8 +4485,7 @@ class MainWindow(QMainWindow):
             )
             return
 
-        self._reset_workspace_tabs()
-        self._reload_workspace_profile()
+        self._reload_workspace_profile(preserve_processes=True)
         self._create_workspace_tabs()
         self._apply_env_to_all_tabs()
         self._log_info(f'saved toolbar button profile to {saved_path}')
@@ -5339,6 +5311,8 @@ class MainWindow(QMainWindow):
         self._last_log_origin.clear()
         self._synced_container_refs.clear()
         self._toggle_states.clear()
+        self._active_config_button_configs.clear()
+        self._retired_config_button_keys.clear()
 
         for tab in list(self.tasks.values()):
             index = self.tabs.indexOf(tab.output)
@@ -5398,11 +5372,21 @@ class MainWindow(QMainWindow):
             if manager is not None:
                 manager.set_apply_delay_ms(self._window_layout_delay_ms)
 
-    def _reload_workspace_profile(self) -> None:
+    def _reload_workspace_profile(
+        self,
+        *,
+        preserve_processes: bool = False,
+    ) -> None:
+        button_states: dict[str, tuple[str, str, bool]] = {}
         old_keys = list(self._config_button_order)
         for key in old_keys:
             button = self._button_widgets.pop(key, None)
             if button:
+                button_states[key] = (
+                    self._toggle_states.get(key, 'red'),
+                    button.text(),
+                    button.isEnabled(),
+                )
                 self._top_controls_layout.removeWidget(button)
                 button.deleteLater()
         self._button_layout = load_button_layout(
@@ -5420,10 +5404,58 @@ class MainWindow(QMainWindow):
         terminal_index = self._top_controls_layout.indexOf(
             self.terminal_button
         )
+        runtime_layout = list(self._button_layout)
+        configured_keys = {
+            str(entry.get('key') or '').strip()
+            for entry in runtime_layout
+            if isinstance(entry, dict)
+        }
+        retired_keys: set[str] = set()
+        for key, config in list(self._active_config_button_configs.items()):
+            tab = self.tasks.get(key)
+            active = bool(tab and tab.is_running()) or (
+                self._toggle_states.get(key) == 'yellow'
+            )
+            if not active:
+                self._active_config_button_configs.pop(key, None)
+                continue
+            if key in configured_keys:
+                continue
+            runtime_layout.append(copy.deepcopy(config))
+            retired_keys.add(key)
+        self._retired_config_button_keys = retired_keys
         self._build_configurable_buttons(
             self._top_controls_layout,
             insert_at=terminal_index,
+            entries=runtime_layout,
         )
+        for key in self._config_button_order:
+            config = self._config_buttons.get(key, {})
+            if key in button_states:
+                state, text, enabled = button_states[key]
+                label = self._config_label(config)
+                if state == 'red':
+                    text = f'Start {label}'
+                elif state == 'green':
+                    text = f'Stop {label}'
+                self._set_config_visual(config, state, text, enabled)
+                continue
+            label = self._config_label(config)
+            tab = self.tasks.get(key)
+            if tab is not None and tab.is_running():
+                self._set_config_visual(
+                    config,
+                    'green',
+                    f'Stop {label}',
+                    True,
+                )
+            else:
+                self._set_config_visual(
+                    config,
+                    'red',
+                    f'Start {label}',
+                    True,
+                )
         self._refresh_generic_arg_controls()
         self._auto_launch_base_tooltip = str(
             self._launch_plan.get('button', {}).get('tooltip') or ''
@@ -5433,7 +5465,8 @@ class MainWindow(QMainWindow):
         else:
             state = 'off'
         self._set_auto_launch_recording_hint(state)
-        self._update_buttons()
+        if not preserve_processes:
+            self._update_buttons()
 
     def _open_workspace_manager(self, select_name: str = '') -> None:
         if self._workspace_dialog:
@@ -7363,10 +7396,11 @@ CMD ["bash"]
         layout: QHBoxLayout,
         *,
         insert_at: int | None = None,
+        entries: list[dict] | None = None,
     ):
         self._config_buttons: dict[str, dict] = {}
         self._config_button_order = []
-        for entry in self._button_layout:
+        for entry in self._button_layout if entries is None else entries:
             if not isinstance(entry, dict):
                 continue
             key = str(entry.get('key', '')).strip()
@@ -7429,6 +7463,18 @@ CMD ["bash"]
         else:
             self._dispatch_builtin_action(config)
 
+    def _remove_retired_config_button(self, key: str) -> None:
+        """Remove a deleted profile button after its old process exits."""
+        self._retired_config_button_keys.discard(key)
+        self._config_buttons.pop(key, None)
+        if key in self._config_button_order:
+            self._config_button_order.remove(key)
+        button = self._button_widgets.pop(key, None)
+        if button is not None:
+            self._top_controls_layout.removeWidget(button)
+            button.deleteLater()
+        self._toggle_states.pop(key, None)
+
     def _config_label(self, config: dict) -> str:
         return str(config.get('label') or config.get('key') or 'Command')
 
@@ -7451,10 +7497,15 @@ CMD ["bash"]
     ):
         for key in self._config_button_order:
             config = self._config_buttons.get(key, {})
+            running_config = getattr(
+                self,
+                '_active_config_button_configs',
+                {},
+            ).get(key, config)
             label = self._config_label(config)
             if (
                 preserve_running_host_commands
-                and self._config_runs_on_host(config)
+                and self._config_runs_on_host(running_config)
                 and (tab := self.tasks.get(key)) is not None
                 and tab.is_running()
             ):
@@ -7528,16 +7579,29 @@ CMD ["bash"]
         tab = self._ensure_tab(key, label, closable=False)
         if tab.is_running():
             self._set_config_visual(config, 'yellow', f'Stopping {label}...', False)
+            running_config = getattr(
+                self,
+                '_active_config_button_configs',
+                {},
+            ).get(
+                key,
+                config,
+            )
+
             def _done():
                 self._set_config_visual(config, 'red', f'Start {label}', True)
+
             stop_cmd_for_running = (
-                self._prepared_config_stop_command(config)
-                if run_on_host else None
+                self._prepared_config_stop_command(running_config)
+                if self._config_runs_on_host(running_config) else None
             )
             self._stop_custom_tab(tab, on_stopped=_done, stop_command=stop_cmd_for_running)
             return
         if not run_on_host and not self._confirm_workspace_mismatch_warning(label):
             return
+        if not hasattr(self, '_active_config_button_configs'):
+            self._active_config_button_configs = {}
+        self._active_config_button_configs[key] = copy.deepcopy(config)
 
         def _apply_env(
             cmd: str,
@@ -10373,7 +10437,11 @@ CMD ["bash"]
                 key
                 for key in order
                 if not self._config_runs_on_host(
-                    self._config_buttons.get(key, {})
+                    getattr(
+                        self,
+                        '_active_config_button_configs',
+                        {},
+                    ).get(key, self._config_buttons.get(key, {}))
                 )
             ]
         self._auto_launch_running = False
@@ -11297,7 +11365,12 @@ CMD ["bash"]
 
         for cfg_key in self._config_button_order:
             cfg = self._config_buttons.get(cfg_key, {})
-            if self._config_runs_on_host(cfg):
+            running_cfg = getattr(
+                self,
+                '_active_config_button_configs',
+                {},
+            ).get(cfg_key, cfg)
+            if self._config_runs_on_host(running_cfg):
                 continue
             tab_obj = self.tasks.get(cfg_key)
             running = bool(tab_obj and tab_obj.is_running())
@@ -11524,7 +11597,11 @@ CMD ["bash"]
             tab = self.tasks.get(key)
             if tab is None or not tab.is_running():
                 continue
-            config = self._config_buttons.get(key, {})
+            config = getattr(
+                self,
+                '_active_config_button_configs',
+                {},
+            ).get(key, self._config_buttons.get(key, {}))
             stop_command = self._prepared_config_stop_command(config)
             if stop_command:
                 commands.append(['bash', '-lc', stop_command])
@@ -13039,6 +13116,13 @@ CMD ["bash"]
             cfg = self._config_buttons[key]
             label = self._config_label(cfg)
             self._set_config_visual(cfg, 'red', f'Start {label}', True)
+            getattr(
+                self,
+                '_active_config_button_configs',
+                {},
+            ).pop(key, None)
+            if key in getattr(self, '_retired_config_button_keys', set()):
+                self._remove_retired_config_button(key)
             return
         if key == 'tables':
             if self._roscore_stopping or self._toggle_states.get('tables') == 'yellow':

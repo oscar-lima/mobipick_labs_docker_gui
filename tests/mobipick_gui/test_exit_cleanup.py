@@ -42,6 +42,14 @@ def test_exit_cleanup_runs_active_button_stop_commands_in_reverse_order():
                 'pass_ros_master_uri': True,
             },
         },
+        _active_config_button_configs={
+            'last': {
+                'kind': 'command',
+                'host': True,
+                'stop_command': 'original-stop-last',
+                'pass_ros_master_uri': True,
+            },
+        },
         _current_master_uri=lambda: 'http://robot:11311',
         tasks={
             'first': _tab(True),
@@ -73,7 +81,7 @@ def test_exit_cleanup_runs_active_button_stop_commands_in_reverse_order():
             'bash',
             '-lc',
             'COMPOSE_IGNORE_ORPHANS= '
-            "ROS_MASTER_URI='http://robot:11311' stop-last",
+            "ROS_MASTER_URI='http://robot:11311' original-stop-last",
         ],
         ['bash', '-lc', 'COMPOSE_IGNORE_ORPHANS= docker compose stop first'],
     ]

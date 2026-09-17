@@ -502,9 +502,11 @@ tooltip; other execution fields are preserved when saving. The stop-command
 column is shown only when at least one button uses host execution. Its cells
 are enabled only for host command buttons, and the command runs after the GUI
 sends SIGINT to the original command process.
-When workspace processes are running, the action opens the active profile
-read-only so its commands remain available for inspection without rebuilding
-the live toolbar.
+Toolbar profiles remain editable while workspace processes are running. Saved
+changes are used by later launches without rebuilding process tabs. A running
+command retains the launch and stop settings with which it was started; if its
+button is removed from the profile, the button remains available until that
+command stops.
 
 Use **Import from Workspace...** to select another registered workspace and
 choose the individual toolbar buttons to copy. Imported buttons replace active

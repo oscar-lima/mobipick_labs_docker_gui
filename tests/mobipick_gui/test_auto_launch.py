@@ -549,8 +549,11 @@ def test_roscore_auto_launch_stop_preserves_host_commands():
         'roscore',
     ]
     harness._config_buttons = {
-        'litellm': {'kind': 'command', 'host': True},
+        'litellm': {'kind': 'command', 'host': False},
         'sim': {'kind': 'builtin', 'host': False},
+    }
+    harness._active_config_button_configs = {
+        'litellm': {'kind': 'command', 'host': True},
     }
     harness._config_runs_on_host = MainWindow._config_runs_on_host
     harness._trigger_auto_launch_step = lambda key, *, target_running: (
@@ -833,6 +836,52 @@ def test_host_config_command_does_not_start_roscore():
         event[:2] == ('start_program', 'bash')
         for event in events
         if isinstance(event, tuple)
+    )
+
+
+def test_running_config_command_uses_launch_snapshot_for_stop():
+    stopped = []
+    current_config = {
+        'key': 'host-node',
+        'label': 'Renamed Host Node',
+        'kind': 'command',
+        'command': 'new-start-command',
+        'host': False,
+    }
+    launch_config = {
+        'key': 'host-node',
+        'label': 'Host Node',
+        'kind': 'command',
+        'command': 'old-start-command',
+        'host': True,
+        'stop_command': 'old-stop-command',
+    }
+    tab = SimpleNamespace(is_running=lambda: True)
+    harness = SimpleNamespace(
+        _active_config_button_configs={'host-node': launch_config},
+        _get_button_widget=lambda _key: None,
+        _guard_toggle_action=lambda _key, _button: True,
+        _ensure_tab=lambda _key, _label, closable=False: tab,
+        _set_config_visual=lambda *args: None,
+        _stop_custom_tab=lambda _tab, **kwargs: stopped.append(kwargs),
+        _current_master_uri=lambda: '',
+        _config_runs_on_host=MainWindow._config_runs_on_host,
+        _neutralize_compose_ignore=MainWindow._neutralize_compose_ignore,
+    )
+    harness._config_label = MethodType(MainWindow._config_label, harness)
+    harness._prepared_config_stop_command = MethodType(
+        MainWindow._prepared_config_stop_command,
+        harness,
+    )
+    harness._run_config_command = MethodType(
+        MainWindow._run_config_command,
+        harness,
+    )
+
+    harness._run_config_command(current_config)
+
+    assert stopped[0]['stop_command'] == (
+        'COMPOSE_IGNORE_ORPHANS= old-stop-command'
     )
 
 
