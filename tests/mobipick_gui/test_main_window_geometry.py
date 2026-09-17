@@ -14,12 +14,17 @@ from PyQt5.QtWidgets import (
 )
 
 import mobipick_gui.main_window as main_window_module
+import mobipick_gui.window_utils as window_utils_module
 from mobipick_gui import window_control
 from mobipick_gui.main_window import (
     MainWindow,
     _configure_expanding_toolbar_button,
 )
-from mobipick_gui.window_utils import MaximizableDialog
+from mobipick_gui.window_utils import (
+    MaximizableDialog,
+    restore_window_geometry,
+    saved_window_state,
+)
 
 
 def test_maximizable_dialog_has_standard_window_controls():
@@ -33,6 +38,83 @@ def test_maximizable_dialog_has_standard_window_controls():
     assert flags & Qt.WindowCloseButtonHint
 
     dialog.deleteLater()
+    app.processEvents()
+
+
+def test_dialog_restores_and_saves_its_own_window_state(monkeypatch):
+    app = QApplication.instance() or QApplication([])
+    key = 'dialog.Configure Toolbar Buttons'
+    saved_updates = []
+    monkeypatch.setitem(
+        window_utils_module.CONFIG,
+        'window_states',
+        {key: {'geometry': [30, 40, 720, 510], 'maximized': False}},
+    )
+    monkeypatch.setattr(
+        window_utils_module,
+        'save_user_config_update',
+        lambda updates: saved_updates.append(updates),
+    )
+    monkeypatch.setenv('XDG_SESSION_TYPE', 'x11')
+
+    dialog = MaximizableDialog()
+    dialog.setWindowTitle('Configure Toolbar Buttons')
+    dialog.show()
+    app.processEvents()
+
+    assert dialog.geometry().getRect() == (30, 40, 720, 510)
+
+    dialog.setGeometry(50, 60, 800, 600)
+    dialog.hide()
+    app.processEvents()
+
+    assert saved_updates[-1] == {
+        'window_states': {
+            key: {
+                'geometry': [50, 60, 800, 600],
+                'maximized': False,
+            },
+        },
+    }
+    dialog.deleteLater()
+    app.processEvents()
+
+
+def test_wayland_restores_size_without_requesting_window_position():
+    app = QApplication.instance() or QApplication([])
+
+    class RecordingWindow(QMainWindow):
+        def __init__(self):
+            super().__init__()
+            self.set_geometry_calls = []
+
+        def setGeometry(self, *args):  # noqa: N802 - Qt API
+            self.set_geometry_calls.append(args)
+            super().setGeometry(*args)
+
+    window = RecordingWindow()
+    window.setGeometry(1, 2, 300, 200)
+    window.set_geometry_calls.clear()
+
+    maximized = restore_window_geometry(
+        window,
+        {'geometry': [30, 40, 720, 510], 'maximized': True},
+        desktop_session='wayland',
+    )
+
+    assert window.set_geometry_calls == []
+    assert window.size().width() == 720
+    assert window.size().height() == 510
+    assert maximized is True
+
+    state = saved_window_state(
+        window,
+        {'geometry': [30, 40, 700, 500]},
+        desktop_session='wayland',
+    )
+    assert state['geometry'][:2] == [30, 40]
+
+    window.deleteLater()
     app.processEvents()
 
 

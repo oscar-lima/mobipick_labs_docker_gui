@@ -28,6 +28,7 @@ from .external_links import open_external_url
 from .log_widget import LogTextEdit
 from .window_utils import (
     MaximizableDialog as QDialog,
+    PersistentWindowStateMixin,
     configure_maximizable_window,
 )
 
@@ -73,7 +74,7 @@ class HostDependency:
     install_commands: list[str] = field(default_factory=list)
 
 
-class ImageSetupWizard(QWizard):
+class ImageSetupWizard(PersistentWindowStateMixin, QWizard):
     """Collect initial Docker image setup choices."""
 
     NVIDIA_TOOLKIT_URL = (

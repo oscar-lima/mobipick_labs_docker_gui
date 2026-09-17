@@ -128,7 +128,10 @@ from .setup_wizard import HostDependency, ImageSetupWizard, SetupWizardSelection
 from .version import get_version
 from .window_utils import (
     MaximizableDialog as QDialog,
+    PersistentWindowStateMixin,
     configure_maximizable_window,
+    restore_window_geometry,
+    saved_window_state,
 )
 from .window_control import (
     GNOME_EXTENSION_INSTALL_COMMAND,
@@ -1489,7 +1492,7 @@ def _robot_race_is_enabled() -> bool:
     return bool(configured)
 
 
-class AutoLaunchProgressWindow(QWidget):
+class AutoLaunchProgressWindow(PersistentWindowStateMixin, QWidget):
     """Centered countdown and per-process Auto Launch progress display."""
 
     def __init__(
@@ -1570,18 +1573,19 @@ class AutoLaunchProgressWindow(QWidget):
         self.status_label.setText(
             f'Demo ready in {self._total_seconds:.1f} s'
         )
-        self.adjustSize()
-        parent = self.parentWidget()
-        if parent is not None and parent.isVisible():
-            bounds = parent.frameGeometry()
-        else:
-            screen = self.screen() or QGuiApplication.primaryScreen()
-            bounds = screen.availableGeometry() if screen else None
-        if bounds is not None:
-            self.move(
-                bounds.center().x() - self.width() // 2,
-                bounds.center().y() - self.height() // 2,
-            )
+        if not getattr(self, '_persistent_window_state_restored', False):
+            self.adjustSize()
+            parent = self.parentWidget()
+            if parent is not None and parent.isVisible():
+                bounds = parent.frameGeometry()
+            else:
+                screen = self.screen() or QGuiApplication.primaryScreen()
+                bounds = screen.availableGeometry() if screen else None
+            if bounds is not None:
+                self.move(
+                    bounds.center().x() - self.width() // 2,
+                    bounds.center().y() - self.height() // 2,
+                )
         self.show()
         self._update_progress()
         if self._total_seconds > 0:
@@ -13251,13 +13255,15 @@ CMD ["bash"]
     # ---------- Close ----------
 
     def _restore_window_state(self, window_cfg: dict) -> None:
-        geometry = window_cfg.get('geometry', [])
-        if len(geometry) == 4:
-            try:
-                self.setGeometry(*[int(value) for value in geometry])
-            except (TypeError, ValueError):
-                pass
-        self._restore_maximized = bool(window_cfg.get('maximized'))
+        self._restore_maximized = restore_window_geometry(
+            self,
+            window_cfg,
+            desktop_session=getattr(
+                self,
+                '_desktop_session_type',
+                desktop_session_type(),
+            ),
+        )
 
     def show_with_restored_state(self) -> None:
         """Show the window using the saved window-manager state.
@@ -13274,19 +13280,16 @@ CMD ["bash"]
             QTimer.singleShot(0, self.showMaximized)
 
     def _save_window_state(self) -> None:
-        geometry = self.normalGeometry()
-        if geometry.isNull():
-            geometry = self.geometry()
         updates = {
-            'window': {
-                'geometry': [
-                    geometry.x(),
-                    geometry.y(),
-                    geometry.width(),
-                    geometry.height(),
-                ],
-                'maximized': self.isMaximized(),
-            },
+            'window': saved_window_state(
+                self,
+                CONFIG.get('window', {}),
+                desktop_session=getattr(
+                    self,
+                    '_desktop_session_type',
+                    desktop_session_type(),
+                ),
+            ),
         }
         try:
             save_user_config_update(updates)

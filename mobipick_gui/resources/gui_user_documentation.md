@@ -20,6 +20,11 @@ The GUI changes button colors while a process is running or changing state:
 - Yellow means the process is starting or stopping.
 - Grey means the action is unavailable in the current mode.
 
+The GUI remembers the size and maximized state of the main window and every
+tool or configuration window. On Xorg it also restores each saved position;
+on Wayland, the desktop compositor chooses window positions. Closing and
+opening a window again restores its most recent state.
+
 ## ROS 1 Workspace selector
 
 The ROS 1 workspace selector controls which workspace is mounted into Docker
