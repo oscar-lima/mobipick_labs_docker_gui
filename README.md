@@ -686,6 +686,9 @@ click with a wait without missing events.
 | `GET /status` | Workspace, image, world, cached roscore/sim state, buttons, tabs, shells, active dialog. |
 | `GET /buttons` | Toolbar buttons with `state` (`red` stopped, `green` running, `yellow` busy, `grey` unavailable), `tooltip`, `runs_on` (`host` or `container`), and the log `tab` key. |
 | `POST /buttons/{key}/click`, `/start`, `/stop` | Press a button. `start`/`stop` are idempotent. Body may contain `wait_for` (event names) and `timeout`. |
+| `GET /presence`, `POST /presence`, `DELETE /presence` | Declare that a client is using the GUI (`{"name": "claude", "ttl_s": 600, "note": ""}`), refresh it, or withdraw it. While a client is present the window icon glows bright and the GUI log records who is working. The server remembers every button, custom command, and shell the client started; when the client withdraws (without `"keep": true`) or its `ttl_s` (default 10 min, max 30 min) lapses, the GUI stops those and logs the cleanup, so a crashed agent cannot leave the simulator running. |
+| `POST /reload` | Re-read `gui_settings.yaml` and the workspace button profile without restarting the GUI. Button commands, labels, tooltips and argument slots are picked up for the next press; running processes and their tabs are preserved. |
+| `POST /tabs/{key}/stop` | Stop the process behind a log tab: a button process (same as `/buttons/{key}/stop`), a `customN` command started with `/command`, or a remote shell. |
 | `GET /events?since=N&names=a,b` | Event history; add `follow=1&timeout=s` to stream NDJSON. |
 | `POST /wait` | Block until one of `events` arrives after `since` (default: now) or `timeout`. |
 | `GET /tabs`, `GET /tabs/{key}?tail=N&grep=RE` | Log tab list and plain-text tab contents. |
@@ -702,7 +705,19 @@ Events: `button_state`, `process_finished`, `auto_launch_started`,
 `auto_launch_ready`, `auto_launch_complete` (every process in the plan reached
 its ready time), `window_layout_applied` (the saved layout was replayed, which
 is the usual "everything is up" signal), `auto_launch_stopped`,
-`shell_opened`, `shell_exited`, `shell_closed`, and `gui_closing`.
+`shell_opened`, `shell_exited`, `shell_closed`, `client_connected`,
+`client_disconnected` (with `expired: true` when a TTL ran out), and
+`gui_closing`.
+
+### Window icon glow
+
+While the API is listening the main window icon carries a light-blue halo:
+light blue while nobody is connected, **green** while a client has declared
+presence with `POST /presence`, and pulsing while a request is being served.
+The colour change (not just brightness) is what makes "an agent is driving
+this GUI" readable at a glance on the dock. On GNOME
+the dock icon is styled through the bundled shell extension
+(`SetAppGlow`, protocol version 4); on other desktops `setWindowIcon` is used.
 
 ### Shell sessions and output streaming
 
@@ -727,12 +742,16 @@ foreground process group child of the session shell through `docker exec`.
 
 ```bash
 export MOBIPICK_GUI_REMOTE_URL=http://<gui-host>:8765   # and MOBIPICK_GUI_REMOTE_TOKEN
+mobipick-labs-docker-gui-remote hello claude --note "tables demo"   # icon glows until bye; repeat every <10 min
 mobipick-labs-docker-gui-remote status
 mobipick-labs-docker-gui-remote click auto_launch --wait window_layout_applied,auto_launch_complete --timeout 240
 mobipick-labs-docker-gui-remote --text tab sim --tail 40 --grep "ERROR|WARN"
 mobipick-labs-docker-gui-remote shell open
 mobipick-labs-docker-gui-remote --text shell exec 1 "rostopic list" --tail 20
 mobipick-labs-docker-gui-remote shell exec 1 "rosrun tables_demo_planning tables_demo_node.py" --no-wait
+mobipick-labs-docker-gui-remote stop-tab custom1                     # stop a /command launch
+mobipick-labs-docker-gui-remote reload                               # after editing a button profile
+mobipick-labs-docker-gui-remote bye claude                           # stops anything claude left running
 mobipick-labs-docker-gui-remote --text shell output 1 --follow --grep "ERROR|Success" --timeout 120
 mobipick-labs-docker-gui-remote shell interrupt 1
 mobipick-labs-docker-gui-remote shell close 1

@@ -13,6 +13,7 @@ import os
 import re
 import shutil
 import subprocess
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Mapping
@@ -485,6 +486,8 @@ def _gvariant_arg(value) -> str:
         return 'true' if value else 'false'
     if isinstance(value, int):
         return str(value)
+    if isinstance(value, float):
+        return repr(value)
     return _gvariant_quote(str(value))
 
 
@@ -544,6 +547,131 @@ def normalize_wid(raw: str) -> str:
         return value
 
 
+GNOME_APP_GLOW_PROTOCOL_VERSION = 4
+
+
+class GnomeAppGlow:
+    """Glow the app's dock/dash icon through the GNOME Shell extension.
+
+    GNOME 45+ ignores ``_NET_WM_ICON`` and takes launcher icons from the
+    desktop entry, so ``QWidget.setWindowIcon`` never reaches the dock.  The
+    extension's ``SetAppGlow`` method styles the icon actors instead.  Calls
+    go through ``gdbus`` on a worker thread; only the most recent level is
+    sent, so a fast pulse never queues up stale updates.
+    """
+
+    def __init__(
+        self,
+        app_id: str,
+        *,
+        color: str = 'rgba(120, 200, 255, 0.95)',
+        gdbus_bin: str = 'gdbus',
+        environ: Mapping[str, str] | None = None,
+        log_warning: LogFn | None = None,
+        probe: bool = True,
+    ):
+        self.app_id = app_id if app_id.endswith('.desktop') else f'{app_id}.desktop'
+        self.color = color
+        self._gdbus_bin = gdbus_bin
+        self._log_warning = log_warning or (lambda _msg: None)
+        self._available = False
+        self._level: float | None = None
+        self._sent: tuple[float, str] | None = None
+        self._cond = threading.Condition()
+        self._thread: threading.Thread | None = None
+        self._stopping = False
+        if probe and is_gnome_session(environ) and shutil.which(gdbus_bin):
+            version = self._call('Version')
+            self._available = bool(
+                version and int(version[0]) >= GNOME_APP_GLOW_PROTOCOL_VERSION
+            )
+
+    @property
+    def available(self) -> bool:
+        return self._available
+
+    def set_level(self, level: float, color: str | None = None) -> None:
+        """Request a glow level in ``[0, 1]`` and colour; ``0`` restores the plain icon.
+
+        The colour is part of the state, so a caller can switch the halo
+        between e.g. an idle and a busy colour without recreating the client.
+        """
+        if not self._available:
+            return
+        with self._cond:
+            self._level = max(0.0, min(1.0, float(level)))
+            if color:
+                self.color = str(color)
+            if self._thread is None or not self._thread.is_alive():
+                self._stopping = False
+                self._thread = threading.Thread(
+                    target=self._run, name='mobipick-app-glow', daemon=True
+                )
+                self._thread.start()
+            self._cond.notify()
+
+    def clear(self, timeout: float = 3.0) -> None:
+        """Restore the plain icon and stop the worker."""
+        if not self._available:
+            return
+        with self._cond:
+            self._level = 0.0
+            self._stopping = True
+            self._cond.notify()
+            thread = self._thread
+        if thread is not None:
+            thread.join(timeout)
+
+    def _run(self) -> None:
+        while True:
+            with self._cond:
+                while self._level is None or (self._level, self.color) == self._sent:
+                    if self._stopping:
+                        self._thread = None
+                        return
+                    self._cond.wait()
+                level, color = self._level, self.color
+            result = self._call('SetAppGlow', self.app_id, level, color)
+            with self._cond:
+                self._sent = (level, color)
+                if result is None:
+                    self._available = False
+                    self._thread = None
+                    return
+
+    def _call(self, method: str, *args) -> tuple | None:
+        cmd = [
+            self._gdbus_bin,
+            'call',
+            '--session',
+            '--dest',
+            GNOME_EXTENSION_BUS_NAME,
+            '--object-path',
+            GNOME_EXTENSION_OBJECT_PATH,
+            '--method',
+            f'{GNOME_EXTENSION_INTERFACE}.{method}',
+            *[_gvariant_arg(arg) for arg in args],
+        ]
+        try:
+            cp = subprocess.run(
+                cmd,
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=10,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            return None
+        if cp.returncode != 0:
+            if method != 'Version':
+                self._log_warning(
+                    f'GNOME Shell extension call {method} failed: {(cp.stderr or "").strip()}'
+                )
+            return None
+        return parse_gvariant_tuple(cp.stdout or '')
+
+
 def select_backend(
     *,
     wmctrl_bin: str = 'wmctrl',
@@ -587,6 +715,7 @@ def select_backend(
 __all__ = [
     'GNOME_EXTENSION_INSTALL_COMMAND',
     'GNOME_EXTENSION_UUID',
+    'GnomeAppGlow',
     'GnomeWaylandWindowBackend',
     'WindowInfo',
     'X11WindowBackend',

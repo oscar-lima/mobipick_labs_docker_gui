@@ -19,6 +19,7 @@ from .desktop_launcher import (
     install_tool_desktop_entries as _install_tool_desktop_entries,
     install_user_desktop_entry as _install_user_desktop_entry,
 )
+from .remote_client import refresh_installed_skill
 from .window_control import install_gnome_extension, session_type
 
 
@@ -255,6 +256,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 f'Failed to install desktop application metadata: {exc}',
                 file=sys.stderr,
             )
+    refreshed_skill = refresh_installed_skill()
+    if refreshed_skill is not None and verbosity >= 1:
+        print(f'updated installed remote-control skill: {refreshed_skill}')
 
     app = _create_application(
         [sys.argv[0]] + qt_args,

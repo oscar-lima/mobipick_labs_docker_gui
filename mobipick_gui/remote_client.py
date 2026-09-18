@@ -47,6 +47,28 @@ def install_skill(target_root: Path) -> Path:
     return destination
 
 
+DEFAULT_SKILLS_ROOT = Path('~/.claude/skills')
+
+
+def refresh_installed_skill(target_root: Path | str = DEFAULT_SKILLS_ROOT) -> Path | None:
+    """Overwrite a previously installed copy of the skill when the bundled one changed.
+
+    Only an existing installation is touched (installing is opt-in through
+    ``skill --install``), so the repository stays the single source of truth
+    and a GUI upgrade cannot leave a stale skill behind.  Returns the updated
+    path, or ``None`` when nothing was installed or it was already current.
+    """
+    destination = Path(target_root).expanduser() / SKILL_NAME / 'SKILL.md'
+    source = bundled_skill_path()
+    try:
+        if not destination.is_file() or destination.read_bytes() == source.read_bytes():
+            return None
+        shutil.copyfile(source, destination)
+    except OSError:
+        return None
+    return destination
+
+
 class RemoteClient:
     """Tiny JSON-over-HTTP client for :mod:`mobipick_gui.remote_control`."""
 
@@ -137,6 +159,18 @@ def _build_parser() -> argparse.ArgumentParser:
     sub.add_parser('api', help='List API endpoints')
     sub.add_parser('status', help='GUI status summary')
     sub.add_parser('buttons', help='List toolbar buttons and their states')
+
+    p = sub.add_parser('hello', help='Declare that you are using the GUI (lights the window icon until "bye")')
+    p.add_argument('name', help='client name shown in the GUI log, e.g. claude')
+    p.add_argument('--ttl', type=float, default=None, help='seconds until the declaration expires (default 600, max 1800); repeat hello to refresh')
+    p.add_argument('--note', default='', help='what you are doing, shown in /status')
+    p = sub.add_parser('bye', help='Declare that you are done; the GUI stops what you started unless --keep')
+    p.add_argument('name', help='client name given to hello')
+    p.add_argument('--keep', action='store_true', help='leave the processes you started running')
+    p = sub.add_parser('stop-tab', help='Stop the process behind a log tab (button process, customN command, remote shell)')
+    p.add_argument('key', help='tab key as listed by "tabs", e.g. custom1, sim, terminal-remote1')
+    sub.add_parser('clients', help='List clients that declared presence')
+    sub.add_parser('reload', help='Re-read config and button profile without restarting the GUI')
 
     for name, help_text in (
         ('click', 'Press a toolbar button'),
@@ -240,6 +274,19 @@ def main(argv: Sequence[str] | None = None) -> int:
             payload = client.call('GET', '/status')
         elif cmd == 'buttons':
             payload = client.call('GET', '/buttons')
+        elif cmd == 'hello':
+            body = {'name': args.name, 'note': args.note}
+            if args.ttl is not None:
+                body['ttl_s'] = args.ttl
+            payload = client.call('POST', '/presence', body=body)
+        elif cmd == 'bye':
+            payload = client.call('DELETE', '/presence', body={'name': args.name, 'keep': bool(args.keep)})
+        elif cmd == 'stop-tab':
+            payload = client.call('POST', f'/tabs/{args.key}/stop', body={})
+        elif cmd == 'clients':
+            payload = client.call('GET', '/presence')
+        elif cmd == 'reload':
+            payload = client.call('POST', '/reload', body={})
         elif cmd in {'click', 'start', 'stop'}:
             body: dict = {}
             if args.wait_for:
@@ -350,4 +397,4 @@ if __name__ == '__main__':  # pragma: no cover
     sys.exit(main())
 
 
-__all__ = ['RemoteClient', 'bundled_skill_path', 'install_skill', 'main']
+__all__ = ['RemoteClient', 'bundled_skill_path', 'install_skill', 'main', 'refresh_installed_skill']

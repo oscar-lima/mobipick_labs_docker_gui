@@ -127,7 +127,12 @@ class MainWindowRemoteAdapter(GuiAdapter):
             return {'accepted': False, 'reason': 'not running', 'button': before}
         self.window._log_info(f'remote control: {action} {key}')
         widget.click()
-        return {'accepted': True, 'action': action, 'button': self._describe_button(key)}
+        return {
+            'accepted': True,
+            'action': action,
+            'was_running': bool(before['running']),
+            'button': self._describe_button(key),
+        }
 
     # -- tabs ----------------------------------------------------------
 
@@ -144,6 +149,51 @@ class MainWindowRemoteAdapter(GuiAdapter):
                 'closable': bool(tab.closable),
             })
         return entries
+
+    def reload_configuration(self) -> dict:
+        """Re-read config and the button profile without restarting the GUI."""
+        return self.window.reload_configuration()
+
+    def stop_tab(self, key: str) -> dict:
+        """Stop the process behind tab ``key``; remote shells are handled by the server."""
+        window = self.window
+        tab = window.tasks.get(key)
+        if tab is None:
+            raise NotFound(f'unknown tab {key!r}; known tabs: {", ".join(window.tasks)}')
+        if self._button_widget(key) is not None and key in window._toggle_states:
+            result = self.press_button(key, 'stop')
+            return {'tab': key, 'stopped': bool(result.get('accepted')), 'kind': 'button', **result}
+        if not tab.is_running():
+            return {'tab': key, 'stopped': False, 'reason': 'not running', 'kind': 'process'}
+        window._log_info(f'remote control: stop tab {key}')
+        if key == window._script_active_tab_key:
+            window.set_script_visual('yellow', 'Stopping Script...', False)
+        window._stop_custom_tab(tab)
+        return {'tab': key, 'stopped': True, 'kind': 'process'}
+
+    def stop_owned(self, name: str, entries: list[dict]) -> list[str]:
+        """Stop what remote client ``name`` left running; returns human-readable notes."""
+        window = self.window
+        notes: list[str] = []
+        for entry in entries:
+            kind, key = entry.get('kind'), entry.get('key')
+            try:
+                if kind == 'button':
+                    result = self.press_button(str(key), 'stop')
+                    if result.get('accepted'):
+                        notes.append(f'stopped button {key}')
+                elif kind == 'tab':
+                    result = self.stop_tab(str(key))
+                    if result.get('stopped'):
+                        notes.append(f'stopped tab {key}')
+                elif kind == 'shell':
+                    server = window.remote_control
+                    if server is not None and any(s.id == key for s in server.sessions()):
+                        server.close_session(key)
+                        notes.append(f'closed shell {key}')
+            except Exception as exc:  # noqa: BLE001 - best effort cleanup
+                notes.append(f'could not stop {kind} {key}: {exc}')
+        return notes
 
     def tab_text(self, key: str) -> str:
         tab = self.window.tasks.get(key)

@@ -112,3 +112,30 @@ Git history favours concise, imperative subject lines such as `use gpu to run th
 
 ## Configuration & Runtime Tips
 Treat `mobipick_gui/resources/config/` as the single source of truth for defaults. When testing overrides, point `MOBIPICK_GUI_DATA_ROOT` at a writable copy and document any new keys in `config.py`. Never commit credentials or local Docker contexts, and keep `docker-compose.yml` changes backward compatible for existing lab setups.
+
+## Remote-control skill and agent etiquette
+
+The Claude Code skill that drives the GUI over its HTTP API lives in
+`mobipick_gui/resources/skills/mobipick-gui-remote/SKILL.md` and that file is
+the single source of truth. Never edit an installed copy (for example
+`~/.claude/skills/mobipick-gui-remote/SKILL.md`) directly: change the bundled
+file, then install it with
+`mobipick-labs-docker-gui-remote skill --install ~/.claude/skills` (or
+`--install <repo>/.claude/skills` for a project-scoped copy). The GUI also
+refreshes an already installed copy on every start
+(`remote_client.refresh_installed_skill`), so a machine that installed the
+skill once follows the repository automatically; a machine that never
+installed it is left alone. When you add or change an endpoint in
+`remote_control.py`, update `API_INDEX`, the README endpoint table, the
+`mobipick-labs-docker-gui-remote` CLI, the skill, and the tests in
+`tests/mobipick_gui/test_remote_control.py` in the same change.
+
+Every process a remote client can start must be stoppable over the API
+(`/buttons/{key}/stop`, `/tabs/{key}/stop`, `DELETE /shell/{id}`), and the
+server records what each client started so the GUI can stop it when the
+client's presence (`/presence`) lapses or is withdrawn. Keep that ownership
+bookkeeping (`_record_owned` / `_forget_owned`) in sync when adding ways to
+start or stop things. An agent working through the API must announce itself
+with `/presence`, renew it at least every 10 minutes, stop what it started,
+and withdraw presence as its last call; the skill spells out the hand-over
+checklist.

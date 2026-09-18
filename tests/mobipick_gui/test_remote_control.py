@@ -59,6 +59,9 @@ class FakeAdapter(GuiAdapter):
         self.dialog = None
         self.quit_called = False
         self.server = None
+        self.stopped_tabs = []
+        self.cleaned = []
+        self.reloads = []
 
     def status(self):
         return {'workspace': 'ws', 'buttons': self.buttons(), 'tabs': self.tabs()}
@@ -86,10 +89,31 @@ class FakeAdapter(GuiAdapter):
         if action == 'start' and self.states[key] == 'green':
             return {'accepted': False, 'reason': 'already running'}
         self.clicks.append((key, action))
-        self.states[key] = 'red' if self.states[key] == 'green' else 'green'
+        was_running = self.states[key] == 'green'
+        self.states[key] = 'red' if was_running else 'green'
         if self.server is not None:
             self.server.emit('button_state', key=key, state=self.states[key])
-        return {'accepted': True, 'action': action}
+        return {'accepted': True, 'action': action, 'was_running': was_running}
+
+    def reload_configuration(self):
+        self.reloads.append(True)
+        return {'reloaded': True, 'buttons': ['sim', 'rviz'], 'profile': 'profile.yaml'}
+
+    def stop_tab(self, key):
+        self.stopped_tabs.append(key)
+        return {'tab': key, 'stopped': True, 'kind': 'process'}
+
+    def stop_owned(self, name, entries):
+        self.cleaned.append((name, entries))
+        notes = []
+        for entry in entries:
+            if entry['kind'] == 'button' and self.states.get(entry['key']) == 'green':
+                notes.append(f"stopped button {entry['key']}")
+                self.press_button(entry['key'], 'stop')
+            elif entry['kind'] == 'tab':
+                notes.append(f"stopped tab {entry['key']}")
+                self.stop_tab(entry['key'])
+        return notes
 
     def tabs(self):
         return [{'key': 'log', 'running': False}]
@@ -650,3 +674,344 @@ def test_bundled_skill_matches_repo_skill_and_installs(tmp_path):
     assert installed.read_text() == bundled.read_text()
     assert client_main(['skill', '--install', str(tmp_path / 'again')]) == 0
     assert (tmp_path / 'again' / 'mobipick-gui-remote' / 'SKILL.md').is_file()
+
+
+def test_remote_control_tracks_active_requests():
+    class _BlockingAdapter(FakeAdapter):
+        release = threading.Event()
+        entered = threading.Event()
+
+        def status(self):
+            self.entered.set()
+            self.release.wait(5)
+            return super().status()
+
+    adapter = _BlockingAdapter()
+    server = RemoteControlServer(adapter, host='127.0.0.1', port=0)
+    host, port = server.start()
+    try:
+        assert server.active_requests == 0
+        api = _Api(f'http://{host}:{port}')
+        worker = threading.Thread(target=lambda: api('GET', '/status'), daemon=True)
+        worker.start()
+        assert adapter.entered.wait(5)
+        assert server.active_requests == 1
+        adapter.release.set()
+        worker.join(5)
+        assert not worker.is_alive()
+        deadline = time.time() + 2
+        while server.active_requests and time.time() < deadline:
+            time.sleep(0.01)
+        assert server.active_requests == 0
+    finally:
+        adapter.release.set()
+        server.stop()
+
+
+def test_main_window_glows_icon_while_remote_control_is_active(tmp_path, monkeypatch):
+    from mobipick_gui import main_window as mw
+
+    app, window = _make_window(tmp_path, monkeypatch)
+    try:
+        server = window.remote_control
+        assert server is not None
+        timer = window._remote_icon_timer
+        assert timer is not None and timer.isActive()
+        idle_level = window._remote_icon_level
+        assert idle_level == (
+            round(mw.REMOTE_ICON_GLOW_IDLE * mw.REMOTE_ICON_GLOW_LEVELS),
+            mw.REMOTE_ICON_GLOW_COLOR.rgb(),
+        )
+        base = window._remote_icon_base
+        assert base is not None and not base.isNull()
+        assert window.windowIcon().cacheKey() != base.cacheKey()
+
+        # Idle: repeated ticks keep the static glow.
+        window._update_remote_icon_glow()
+        assert window._remote_icon_level == idle_level
+
+        # Active request: the glow pulses through several levels.
+        monkeypatch.setattr(type(server), 'active_requests', property(lambda self: 1))
+        seen = set()
+        deadline = time.time() + mw.REMOTE_ICON_GLOW_PULSE_S
+        while time.time() < deadline:
+            window._update_remote_icon_glow()
+            seen.add(window._remote_icon_level[0])
+            time.sleep(0.02)
+        assert len(seen) > 3
+        assert min(seen) < idle_level[0] < max(seen)
+
+        # Back to idle: static glow again.
+        monkeypatch.setattr(type(server), 'active_requests', property(lambda self: 0))
+        window._update_remote_icon_glow()
+        assert window._remote_icon_level == idle_level
+
+        # A client declaring presence lights the icon fully until it withdraws.
+        # Presence switches the halo to the green in-use colour, which is far
+        # easier to spot on the dock than a brightness change alone.
+        server.declare_presence('claude')
+        window._update_remote_icon_glow()
+        assert window._remote_icon_level == (
+            mw.REMOTE_ICON_GLOW_LEVELS,
+            mw.REMOTE_ICON_GLOW_COLOR_IN_USE.rgb(),
+        )
+        assert mw.REMOTE_ICON_GLOW_COLOR_IN_USE.rgb() != mw.REMOTE_ICON_GLOW_COLOR.rgb()
+        assert window._remote_client_names == {'claude'}
+        server.withdraw_presence('claude')
+        window._update_remote_icon_glow()
+        assert window._remote_icon_level == idle_level
+        assert window._remote_client_names == set()
+
+        window._stop_remote_control()
+        assert not timer.isActive()
+        assert window.windowIcon().cacheKey() == base.cacheKey()
+    finally:
+        if window.remote_control is not None:
+            window._stop_remote_control()
+        window.close()
+
+
+def test_remote_glow_icon_adds_halo_margin():
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtGui import QColor, QIcon, QPixmap
+    from PyQt5.QtWidgets import QApplication
+
+    from mobipick_gui.main_window import REMOTE_ICON_GLOW_MARGIN, remote_glow_icon
+
+    app = QApplication.instance() or QApplication([])  # noqa: F841 - keep alive
+    source = QPixmap(64, 64)
+    source.fill(Qt.white)
+    base = QIcon(source)
+    glow = remote_glow_icon(base, 1.0, size=64)
+    pixmap = glow.pixmap(256, 256)
+    expected = 64 + 2 * int(round(64 * REMOTE_ICON_GLOW_MARGIN))
+    assert pixmap.width() == expected and pixmap.height() == expected
+    image = pixmap.toImage()
+    corner = image.pixelColor(1, 1)
+    assert corner.alpha() > 0 and corner.blue() > corner.red()
+    assert image.pixelColor(pixmap.width() // 2, pixmap.height() // 2) == QColor(Qt.white)
+    assert remote_glow_icon(QIcon(), 1.0).isNull()
+
+
+def test_presence_endpoints_track_clients(monkeypatch):
+    adapter = FakeAdapter()
+    server = RemoteControlServer(adapter, host='127.0.0.1', port=0)
+    host, port = server.start()
+    try:
+        api = _Api(f'http://{host}:{port}')
+        status, payload = api('GET', '/status')
+        assert status == 200 and payload['in_use'] is False and payload['clients'] == []
+
+        before = server.events.last_seq
+        status, payload = api('POST', '/presence', {'name': 'claude', 'ttl_s': 5, 'note': 'tables demo'})
+        assert status == 200 and payload['client']['name'] == 'claude'
+        assert 0 < payload['client']['expires_in_s'] <= 5
+        assert [c['name'] for c in payload['clients']] == ['claude']
+        assert server.in_use
+        events = server.events.since(before, names=['client_connected'])
+        assert len(events) == 1 and events[0]['data']['note'] == 'tables demo'
+
+        # Refreshing does not emit a second connect event.
+        api('POST', '/presence', {'name': 'claude'})
+        assert len(server.events.since(before, names=['client_connected'])) == 1
+
+        status, payload = api('GET', '/status')
+        assert payload['in_use'] is True and payload['clients'][0]['name'] == 'claude'
+
+        status, payload = api('POST', '/presence', {})
+        assert status == 400
+
+        status, payload = api('DELETE', '/presence', {'name': 'claude'})
+        assert status == 200 and payload['removed'] is True and payload['clients'] == []
+        assert not server.in_use
+        assert server.events.since(before, names=['client_disconnected'])[-1]['data']['name'] == 'claude'
+        status, payload = api('DELETE', '/presence', {'name': 'claude'})
+        assert payload['removed'] is False
+    finally:
+        server.stop()
+
+
+def test_presence_expires_after_ttl(monkeypatch):
+    server = RemoteControlServer(FakeAdapter(), host='127.0.0.1', port=0)
+    now = [1000.0]
+    monkeypatch.setattr('mobipick_gui.remote_control.time.time', lambda: now[0])
+    server.declare_presence('claude', ttl_s=10)
+    assert server.in_use
+    now[0] += 9
+    assert server.in_use
+    now[0] += 2
+    before = server.events.last_seq
+    assert not server.in_use
+    event = server.events.since(before, names=['client_disconnected'])[-1]
+    assert event['data']['name'] == 'claude' and event['data']['expired'] is True
+
+
+def test_stop_tab_endpoint_and_ownership_cleanup():
+    adapter = FakeAdapter()
+    server = RemoteControlServer(adapter, host='127.0.0.1', port=0)
+    adapter.server = server
+    host, port = server.start()
+    try:
+        api = _Api(f'http://{host}:{port}')
+        api('POST', '/presence', {'name': 'claude'})
+        assert api('POST', '/buttons/roscore/start', {})[1]['accepted']
+        assert api('POST', '/command', {'command': 'roslaunch x y.launch'})[1]['tab'] == 'custom1'
+        owned = {(e['kind'], e['key']) for e in server.owned_by('claude')}
+        assert owned == {('button', 'roscore'), ('tab', 'custom1')}
+
+        # Stopping through the API releases ownership.
+        status, payload = api('POST', '/tabs/custom1/stop', {})
+        assert status == 200 and payload['stopped'] and adapter.stopped_tabs == ['custom1']
+        assert {(e['kind'], e['key']) for e in server.owned_by('claude')} == {('button', 'roscore')}
+        # A click on a running button is a stop and releases it too.
+        api('POST', '/buttons/roscore/click', {})
+        assert server.owned_by('claude') == []
+        assert adapter.states['roscore'] == 'red'
+
+        # Bye with leftovers: the GUI side collects them for cleanup.
+        api('POST', '/buttons/sim/start', {})
+        api('POST', '/command', {'command': 'rostopic echo /x'})
+        assert len(server.owned_by('claude')) == 2
+        api('DELETE', '/presence', {'name': 'claude'})
+        assert server.leave_reason('claude') == 'done'
+        leftovers = server.take_owned('claude')
+        assert {(e['kind'], e['key']) for e in leftovers} == {('button', 'sim'), ('tab', 'custom1')}
+        assert adapter.stop_owned('claude', leftovers) == ['stopped button sim', 'stopped tab custom1']
+        assert server.take_owned('claude') == []
+
+        # Bye with keep: nothing is collected.
+        api('POST', '/presence', {'name': 'claude'})
+        api('POST', '/buttons/sim/start', {})
+        api('DELETE', '/presence', {'name': 'claude', 'keep': True})
+        assert server.leave_reason('claude') == 'done (processes kept)'
+        assert server.take_owned('claude') == []
+
+        # Unknown tab
+        assert api('POST', '/tabs/nope/stop', {})[0] == 404 or adapter.stopped_tabs[-1] == 'nope'
+    finally:
+        server.stop()
+
+
+def test_presence_ttl_is_capped():
+    server = RemoteControlServer(FakeAdapter(), host='127.0.0.1', port=0)
+    entry = server.declare_presence('claude', ttl_s=99999)
+    assert entry['ttl_s'] == 1800.0
+    entry = server.declare_presence('claude')
+    assert entry['ttl_s'] == 600.0
+
+
+def test_main_window_cleans_up_after_expired_client(tmp_path, monkeypatch):
+    app, window = _make_window(tmp_path, monkeypatch)
+    try:
+        server = window.remote_control
+        now = [1000.0]
+        monkeypatch.setattr('mobipick_gui.remote_control.time.time', lambda: now[0])
+        stopped = []
+        monkeypatch.setattr(type(server.adapter), 'stop_owned', lambda self, name, entries: stopped.append((name, entries)) or ['stopped button roscore'])
+        server.declare_presence('claude', ttl_s=10)
+        server._record_owned('button', 'roscore')
+        window._update_remote_icon_glow()
+        assert window._remote_client_names == {'claude'}
+        now[0] += 11
+        window._update_remote_icon_glow()
+        assert window._remote_client_names == set()
+        assert stopped == [('claude', [{'kind': 'button', 'key': 'roscore', 'started': 1000.0}])]
+        text = server.adapter.tab_text('log')
+        assert 'claude: presence expired' in text and 'stopped button roscore' in text
+    finally:
+        window._stop_remote_control()
+        window.close()
+
+
+def test_refresh_installed_skill_updates_only_existing_copy(tmp_path):
+    from mobipick_gui.remote_client import bundled_skill_path, install_skill, refresh_installed_skill
+
+    root = tmp_path / 'skills'
+    assert refresh_installed_skill(root) is None  # nothing installed: opt-in stays opt-in
+    installed = install_skill(root)
+    assert refresh_installed_skill(root) is None  # already current
+    installed.write_text('stale copy\n')
+    assert refresh_installed_skill(root) == installed
+    assert installed.read_bytes() == bundled_skill_path().read_bytes()
+
+
+def test_remote_glow_icon_honours_colour():
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtGui import QColor, QIcon, QPixmap
+    from PyQt5.QtWidgets import QApplication
+
+    from mobipick_gui.main_window import (
+        REMOTE_ICON_GLOW_COLOR,
+        REMOTE_ICON_GLOW_COLOR_IN_USE,
+        remote_glow_icon,
+    )
+
+    app = QApplication.instance() or QApplication([])  # noqa: F841 - keep alive
+    source = QPixmap(64, 64)
+    source.fill(Qt.white)
+    base = QIcon(source)
+
+    def corner(color):
+        image = remote_glow_icon(base, 1.0, size=64, color=color).pixmap(256, 256).toImage()
+        return image.pixelColor(1, 1)
+
+    blue, green = corner(REMOTE_ICON_GLOW_COLOR), corner(REMOTE_ICON_GLOW_COLOR_IN_USE)
+    assert blue.blue() > blue.green() and green.green() > green.blue()
+
+
+def test_gnome_app_glow_sends_colour_changes(monkeypatch):
+    from mobipick_gui.window_control import GnomeAppGlow
+
+    glow = GnomeAppGlow('app', probe=False)
+    glow._available = True
+    calls = []
+    monkeypatch.setattr(GnomeAppGlow, '_call', lambda self, method, *args: calls.append((method, args)) or (1,))
+
+    glow.set_level(0.5, 'rgba(1, 2, 3, 0.95)')
+    deadline = time.time() + 5
+    while not calls and time.time() < deadline:
+        time.sleep(0.01)
+    # same level, new colour must still be sent
+    glow.set_level(0.5, 'rgba(9, 9, 9, 0.95)')
+    deadline = time.time() + 5
+    while len(calls) < 2 and time.time() < deadline:
+        time.sleep(0.01)
+    glow.clear()
+    colours = [args[2] for method, args in calls if method == 'SetAppGlow']
+    assert 'rgba(1, 2, 3, 0.95)' in colours and 'rgba(9, 9, 9, 0.95)' in colours
+
+
+def test_reload_endpoint_rereads_button_profile():
+    adapter = FakeAdapter()
+    server = RemoteControlServer(adapter, host='127.0.0.1', port=0)
+    host, port = server.start()
+    try:
+        api = _Api(f'http://{host}:{port}')
+        status, payload = api('POST', '/reload', {})
+        assert status == 200 and payload['reloaded'] is True
+        assert payload['buttons'] == ['sim', 'rviz'] and adapter.reloads == [True]
+        assert api('GET', '/reload')[0] == 404
+    finally:
+        server.stop()
+
+
+def test_reload_configuration_picks_up_changed_command(tmp_path, monkeypatch):
+    """The real reload path: editing the profile changes the button command."""
+    app, window = _make_window(tmp_path, monkeypatch)
+    try:
+        before = window._config_buttons.get('sim', {}).get('command')
+        layouts = [list(window._button_layout)]
+        changed = [
+            dict(entry, command='roslaunch demo demo_sim.launch grasp_fix:=true')
+            if str(entry.get('key')) == 'sim' else entry
+            for entry in layouts[0]
+        ]
+        monkeypatch.setattr('mobipick_gui.main_window.load_button_layout', lambda *a, **k: changed)
+        summary = window.reload_configuration()
+        assert summary['reloaded'] is True
+        after = window._config_buttons.get('sim', {}).get('command')
+        assert after != before and 'grasp_fix:=true' in after
+        assert 'sim' in summary['buttons']
+    finally:
+        window._stop_remote_control()
+        window.close()

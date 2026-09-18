@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import html
 import json
+import math
 import os
 import re
 import shlex
@@ -25,7 +26,9 @@ from PyQt5.QtCore import QEvent, QIODevice, QPoint, QProcess, QProcessEnvironmen
 from PyQt5.QtGui import (
     QColor,
     QGuiApplication,
+    QIcon,
     QKeySequence,
+    QPainter,
     QPixmap,
     QTextCursor,
     QTextDocument,
@@ -82,6 +85,7 @@ from .config import (
     load_docker_cp_user_config,
     load_button_layout,
     load_launch_sequence_plan,
+    reload_config,
     save_button_layout,
     save_docker_cp_config,
     save_launch_sequence_plan,
@@ -97,6 +101,8 @@ from .config import (
 )
 from .documentation_dialog import DocumentationDialog
 from .desktop_launcher import (
+    APPLICATION_DESKTOP_ID,
+    APPLICATION_ICON,
     RQT_DESKTOP_ID,
     desktop_entry_for_command,
     install_desktop_launcher,
@@ -136,6 +142,7 @@ from .window_utils import (
 from .window_control import (
     GNOME_EXTENSION_INSTALL_COMMAND,
     GNOME_EXTENSION_UUID,
+    GnomeAppGlow,
     find_own_window,
     session_type as desktop_session_type,
 )
@@ -2834,6 +2841,73 @@ class WorkspaceMatchDialog(QDialog):
         return copy.deepcopy(self._matches)
 
 
+# Idle (API listening, nobody working) is a calm light blue; a client that
+# declared presence turns the halo green, which reads at a glance on the dock
+# far better than the brightness difference alone.
+REMOTE_ICON_GLOW_COLOR = QColor(120, 200, 255)
+REMOTE_ICON_GLOW_COLOR_IN_USE = QColor(80, 230, 120)
+REMOTE_ICON_GLOW_TICK_MS = 50
+REMOTE_ICON_GLOW_PULSE_S = 1.2
+REMOTE_ICON_GLOW_IDLE = 0.7  # API listening, nobody declared presence
+REMOTE_ICON_GLOW_IN_USE = 1.0  # a client declared presence (POST /presence)
+REMOTE_ICON_GLOW_PULSE_MIN = 0.15
+REMOTE_ICON_GLOW_PULSE_MAX = 1.0
+REMOTE_ICON_GLOW_LEVELS = 24
+REMOTE_ICON_GLOW_MARGIN = 0.18
+REMOTE_ICON_GLOW_RINGS = 6
+REMOTE_ICON_GLOW_EXTENSION_VERSION = 4
+
+
+def remote_glow_icon(
+    base: QIcon,
+    intensity: float,
+    size: int = 256,
+    color: QColor | None = None,
+) -> QIcon:
+    """Return ``base`` surrounded by a light-blue halo of the given intensity.
+
+    ``intensity`` runs from 0 (no halo) to 1 (full halo).  The halo is built
+    from progressively larger, fainter copies of the icon silhouette tinted
+    with :data:`REMOTE_ICON_GLOW_COLOR`, so it hugs the icon outline instead
+    of being a plain disc.
+    """
+    intensity = max(0.0, min(1.0, float(intensity)))
+    source = base.pixmap(size, size)
+    if source.isNull():
+        return base
+    inner = source.width()
+    margin = int(round(inner * REMOTE_ICON_GLOW_MARGIN))
+    outer = inner + 2 * margin
+
+    silhouette = QPixmap(source.size())
+    silhouette.fill(Qt.transparent)
+    painter = QPainter(silhouette)
+    painter.drawPixmap(0, 0, source)
+    painter.setCompositionMode(QPainter.CompositionMode_SourceIn)
+    painter.fillRect(silhouette.rect(), color or REMOTE_ICON_GLOW_COLOR)
+    painter.end()
+
+    canvas = QPixmap(outer, outer)
+    canvas.fill(Qt.transparent)
+    painter = QPainter(canvas)
+    painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
+    for ring in range(REMOTE_ICON_GLOW_RINGS, 0, -1):
+        fraction = ring / REMOTE_ICON_GLOW_RINGS
+        grow = int(round(margin * fraction))
+        painter.setOpacity(intensity * 0.55 * (1.0 - fraction) ** 1.5 + intensity * 0.08)
+        painter.drawPixmap(
+            margin - grow,
+            margin - grow,
+            inner + 2 * grow,
+            inner + 2 * grow,
+            silhouette,
+        )
+    painter.setOpacity(1.0)
+    painter.drawPixmap(margin, margin, source)
+    painter.end()
+    return QIcon(canvas)
+
+
 class MainWindow(QMainWindow):
     def __init__(
         self,
@@ -2872,6 +2946,13 @@ class MainWindow(QMainWindow):
                 'remote_control.enabled in gui_settings.yaml'
             )
         self._remote_control_action: QAction | None = None
+        self._remote_icon_timer: QTimer | None = None
+        self._remote_icon_base: QIcon | None = None
+        self._remote_icon_cache: dict[tuple[int, int], QIcon] = {}
+        self._remote_icon_level: tuple[int, int] | None = None
+        self._remote_icon_pulse_started = 0.0
+        self._remote_app_glow: GnomeAppGlow | None = None
+        self._remote_client_names: set[str] = set()
         self._robot_race_action: QAction | None = None
         self._robot_race_enabled = _robot_race_is_enabled()
 
@@ -3502,6 +3583,7 @@ class MainWindow(QMainWindow):
             f'({token_note}; enabled by {enabled_source})',
         )
         self._sync_remote_control_action()
+        self._start_remote_icon_glow()
         return True
 
     def _stop_remote_control(self) -> None:
@@ -3509,6 +3591,7 @@ class MainWindow(QMainWindow):
         if server is None:
             return
         self.remote_control = None
+        self._stop_remote_icon_glow()
         try:
             server.stop()
         finally:
@@ -3521,6 +3604,132 @@ class MainWindow(QMainWindow):
             if not self._exit_in_progress:
                 self._append_gui_html('log', '<i>Remote control API stopped.</i>')
             self._sync_remote_control_action()
+
+    # -- remote control icon glow ------------------------------------------
+
+    def _start_remote_icon_glow(self) -> None:
+        """Tint the window icon light blue while the remote API is listening.
+
+        The glow is static while the server is idle and pulses while at least
+        one HTTP request is being served.
+        """
+        if self._remote_icon_base is None:
+            base = self.windowIcon()
+            if base.isNull():
+                base = QApplication.windowIcon()
+            if base.isNull():
+                base = QIcon(str(APPLICATION_ICON))
+            if base.isNull():
+                return
+            self._remote_icon_base = base
+            self._remote_icon_cache = {}
+        if self._remote_icon_timer is None:
+            timer = QTimer(self)
+            timer.setInterval(REMOTE_ICON_GLOW_TICK_MS)
+            timer.timeout.connect(self._update_remote_icon_glow)
+            self._remote_icon_timer = timer
+        if self._remote_app_glow is None:
+            # GNOME ignores the window icon; glow the dock icon via the
+            # shell extension when it is installed and recent enough.
+            self._remote_app_glow = GnomeAppGlow(
+                APPLICATION_DESKTOP_ID,
+                color=(
+                    f'rgba({REMOTE_ICON_GLOW_COLOR.red()}, '
+                    f'{REMOTE_ICON_GLOW_COLOR.green()}, '
+                    f'{REMOTE_ICON_GLOW_COLOR.blue()}, 0.95)'
+                ),
+                log_warning=lambda message: self._console_log(1, message),
+            )
+            if not self._remote_app_glow.available:
+                self._console_log(
+                    2,
+                    'remote control icon glow: GNOME Shell extension '
+                    f'{GNOME_EXTENSION_UUID} v{REMOTE_ICON_GLOW_EXTENSION_VERSION}+ '
+                    'not reachable; dock icon will not glow',
+                )
+        self._remote_icon_level = None
+        self._remote_icon_pulse_started = 0.0
+        self._update_remote_icon_glow()
+        if not self._remote_icon_timer.isActive():
+            self._remote_icon_timer.start()
+
+    def _stop_remote_icon_glow(self) -> None:
+        timer = self._remote_icon_timer
+        if timer is not None and timer.isActive():
+            timer.stop()
+        if self._remote_icon_base is not None:
+            self.setWindowIcon(self._remote_icon_base)
+        if self._remote_app_glow is not None:
+            self._remote_app_glow.clear()
+        self._remote_icon_level = None
+        self._remote_icon_pulse_started = 0.0
+        self._remote_client_names = set()
+
+    def _sync_remote_clients(self, server: RemoteControlServer) -> set[str]:
+        """Log clients that declared or withdrew presence since the last tick."""
+        names = {str(client['name']) for client in server.clients()}
+        previous = self._remote_client_names
+        if names != previous:
+            for name in sorted(names - previous):
+                self._append_gui_html(
+                    'log', f'<i>Remote client {html.escape(name)} is using the GUI.</i>'
+                )
+                self._console_log(1, f'remote client {name} is using the GUI')
+            for name in sorted(previous - names):
+                reason = server.leave_reason(name)
+                self._append_gui_html(
+                    'log', f'<i>Remote client {html.escape(name)}: {html.escape(reason)}.</i>'
+                )
+                self._console_log(1, f'remote client {name}: {reason}')
+                # Safety net: whatever the client started and did not stop
+                # is stopped now, so a crashed or forgetful agent cannot
+                # leave the simulator burning CPU overnight.
+                leftovers = server.take_owned(name)
+                if leftovers:
+                    notes = server.adapter.stop_owned(name, leftovers)
+                    summary = '; '.join(notes) if notes else 'nothing left running'
+                    self._append_gui_html(
+                        'log',
+                        f'<i>Cleaning up after remote client {html.escape(name)}: '
+                        f'{html.escape(summary)}.</i>',
+                    )
+                    self._console_log(1, f'cleanup after remote client {name}: {summary}')
+            self._remote_client_names = names
+        return names
+
+    def _update_remote_icon_glow(self) -> None:
+        server = self.remote_control
+        base = self._remote_icon_base
+        if server is None or base is None:
+            return
+        now = time.monotonic()
+        clients = self._sync_remote_clients(server)
+        color = REMOTE_ICON_GLOW_COLOR_IN_USE if clients else REMOTE_ICON_GLOW_COLOR
+        if server.active_requests > 0:
+            if not self._remote_icon_pulse_started:
+                self._remote_icon_pulse_started = now
+            phase = (now - self._remote_icon_pulse_started) / REMOTE_ICON_GLOW_PULSE_S
+            intensity = REMOTE_ICON_GLOW_PULSE_MIN + (
+                REMOTE_ICON_GLOW_PULSE_MAX - REMOTE_ICON_GLOW_PULSE_MIN
+            ) * (0.5 - 0.5 * math.cos(2 * math.pi * phase))
+        else:
+            self._remote_icon_pulse_started = 0.0
+            intensity = REMOTE_ICON_GLOW_IN_USE if clients else REMOTE_ICON_GLOW_IDLE
+        level = int(round(intensity * REMOTE_ICON_GLOW_LEVELS))
+        state = (level, color.rgb())
+        if state == self._remote_icon_level:
+            return
+        icon = self._remote_icon_cache.get(state)
+        if icon is None:
+            icon = remote_glow_icon(base, level / REMOTE_ICON_GLOW_LEVELS, color=color)
+            self._remote_icon_cache[state] = icon
+        self._remote_icon_level = state
+        self.setWindowIcon(icon)
+        if self._remote_app_glow is not None:
+            self._remote_app_glow.set_level(
+                level / REMOTE_ICON_GLOW_LEVELS,
+                f'rgba({color.red()}, {color.green()}, {color.blue()}, 0.95)',
+            )
 
     def _on_remote_control_toggled(self, checked: bool) -> None:
         if checked:
@@ -3652,6 +3861,15 @@ class MainWindow(QMainWindow):
             'Configure Toolbar Buttons',
             self._open_button_profile_dialog,
             tooltip='Edit the active workspace toolbar button profile',
+        )
+        self._add_menu_action(
+            tools_menu,
+            'Reload Configuration',
+            lambda _checked=False: self.reload_configuration(),
+            tooltip=(
+                'Re-read gui_settings.yaml and the workspace button profile '
+                'without restarting the GUI; running processes keep running'
+            ),
         )
         self._add_menu_action(
             tools_menu,
@@ -5375,6 +5593,31 @@ class MainWindow(QMainWindow):
             manager = getattr(self, '_window_layout_manager', None)
             if manager is not None:
                 manager.set_apply_delay_ms(self._window_layout_delay_ms)
+
+    def reload_configuration(self) -> dict:
+        """Re-read the GUI config and the workspace button profile in place.
+
+        Button commands, labels, tooltips and argument slots are picked up
+        without restarting the GUI, so editing a profile (for example adding
+        ``grasp_fix:=true`` to the Sim command) takes effect on the next press.
+        Running processes and their tabs are preserved.
+        """
+        reload_config()
+        self._reload_workspace_profile(preserve_processes=True)
+        summary = {
+            'reloaded': True,
+            'buttons': list(self._config_button_order),
+            'profile': str(self._workspace_button_config_path() or ''),
+        }
+        self._append_gui_html(
+            'log',
+            '<i>Configuration reloaded: '
+            f'{len(summary["buttons"])} toolbar buttons from '
+            f'{html.escape(summary["profile"] or "defaults")}.</i>',
+        )
+        self._console_log(1, f'configuration reloaded from {summary["profile"]}')
+        _emit_remote_event(self, 'config_reloaded', **summary)
+        return summary
 
     def _reload_workspace_profile(
         self,

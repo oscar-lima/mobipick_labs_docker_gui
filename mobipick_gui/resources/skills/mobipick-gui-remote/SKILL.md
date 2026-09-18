@@ -26,14 +26,49 @@ menu toggle is not remembered across relaunches). Stop and ask the user to
 enable it with **Tools > Remote Control > Enable Remote Control API**, or to
 relaunch with `--remote-control` (env `MOBIPICK_GUI_REMOTE_CONTROL=1`). A
 persisted `remote_control.enabled` value does not enable the API by itself.
-There is no fallback: do not run `docker exec` against the GUI's containers
-and do not start a second GUI. A second instance shares the Docker daemon
-and its exit cleanup stops the user's containers, and `docker exec` bypasses
-the GUI's log tabs, state tracking, and audit trail.
+
+**Without remote access there is no fallback.** Do not drive the GUI's
+containers with `docker` commands (`exec`, `run`, `stop`, `compose`), do not
+launch ROS yourself, and do not start a second GUI: a second instance shares
+the Docker daemon and its exit cleanup stops the user's containers, and raw
+`docker` commands bypass the GUI's log tabs, state tracking, ownership
+cleanup, and audit trail. Stop and ask the user to enable the API.
+
+**With remote access granted, curl is the way to work.** `docker` commands
+are acceptable only for what the API cannot do (read-only inspection such as
+`docker ps`, `docker stats`, `docker logs`, `docker inspect`); everything
+that starts, stops, or enters a container goes through the API so the user
+sees it in the GUI and it is cleaned up with your presence.
 
 Every response is JSON with `ok` and `seq` (newest event number). Pipe
 through `python3 -m json.tool` only when you need to read the whole thing;
 prefer the narrow queries below to save tokens.
+
+## 0. Say hello first, bye last
+
+The GUI shows the user who is working on it: its window icon glows light
+green while a client is present (light blue when idle) and the GUI log
+records the name. Declare
+yourself before the first real request and withdraw as the very last call
+(also when you give up or fail).
+
+```bash
+curl -s -X POST $GUI/presence -H 'Content-Type: application/json' -d '{"name":"claude","note":"what you are doing"}'
+# ... work ...
+curl -s -X DELETE $GUI/presence -H 'Content-Type: application/json' -d '{"name":"claude"}'
+```
+
+The declaration expires after `ttl_s` (default 600 s, at most 1800 s), so
+**repeat the `POST` at least every 10 minutes** while you work; put it before
+every long wait (`/wait`, `follow=1`, a long `exec`). The GUI remembers
+every button, `/command` tab and shell you start. When your presence lapses,
+or you say bye, it **stops all of them** and logs what it stopped. That is
+the safety net for a crashed or forgetful agent, not a substitute for
+stopping things yourself: stop them, then bye. Only when the user asked you
+to leave something running (e.g. "start the sim for me") send
+`{"name":"claude","keep":true}` and say in your final message what you left
+running. `GET /status` lists present `clients` and `in_use`; if another
+client is listed, tell the user before pressing buttons that could disturb it.
 
 ## 1. Always check what is already running first
 
@@ -91,7 +126,23 @@ curl -s -X POST $GUI/buttons/rviz/stop -H 'Content-Type: application/json' -d '{
 
 `accepted:false` with `reason` means already running / not running / busy /
 disabled; read the reason and move on. Most container buttons auto-start
-roscore when needed.
+roscore when needed; if you started roscore, or a button auto-started it for
+you, you stop it too (`/buttons/roscore/stop`) once everything else you
+started is down.
+
+How to stop each kind of thing you can start:
+
+| You started it with | Stop it with |
+| --- | --- |
+| `POST /buttons/{key}/start` or `/click` | `POST /buttons/{key}/stop` |
+| `POST /command` (a `customN` tab) | `POST /tabs/customN/stop` (the `tab` from the `/command` reply) |
+| `POST /shell` | `DELETE /shell/{id}`; a running command first `POST /shell/{id}/interrupt` |
+| anything, by its log tab | `POST /tabs/{key}/stop` works for all three |
+
+Do not use `POST /command` for anything long-running (a `roslaunch`, a node,
+a bag replay): prefer the toolbar button that exists for it, otherwise run it
+in a shell session with `"wait": false` where `interrupt` and `DELETE` give
+you full control. `/command` is for one-shot commands.
 
 Treat the simulator as an expensive resource. Record which processes were
 already running before the task. If you start **Sim** or **Auto Launch** for
@@ -202,6 +253,12 @@ states, and `rospy.wait_for_message`.
 
 - `POST /command -d '{"command":"..."}'` runs text through the GUI's own
   Custom Command box (a `customN` tab, roscore auto-started).
+- `POST /reload` re-reads `gui_settings.yaml` and the workspace button
+  profile. Use it when a toolbar command has to change (for example adding
+  `grasp_fix:=true` to the Sim button): edit the profile YAML, `POST /reload`,
+  then press the button. This replaces asking the user to restart the GUI.
+  Running processes are preserved, so stop a process first if you need it
+  relaunched with the new command.
 - `POST /quit` closes the GUI **and stops all its containers**. Only on
   explicit user request.
 - The GUI log tab (`/tabs/log`) records every remote action, so the user
@@ -209,14 +266,26 @@ states, and `rospy.wait_for_message`.
 
 ## Typical session
 
+0. `POST /presence` with your name so the GUI icon glows and the log shows
+   who is working; repeat it every 10 minutes.
 1. `GET /status` and `/buttons`: note what is green, read tooltips of
-   anything unfamiliar.
+   anything unfamiliar. Write down what was already running: that is the
+   state you hand back.
 2. Reuse running processes; `GET /tabs/<key>?tail=…&grep=…` for their
    history.
 3. `start` only what is missing, wait for `window_layout_applied` or a
    green state plus an expected log line.
 4. Open one shell, run checks with `stream:false`/`tail`/`grep`, follow
    long commands with `--no-wait` plus `follow=1`.
-5. Stop Sim, Auto Launch, and other processes you started, then close your
-   shell before reporting findings. Leave pre-existing processes alone unless
-   the user asked you to stop them.
+5. Hand-over checklist, before your final message and before any message
+   that asks the user to do something (restart the GUI, look at the screen,
+   answer a question): run `GET /status` and compare `buttons` (`green` or
+   `yellow`), `tabs` (`running`) and `shells` with what was running when you
+   arrived. Stop every difference with the table in section 3, wait until
+   the button is `red` or the tab is not `running`, and close your shells.
+   Leave pre-existing processes alone unless the user asked you to stop them.
+   If something you started cannot be stopped, the first line of your message
+   says so and asks the user to stop it.
+6. `DELETE /presence` with your name as the very last call. The reply's
+   `clients` should be empty and the GUI log will show whether it had to
+   clean anything up after you; if it did, say so.

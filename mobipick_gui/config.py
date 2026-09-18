@@ -518,6 +518,18 @@ def _load_config() -> Dict:
 CONFIG = _load_config()
 
 
+def reload_config() -> Dict:
+    """Re-read the configuration files and return the merged result.
+
+    The module-level :data:`CONFIG` dict is updated in place so existing
+    ``from .config import CONFIG`` references see the new values.
+    """
+    fresh = _load_config()
+    CONFIG.clear()
+    CONFIG.update(fresh)
+    return CONFIG
+
+
 DEFAULT_BUTTON_COMMANDS = {
     'sim': (
         'roslaunch tables_demo_bringup demo_sim.launch '
@@ -1336,6 +1348,7 @@ def user_state_reset_command() -> str:
 
 __all__ = [
     'CONFIG',
+    'reload_config',
     'CONFIG_DEFAULTS',
     'CONFIG_FILE',
     'DEFAULT_BUTTON_COMMANDS',

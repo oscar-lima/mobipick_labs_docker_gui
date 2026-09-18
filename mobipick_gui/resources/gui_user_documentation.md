@@ -437,6 +437,11 @@ The tab search is separate from the documentation window search.
   is saved in the active workspace's own profile, so changing it later does
   not affect the source workspace. Use **Load Profile** or **Export Profile**
   to import or save a complete button configuration as one YAML file.
+- **Reload Configuration** re-reads `gui_settings.yaml` and the active
+  workspace toolbar button profile without restarting the GUI. Use it after
+  editing a button command (for example adding a launch argument to the Sim
+  button); the new command applies to the next press and running processes
+  keep running.
 - **Setup Wizard** opens the setup flow. It opens automatically at startup only
   when no Docker image matching the configured discovery filters is installed,
   including after setup was previously completed. If the configured default is
@@ -574,6 +579,14 @@ the **Install Source** tab.
   command line options, or the `MOBIPICK_GUI_REMOTE_*` environment variables.
 - **Show Remote Control Info** displays the listening address, whether a token
   is required, and how many remote shells are open.
+- While the API is enabled the window icon glows: **light blue** when idle,
+  **green** while a remote client has announced that it is working (`POST
+  /presence`, `mobipick-labs-docker-gui-remote hello <name>`), and pulsing
+  while a request is being served. The GUI log records which client is using
+  the GUI and when it finished. A client has to renew its announcement at
+  least every 10 minutes (30 minutes at most); when it stops doing so, or
+  says goodbye, the GUI stops every button process, custom command, and
+  remote shell that client started and writes what it stopped to the log.
 - Remote shells appear as closable **Remote Shell N** tabs that mirror their
   output. Closing the tab closes the shell and its container. Anyone who can
   reach the port can run commands in the containers, so use a token on

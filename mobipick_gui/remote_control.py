@@ -657,6 +657,11 @@ class RemoteShellSession:
 # ---------------------------------------------------------------------------
 
 
+# A client must re-declare presence at least this often; when it lapses the
+# GUI stops everything that client started (see MainWindow._sync_remote_clients).
+PRESENCE_DEFAULT_TTL_S = 600.0
+PRESENCE_MAX_TTL_S = 1800.0
+
 API_INDEX = [
     ('GET', '/', 'This endpoint list.'),
     ('GET', '/status', 'GUI summary: workspace, image, running state, buttons, tabs, shells.'),
@@ -664,8 +669,13 @@ API_INDEX = [
     ('POST', '/buttons/{key}/click', 'Press a button. Body: {"wait_for": [events], "timeout": s}.'),
     ('POST', '/buttons/{key}/start', 'Press only when the button is not running.'),
     ('POST', '/buttons/{key}/stop', 'Press only when the button is running.'),
+    ('GET', '/presence', 'Clients that declared they are using the GUI (lights the window icon).'),
+    ('POST', '/presence', 'Declare that you are using the GUI. Body: {"name": "claude", "ttl_s": 600, "note": ""}. Repeat before ttl_s (max 1800) runs out; when it lapses the GUI stops what you started.'),
+    ('DELETE', '/presence', 'Declare that you are done; stops what you started unless {"keep": true}. Body or query: {"name": "claude"}.'),
     ('GET', '/events?since=N&names=a,b&follow=1&timeout=s', 'List or stream (NDJSON) events.'),
     ('POST', '/wait', 'Block until an event. Body: {"events": [names], "since": N, "timeout": s}.'),
+    ('POST', '/reload', 'Re-read gui_settings.yaml and the workspace button profile without restarting the GUI.'),
+    ('POST', '/tabs/{key}/stop', 'Stop the process behind a log tab: a button process, a customN command, or a remote shell.'),
     ('GET', '/tabs', 'Log tabs and whether their process runs.'),
     ('GET', '/tabs/{key}?tail=N&grep=RE', 'Plain text of a log tab.'),
     ('GET', '/dialogs', 'Active modal dialog, if any.'),
@@ -716,6 +726,13 @@ class RemoteControlServer:
         self._sessions_lock = threading.Lock()
         self._httpd: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
+        self._active_requests = 0
+        self._active_requests_lock = threading.Lock()
+        self._clients: dict[str, dict] = {}
+        self._clients_lock = threading.Lock()
+        # (kind, key) of processes each client started and has not stopped yet
+        self._owned: dict[str, list[dict]] = {}
+        self._leave_reasons: dict[str, str] = {}
         self.started = time.time()
 
     # -- lifecycle ---------------------------------------------------------
@@ -723,6 +740,121 @@ class RemoteControlServer:
     @property
     def running(self) -> bool:
         return self._httpd is not None
+
+    @property
+    def active_requests(self) -> int:
+        """Number of HTTP requests currently being served (including streams)."""
+        with self._active_requests_lock:
+            return self._active_requests
+
+    def _request_started(self) -> None:
+        with self._active_requests_lock:
+            self._active_requests += 1
+
+    def _request_finished(self) -> None:
+        with self._active_requests_lock:
+            self._active_requests = max(0, self._active_requests - 1)
+
+    # -- presence ----------------------------------------------------------
+    #
+    # A client that plans to send several requests announces itself first so
+    # the GUI can show "in use" (window icon glow) for the whole session
+    # instead of flickering per request.  Entries expire after ``ttl_s`` in
+    # case the client dies without saying goodbye.
+
+    def declare_presence(self, name: str, ttl_s: float | None = None, note: str = '') -> dict:
+        name = str(name or '').strip()
+        if not name:
+            raise RemoteControlError('presence needs a client name')
+        ttl = float(ttl_s) if ttl_s is not None else PRESENCE_DEFAULT_TTL_S
+        ttl = max(1.0, min(ttl, PRESENCE_MAX_TTL_S))
+        now = time.time()
+        with self._clients_lock:
+            self._expire_clients_locked(now)
+            entry = self._clients.get(name)
+            fresh = entry is None
+            if fresh:
+                entry = {'name': name, 'since': now}
+                self._clients[name] = entry
+            entry['expires'] = now + ttl
+            entry['ttl_s'] = ttl
+            entry['note'] = str(note or '')
+            snapshot = dict(entry)
+        if fresh:
+            self.events.emit('client_connected', name=name, note=snapshot['note'])
+        return snapshot
+
+    def withdraw_presence(self, name: str, *, keep: bool = False) -> bool:
+        """Forget ``name``; with ``keep`` its processes are left running."""
+        name = str(name or '').strip()
+        with self._clients_lock:
+            removed = self._clients.pop(name, None) is not None
+            if keep:
+                self._owned.pop(name, None)
+            if removed:
+                self._leave_reasons[name] = 'done (processes kept)' if keep else 'done'
+        if removed:
+            self.events.emit('client_disconnected', name=name, keep=bool(keep))
+        return removed
+
+    # -- ownership: what each client started -------------------------------
+
+    def _current_client(self) -> str | None:
+        with self._clients_lock:
+            self._expire_clients_locked(time.time())
+            if not self._clients:
+                return None
+            return min(self._clients.values(), key=lambda entry: entry['since'])['name']
+
+    def _record_owned(self, kind: str, key: Any) -> None:
+        name = self._current_client()
+        if name is None:
+            return
+        with self._clients_lock:
+            entries = self._owned.setdefault(name, [])
+            if not any(e['kind'] == kind and e['key'] == key for e in entries):
+                entries.append({'kind': kind, 'key': key, 'started': time.time()})
+
+    def _forget_owned(self, kind: str, key: Any) -> None:
+        with self._clients_lock:
+            for entries in self._owned.values():
+                entries[:] = [e for e in entries if not (e['kind'] == kind and e['key'] == key)]
+
+    def owned_by(self, name: str) -> list[dict]:
+        with self._clients_lock:
+            return [dict(e) for e in self._owned.get(name, [])]
+
+    def leave_reason(self, name: str) -> str:
+        with self._clients_lock:
+            return self._leave_reasons.pop(name, 'done')
+
+    def take_owned(self, name: str) -> list[dict]:
+        """Return and forget what ``name`` started; used for cleanup after it left."""
+        with self._clients_lock:
+            return self._owned.pop(name, [])
+
+    def clients(self) -> list[dict]:
+        """Present clients, expired entries pruned; ``[]`` when nobody is using the GUI."""
+        now = time.time()
+        with self._clients_lock:
+            expired = self._expire_clients_locked(now)
+            entries = [dict(entry) for entry in self._clients.values()]
+        for name in expired:
+            self.events.emit('client_disconnected', name=name, expired=True)
+        for entry in entries:
+            entry['expires_in_s'] = round(max(0.0, entry['expires'] - now), 1)
+        return sorted(entries, key=lambda entry: entry['since'])
+
+    @property
+    def in_use(self) -> bool:
+        return bool(self.clients())
+
+    def _expire_clients_locked(self, now: float) -> list[str]:
+        expired = [name for name, entry in self._clients.items() if entry['expires'] <= now]
+        for name in expired:
+            del self._clients[name]
+            self._leave_reasons[name] = 'presence expired'
+        return expired
 
     @property
     def address(self) -> tuple[str, int]:
@@ -822,6 +954,7 @@ class RemoteControlServer:
         with self._sessions_lock:
             self._sessions[session_id] = session
         self.events.emit('shell_opened', id=session_id, name=label, container=spec.get('container_name'))
+        self._record_owned('shell', session_id)
         init_command = str(spec.get('init_command') or '').strip()
         ready_timeout = self.shell_start_timeout if timeout is None else float(timeout)
         init = session.run(f'{init_command}; echo "{PID_MARKER} $$"' if init_command else f'echo "{PID_MARKER} $$"')
@@ -842,8 +975,21 @@ class RemoteControlServer:
             )
         return result
 
+    def stop_tab(self, key: str) -> dict:
+        """Stop whatever runs behind log tab ``key`` (button, custom command, shell)."""
+        session = self.session_for_tab(key)
+        if session is not None:
+            result = self.close_session(session.id)
+            return {'tab': key, 'stopped': True, 'kind': 'shell', 'session': result.get('session')}
+        result = dict(self._invoke(lambda: self.adapter.stop_tab(key)))
+        if result.get('stopped'):
+            self._forget_owned('tab', key)
+            self._forget_owned('button', key)
+        return result
+
     def close_session(self, session_id: Any) -> dict:
         session = self.session(session_id)
+        self._forget_owned('shell', session.id)
         with self._sessions_lock:
             self._sessions.pop(session.id, None)
         session.close()
@@ -921,13 +1067,16 @@ class RemoteControlServer:
                     'server_started', 'button_state', 'process_finished',
                     'auto_launch_started', 'auto_launch_ready', 'auto_launch_complete',
                     'auto_launch_stopped', 'window_layout_applied', 'shell_opened',
-                    'shell_exited', 'shell_closed', 'gui_closing',
+                    'shell_exited', 'shell_closed', 'client_connected',
+                    'client_disconnected', 'config_reloaded', 'gui_closing',
                 ],
             }
         head = parts[0]
         if head == 'status' and method == 'GET':
             status = self._invoke(self.adapter.status)
             status['shells'] = [session.describe() for session in self.sessions()]
+            status['clients'] = self.clients()
+            status['in_use'] = bool(status['clients'])
             status['server'] = {
                 'host': self.address[0],
                 'port': self.address[1],
@@ -936,6 +1085,22 @@ class RemoteControlServer:
             return status
         if head == 'buttons':
             return self._dispatch_buttons(method, parts[1:], body)
+        if head == 'presence' and len(parts) == 1:
+            if method == 'GET':
+                return {'clients': self.clients()}
+            if method == 'POST':
+                entry = self.declare_presence(
+                    body.get('name') or query.get('name') or '',
+                    _float_param(body.get('ttl_s'), None),
+                    str(body.get('note') or ''),
+                )
+                entry['expires_in_s'] = round(entry['expires'] - time.time(), 1)
+                return {'client': entry, 'clients': self.clients()}
+            if method == 'DELETE':
+                name = str(body.get('name') or query.get('name') or '')
+                keep = _bool_param(body.get('keep', query.get('keep')), False)
+                return {'removed': self.withdraw_presence(name, keep=keep), 'clients': self.clients()}
+            raise RemoteControlError('method not allowed', status=HTTPStatus.METHOD_NOT_ALLOWED)
         if head == 'events' and method == 'GET':
             since = _int_param(query.get('since'), 0)
             names = _list_param(query.get('names'))
@@ -948,6 +1113,8 @@ class RemoteControlServer:
             timeout = _float_param(body.get('timeout'), 120.0)
             return self._wait_for_event(names, since, timeout)
         if head == 'tabs':
+            if method == 'POST' and len(parts) == 3 and parts[2] == 'stop':
+                return self.stop_tab(parts[1])
             if method != 'GET':
                 raise RemoteControlError('method not allowed', status=HTTPStatus.METHOD_NOT_ALLOWED)
             if len(parts) == 1:
@@ -979,11 +1146,16 @@ class RemoteControlServer:
             if method == 'POST' and len(parts) == 2 and parts[1] == 'dismiss':
                 button = str(body.get('button') or 'reject')
                 return self._invoke(lambda: self.adapter.dismiss_dialog(button))
+        if head == 'reload' and method == 'POST':
+            return self._invoke(self.adapter.reload_configuration)
         if head == 'command' and method == 'POST':
             command = str(body.get('command') or '').strip()
             if not command:
                 raise RemoteControlError('"command" is required')
-            return self._invoke(lambda: self.adapter.run_gui_command(command))
+            result = dict(self._invoke(lambda: self.adapter.run_gui_command(command)))
+            if result.get('accepted') and result.get('tab'):
+                self._record_owned('tab', result['tab'])
+            return result
         if head == 'shell':
             return self._dispatch_shell(method, parts[1:], query, body)
         if head == 'quit' and method == 'POST':
@@ -1006,6 +1178,12 @@ class RemoteControlServer:
         since = self.events.last_seq
         result = self._invoke(lambda: self.adapter.press_button(key, action))
         result = dict(result)
+        if result.get('accepted'):
+            # a click toggles: it starts the process unless it was running
+            if action == 'stop' or (action == 'click' and result.get('was_running')):
+                self._forget_owned('button', key)
+            else:
+                self._record_owned('button', key)
         if names and result.get('accepted'):
             result['wait'] = self._wait_for_event(names, since, timeout)
         return result
@@ -1246,6 +1424,13 @@ class _RequestHandler(BaseHTTPRequestHandler):
         return body
 
     def _handle(self, method: str) -> None:
+        self.remote._request_started()
+        try:
+            self._handle_request(method)
+        finally:
+            self.remote._request_finished()
+
+    def _handle_request(self, method: str) -> None:
         if not self._authorized():
             self._send_json(int(HTTPStatus.UNAUTHORIZED), {'ok': False, 'error': 'missing or invalid token'})
             return
@@ -1337,6 +1522,15 @@ class GuiAdapter:
         raise NotImplementedError
 
     def tab_text(self, key: str) -> str:
+        raise NotImplementedError
+
+    def stop_tab(self, key: str) -> dict:
+        raise NotImplementedError
+
+    def reload_configuration(self) -> dict:
+        raise NotImplementedError
+
+    def stop_owned(self, name: str, entries: list[dict]) -> list[str]:
         raise NotImplementedError
 
     def active_dialog(self) -> dict | None:
