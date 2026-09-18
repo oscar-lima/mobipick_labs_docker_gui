@@ -97,10 +97,27 @@ class MainWindowRemoteAdapter(GuiAdapter):
             'tooltip': (widget.toolTip() if widget else '') or str(config.get('tooltip') or ''),
             'runs_on': 'host' if window._config_runs_on_host(config) else 'container',
             'tab': key if key in window.tasks else None,
+            'args': window.button_args(key),
+            'full_command': (
+                window._command_with_generic_args(str(config.get('command')), config)
+                if config.get('command') else None
+            ),
+            **window.button_readiness(key),
         }
 
     def buttons(self) -> list[dict]:
         return [self._describe_button(key) for key in self._button_keys()]
+
+    # -- toolbar arguments ----------------------------------------------
+
+    def args(self) -> list[dict]:
+        return self.window.generic_args()
+
+    def set_args(self, values: dict) -> list[dict]:
+        try:
+            return self.window.set_generic_args(values)
+        except ValueError as exc:
+            raise RemoteControlError(str(exc)) from exc
 
     def press_button(self, key: str, action: str = 'click') -> dict:
         widget = self._button_widget(key)

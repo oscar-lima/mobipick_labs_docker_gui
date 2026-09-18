@@ -139,8 +139,15 @@ class EventBus:
         names: Iterable[str] | None,
         since: int,
         timeout: float,
+        *,
+        key: str | None = None,
     ) -> dict | None:
-        """Block until an event newer than ``since`` matches ``names``."""
+        """Block until an event newer than ``since`` matches ``names``.
+
+        With ``key``, events that carry a ``key`` field (``button_state``,
+        ``button_ready``, ``process_finished``...) only match that key;
+        events without one (``window_layout_applied``) still match.
+        """
         wanted = {str(n) for n in names} if names else None
         deadline = time.monotonic() + max(0.0, float(timeout))
         with self._cond:
@@ -149,6 +156,8 @@ class EventBus:
                     if event['seq'] <= since:
                         continue
                     if wanted and event['name'] not in wanted:
+                        continue
+                    if key is not None and 'key' in event['data'] and event['data']['key'] != key:
                         continue
                     return event
                 remaining = deadline - time.monotonic()
@@ -665,15 +674,17 @@ PRESENCE_MAX_TTL_S = 1800.0
 API_INDEX = [
     ('GET', '/', 'This endpoint list.'),
     ('GET', '/status', 'GUI summary: workspace, image, running state, buttons, tabs, shells.'),
-    ('GET', '/buttons', 'Toolbar buttons with their color state and text.'),
-    ('POST', '/buttons/{key}/click', 'Press a button. Body: {"wait_for": [events], "timeout": s}.'),
+    ('GET', '/buttons', 'Toolbar buttons with their color state, text, args, full_command and readiness (startup_seconds, ready_in_s, ready).'),
+    ('POST', '/buttons/{key}/click', 'Press a button. Body: {"args": {"name": "value"}, "wait_for": [events], "timeout": s}. Events with a key only match this button; "button_ready" returns at once when it is already ready.'),
     ('POST', '/buttons/{key}/start', 'Press only when the button is not running.'),
     ('POST', '/buttons/{key}/stop', 'Press only when the button is running.'),
+    ('GET', '/args', 'Toolbar argument dropdowns (name, value, options, buttons they apply to) plus the world selector.'),
+    ('POST', '/args', 'Select argument values without touching the profile. Body: {"anygrasp_mode": "real", "world": "moelk_tables"}.'),
     ('GET', '/presence', 'Clients that declared they are using the GUI (lights the window icon). Any number of differently named agents may be present at once.'),
     ('POST', '/presence', 'Declare that you are using the GUI. Body: {"name": "<agent>", "ttl_s": 600, "note": ""}. Repeat before ttl_s (max 1800) runs out; when it lapses the GUI stops what you started.'),
     ('DELETE', '/presence', 'Declare that you are done; stops what you started unless {"keep": true}. Body or query: {"name": "<agent>"}.'),
     ('GET', '/events?since=N&names=a,b&follow=1&timeout=s', 'List or stream (NDJSON) events.'),
-    ('POST', '/wait', 'Block until an event. Body: {"events": [names], "since": N, "timeout": s}.'),
+    ('POST', '/wait', 'Block until an event. Body: {"events": [names], "since": N, "timeout": s, "key": "sim"}.'),
     ('POST', '/reload', 'Re-read gui_settings.yaml and the workspace button profile without restarting the GUI.'),
     ('POST', '/tabs/{key}/stop', 'Stop the process behind a log tab: a button process, a customN command, or a remote shell.'),
     ('GET', '/tabs', 'Log tabs and whether their process runs.'),
@@ -1064,7 +1075,7 @@ class RemoteControlServer:
                     {'method': m, 'path': p, 'description': d} for m, p, d in API_INDEX
                 ],
                 'events': [
-                    'server_started', 'button_state', 'process_finished',
+                    'server_started', 'button_state', 'button_ready', 'process_finished',
                     'auto_launch_started', 'auto_launch_ready', 'auto_launch_complete',
                     'auto_launch_stopped', 'window_layout_applied', 'shell_opened',
                     'shell_exited', 'shell_closed', 'client_connected',
@@ -1111,7 +1122,18 @@ class RemoteControlServer:
             names = _list_param(body.get('events') or body.get('event'))
             since = _int_param(body.get('since'), None)
             timeout = _float_param(body.get('timeout'), 120.0)
-            return self._wait_for_event(names, since, timeout)
+            key = str(body.get('key')).strip() if body.get('key') else None
+            return self._wait_for_event(names, since, timeout, key=key)
+        if head == 'args' and len(parts) == 1:
+            if method == 'GET':
+                return {'args': self._invoke(self.adapter.args)}
+            if method == 'POST':
+                values = body.get('args') if isinstance(body.get('args'), dict) else body
+                values = {k: v for k, v in dict(values).items() if k != 'args'}
+                if not values:
+                    raise RemoteControlError('body must map argument names to values')
+                return {'args': self._invoke(lambda: self.adapter.set_args(values))}
+            raise RemoteControlError('method not allowed', status=HTTPStatus.METHOD_NOT_ALLOWED)
         if head == 'tabs':
             if method == 'POST' and len(parts) == 3 and parts[2] == 'stop':
                 return self.stop_tab(parts[1])
@@ -1175,7 +1197,12 @@ class RemoteControlServer:
             raise NotFound(f'unknown button action {action!r}')
         names = _list_param(body.get('wait_for'))
         timeout = _float_param(body.get('timeout'), 120.0)
+        args = body.get('args')
+        if args is not None and not isinstance(args, dict):
+            raise RemoteControlError('"args" must map argument names to values')
         since = self.events.last_seq
+        if args and action != 'stop':
+            self._invoke(lambda: self.adapter.set_args(args))
         result = self._invoke(lambda: self.adapter.press_button(key, action))
         result = dict(result)
         if result.get('accepted'):
@@ -1184,13 +1211,22 @@ class RemoteControlServer:
                 self._forget_owned('button', key)
             else:
                 self._record_owned('button', key)
-        if names and result.get('accepted'):
-            result['wait'] = self._wait_for_event(names, since, timeout)
+        if names:
+            button = result.get('button') or {}
+            if not result.get('accepted') and 'button_ready' in names and button.get('ready'):
+                # already running and past its startup estimate: nothing to wait for
+                result['wait'] = {
+                    'timed_out': False, 'since': since, 'event': None, 'already_ready': True,
+                }
+            elif result.get('accepted'):
+                result['wait'] = self._wait_for_event(names, since, timeout, key=key)
         return result
 
-    def _wait_for_event(self, names: list[str], since: int | None, timeout: float) -> dict:
+    def _wait_for_event(
+        self, names: list[str], since: int | None, timeout: float, *, key: str | None = None
+    ) -> dict:
         start_seq = self.events.last_seq if since is None else since
-        event = self.events.wait(names, start_seq, timeout)
+        event = self.events.wait(names, start_seq, timeout, key=key)
         if event is None:
             return {
                 'timed_out': True,
@@ -1517,6 +1553,12 @@ class GuiAdapter:
 
     def press_button(self, key: str, action: str) -> dict:
         raise NotImplementedError
+
+    def args(self) -> list[dict]:
+        return []
+
+    def set_args(self, values: dict) -> list[dict]:
+        raise RemoteControlError('this GUI has no toolbar arguments')
 
     def tabs(self) -> list[dict]:
         raise NotImplementedError

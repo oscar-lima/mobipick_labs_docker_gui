@@ -684,13 +684,14 @@ click with a wait without missing events.
 | Method and path | Purpose |
 | --- | --- |
 | `GET /status` | Workspace, image, world, cached roscore/sim state, buttons, tabs, shells, active dialog. |
-| `GET /buttons` | Toolbar buttons with `state` (`red` stopped, `green` running, `yellow` busy, `grey` unavailable), `tooltip`, `runs_on` (`host` or `container`), and the log `tab` key. |
-| `POST /buttons/{key}/click`, `/start`, `/stop` | Press a button. `start`/`stop` are idempotent. Body may contain `wait_for` (event names) and `timeout`. |
+| `GET /buttons` | Toolbar buttons with `state` (`red` stopped, `green` running, `yellow` busy, `grey` unavailable), `tooltip`, `runs_on` (`host` or `container`), the log `tab` key, the toolbar `args` the button receives and the resulting `full_command`, plus readiness from the auto-launch estimates: `startup_seconds` (the plan's `duration_seconds`, `null` when the button has none), `started_at`, `ready_at`, `ready_in_s` and `ready` (running and past the estimate). |
+| `POST /buttons/{key}/click`, `/start`, `/stop` | Press a button. `start`/`stop` are idempotent. Body may contain `args` (`{"anygrasp_mode": "real"}`, selected before the press), `wait_for` (event names) and `timeout`. Keyed events (`button_state`, `button_ready`, `process_finished`) only match this button; waiting for `button_ready` on a button that is already running and past its estimate returns at once with `already_ready: true`. |
+| `GET /args`, `POST /args` | The toolbar argument dropdowns (generic `arg_N` slots from the button profile) and the world selector: `name`, current `value`, `options` and the `buttons` each applies to. `POST` selects values by name (`{"anygrasp_mode": "real", "world": "moelk_tables"}`) exactly like choosing them in the toolbar, so no profile edit or reload is needed; unknown names or values are rejected. |
 | `GET /presence`, `POST /presence`, `DELETE /presence` | Declare that a client is using the GUI (`{"name": "<agent>", "ttl_s": 600, "note": ""}`; the name is chosen by the client, so any agent can use its own, and several may be present at once), refresh it, or withdraw it. While a client is present the window icon glows bright and the GUI log records who is working. The server remembers every button, custom command, and shell the client started; when the client withdraws (without `"keep": true`) or its `ttl_s` (default 10 min, max 30 min) lapses, the GUI stops those and logs the cleanup, so a crashed agent cannot leave the simulator running. |
 | `POST /reload` | Re-read `gui_settings.yaml` and the workspace button profile without restarting the GUI. Button commands, labels, tooltips and argument slots are picked up for the next press; running processes and their tabs are preserved. |
 | `POST /tabs/{key}/stop` | Stop the process behind a log tab: a button process (same as `/buttons/{key}/stop`), a `customN` command started with `/command`, or a remote shell. |
 | `GET /events?since=N&names=a,b` | Event history; add `follow=1&timeout=s` to stream NDJSON. |
-| `POST /wait` | Block until one of `events` arrives after `since` (default: now) or `timeout`. |
+| `POST /wait` | Block until one of `events` arrives after `since` (default: now) or `timeout`; `key` restricts keyed events to one button or tab. |
 | `GET /tabs`, `GET /tabs/{key}?tail=N&grep=RE` | Log tab list and plain-text tab contents. |
 | `GET /dialogs`, `POST /dialogs/dismiss` | Inspect or close the active modal dialog (`{"button": "Continue"}`, `accept`, `reject`). |
 | `POST /command` | Run text through the GUI custom command box. |
@@ -701,7 +702,9 @@ click with a wait without missing events.
 | `POST /shell/{id}/settings`, `DELETE /shell/{id}` | Change the session `stream` default; close the session and its container. |
 | `POST /quit` | Close the GUI with its normal container cleanup. |
 
-Events: `button_state`, `process_finished`, `auto_launch_started`,
+Events: `button_state`, `button_ready` (the button has been running for its
+configured `duration_seconds`; immediate for buttons without an estimate),
+`process_finished`, `auto_launch_started`,
 `auto_launch_ready`, `auto_launch_complete` (every process in the plan reached
 its ready time), `window_layout_applied` (the saved layout was replayed, which
 is the usual "everything is up" signal), `auto_launch_stopped`,

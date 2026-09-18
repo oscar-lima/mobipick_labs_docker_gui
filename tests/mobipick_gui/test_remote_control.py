@@ -62,6 +62,8 @@ class FakeAdapter(GuiAdapter):
         self.stopped_tabs = []
         self.cleaned = []
         self.reloads = []
+        self.arg_values = {'anygrasp_mode': 'mockup'}
+        self.ready = {}
 
     def status(self):
         return {'workspace': 'ws', 'buttons': self.buttons(), 'tabs': self.tabs()}
@@ -75,25 +77,52 @@ class FakeAdapter(GuiAdapter):
                 'busy': state == 'yellow',
                 'enabled': state != 'yellow',
                 'text': key,
+                'ready': bool(self.ready.get(key, state == 'green')),
+                'args': dict(self.arg_values) if key == 'sim' else {},
             }
             for key, state in self.states.items()
         ]
+
+    def args(self):
+        return [
+            {
+                'slot': 3,
+                'name': name,
+                'value': value,
+                'options': ['real', 'mockup'],
+                'buttons': ['sim'],
+            }
+            for name, value in self.arg_values.items()
+        ]
+
+    def set_args(self, values):
+        from mobipick_gui.remote_control import RemoteControlError
+
+        for name, value in values.items():
+            if name not in self.arg_values:
+                raise RemoteControlError(f'unknown argument {name!r}')
+            if value not in {'real', 'mockup'}:
+                raise RemoteControlError(f'{name!r} accepts [real, mockup], not {value!r}')
+            self.arg_values[name] = value
+        return self.args()
 
     def press_button(self, key, action):
         from mobipick_gui.remote_control import NotFound
 
         if key not in self.states:
             raise NotFound(f'unknown button {key}')
+        button = next(b for b in self.buttons() if b['key'] == key)
         if self.states[key] == 'yellow':
-            return {'accepted': False, 'reason': 'busy'}
+            return {'accepted': False, 'reason': 'busy', 'button': button}
         if action == 'start' and self.states[key] == 'green':
-            return {'accepted': False, 'reason': 'already running'}
+            return {'accepted': False, 'reason': 'already running', 'button': button}
         self.clicks.append((key, action))
         was_running = self.states[key] == 'green'
         self.states[key] = 'red' if was_running else 'green'
         if self.server is not None:
             self.server.emit('button_state', key=key, state=self.states[key])
-        return {'accepted': True, 'action': action, 'was_running': was_running}
+        button = next(b for b in self.buttons() if b['key'] == key)
+        return {'accepted': True, 'action': action, 'was_running': was_running, 'button': button}
 
     def reload_configuration(self):
         self.reloads.append(True)
@@ -375,6 +404,77 @@ def test_api_index_status_buttons_and_events(api_server):
     assert status == 200 and payload['timed_out'] is True
 
 
+def test_api_args_endpoint_and_button_args(api_server):
+    server, adapter, api = api_server
+    status, payload = api('GET', '/args')
+    assert status == 200 and payload['args'][0]['name'] == 'anygrasp_mode'
+    assert payload['args'][0]['value'] == 'mockup' and payload['args'][0]['buttons'] == ['sim']
+
+    status, payload = api('POST', '/args', {'anygrasp_mode': 'real'})
+    assert status == 200 and payload['args'][0]['value'] == 'real'
+    status, payload = api('POST', '/args', {'anygrasp_mode': 'bogus'})
+    assert status == 400 and 'accepts' in payload['error']
+    status, payload = api('POST', '/args', {'nope': 'x'})
+    assert status == 400 and 'unknown argument' in payload['error']
+    status, payload = api('POST', '/args', {})
+    assert status == 400
+    assert adapter.arg_values == {'anygrasp_mode': 'real'}
+
+    # args in the press body are applied before the click, and a bad value blocks it
+    status, payload = api('POST', '/buttons/sim/start', {'args': {'anygrasp_mode': 'bogus'}})
+    assert status == 400 and adapter.clicks == []
+    status, payload = api('POST', '/buttons/sim/start', {'args': 'real'})
+    assert status == 400 and adapter.clicks == []
+    status, payload = api('POST', '/buttons/sim/start', {'args': {'anygrasp_mode': 'mockup'}})
+    assert status == 200 and payload['accepted'] is True
+    assert adapter.clicks == [('sim', 'start')]
+    assert payload['button']['args'] == {'anygrasp_mode': 'mockup'}
+    status, payload = api('GET', '/buttons')
+    sim = next(b for b in payload['buttons'] if b['key'] == 'sim')
+    assert sim['args'] == {'anygrasp_mode': 'mockup'} and sim['ready'] is True
+
+
+def test_api_button_wait_is_keyed_and_ready_short_circuits(api_server):
+    server, adapter, api = api_server
+
+    # button_state from another button must not satisfy a keyed wait
+    def emit_other_then_mine():
+        time.sleep(0.05)
+        server.emit('button_state', key='roscore', state='green')
+        server.emit('button_ready', key='roscore', startup_seconds=3.0)
+        time.sleep(0.05)
+        server.emit('button_ready', key='sim', startup_seconds=30.0)
+
+    threading.Thread(target=emit_other_then_mine, daemon=True).start()
+    status, payload = api('POST', '/buttons/sim/start', {'wait_for': ['button_ready'], 'timeout': 5})
+    assert status == 200 and payload['accepted'] is True
+    assert payload['wait']['timed_out'] is False
+    assert payload['wait']['event']['name'] == 'button_ready'
+    assert payload['wait']['event']['data']['key'] == 'sim'
+
+    # already running and ready: start is refused but the wait resolves at once
+    status, payload = api('POST', '/buttons/sim/start', {'wait_for': ['button_ready'], 'timeout': 5})
+    assert payload['accepted'] is False and payload['reason'] == 'already running'
+    assert payload['wait'] == {'timed_out': False, 'since': payload['wait']['since'], 'event': None, 'already_ready': True}
+
+    # running but not yet past the estimate: no shortcut, and the request does not wait
+    adapter.ready['sim'] = False
+    status, payload = api('POST', '/buttons/sim/start', {'wait_for': ['button_ready'], 'timeout': 0.1})
+    assert payload['accepted'] is False and 'wait' not in payload
+
+    # /wait accepts a key too; events without a key still match
+    seq = server.events.last_seq
+
+    def emit_later():
+        time.sleep(0.05)
+        server.emit('button_ready', key='roscore')
+        server.emit('window_layout_applied', windows=1)
+
+    threading.Thread(target=emit_later, daemon=True).start()
+    status, payload = api('POST', '/wait', {'events': ['button_ready', 'window_layout_applied'], 'since': seq, 'key': 'sim', 'timeout': 5})
+    assert status == 200 and payload['event']['name'] == 'window_layout_applied'
+
+
 def test_api_tabs_dialogs_command_and_quit(api_server):
     server, adapter, api = api_server
     status, payload = api('GET', '/tabs')
@@ -646,6 +746,115 @@ def test_main_window_layout_apply_and_ready_emit_remote_events(tmp_path, monkeyp
         window._window_layout_manager._on_applied(2)
         event = server.events.since(before)[-1]
         assert event['name'] == 'window_layout_applied' and event['data'] == {'windows': 2}
+    finally:
+        window._stop_remote_control()
+        window.deleteLater()
+        app.processEvents()
+
+
+def test_main_window_button_readiness_uses_launch_plan_estimates(tmp_path, monkeypatch):
+    app, window = _make_window(tmp_path, monkeypatch)
+    try:
+        server = window.remote_control
+        window._launch_plan = dict(
+            window._launch_plan,
+            processes=[{'button': 'roscore', 'duration_seconds': 0.2, 'depends_on': ''}],
+        )
+        assert window.button_startup_seconds('roscore') == 0.2
+        assert window.button_startup_seconds('sim') is None
+        adapter = window.remote_control.adapter
+        roscore = next(b for b in adapter.buttons() if b['key'] == 'roscore')
+        assert roscore['ready'] is False and roscore['startup_seconds'] == 0.2
+        assert roscore['ready_in_s'] is None
+
+        before = server.events.last_seq
+        window.set_roscore_visual('yellow', 'Starting Roscore...', False)
+        window.set_roscore_visual('green', 'Stop Roscore', True)
+        roscore = next(b for b in adapter.buttons() if b['key'] == 'roscore')
+        assert roscore['running'] and roscore['ready'] is False
+        assert 0.0 < roscore['ready_in_s'] <= 0.2
+        assert [e['name'] for e in server.events.since(before)] == ['button_state', 'button_state']
+
+        deadline = time.time() + 3
+        while time.time() < deadline and not server.events.since(before, names=['button_ready']):
+            app.processEvents()
+            time.sleep(0.01)
+        ready = server.events.since(before, names=['button_ready'])
+        assert ready and ready[-1]['data'] == {'key': 'roscore', 'startup_seconds': 0.2, 'estimated': True}
+        roscore = next(b for b in adapter.buttons() if b['key'] == 'roscore')
+        assert roscore['ready'] is True and roscore['ready_in_s'] == 0.0
+
+        # no estimate: ready as soon as the button turns green
+        before = server.events.last_seq
+        window._set_toggle_state('sim', None, 'green', 'Stop Sim', True)
+        app.processEvents()
+        names = [e['name'] for e in server.events.since(before)]
+        assert names == ['button_state', 'button_ready']
+        assert server.events.since(before)[-1]['data']['estimated'] is False
+
+        # stopping forgets the readiness bookkeeping
+        window.set_roscore_visual('red', 'Start Roscore', True)
+        roscore = next(b for b in adapter.buttons() if b['key'] == 'roscore')
+        assert roscore['ready'] is False and roscore['ready_at'] is None
+        assert 'roscore' not in window._button_ready_timers
+    finally:
+        window._stop_remote_control()
+        window.deleteLater()
+        app.processEvents()
+
+
+def test_main_window_generic_args_over_remote_api(tmp_path, monkeypatch):
+    from mobipick_gui import main_window as mw
+
+    original = mw.load_button_layout
+
+    def layout_with_arg(*a, **k):
+        entries = list(original(*a, **k))
+        entries.append(
+            {
+                'key': 'anygrasp',
+                'label': 'Anygrasp',
+                'kind': 'command',
+                'command': 'launch_anygrasp.sh',
+                'host': True,
+                'arg_3_name': 'anygrasp_mode',
+                'arg_3_options': ['real', 'mockup'],
+                'arg_3_applies': True,
+            }
+        )
+        return entries
+
+    monkeypatch.setattr(mw, 'load_button_layout', layout_with_arg)
+    app, window = _make_window(tmp_path, monkeypatch)
+    try:
+        adapter = window.remote_control.adapter
+        args = {entry['name']: entry for entry in adapter.args()}
+        assert args['anygrasp_mode']['options'] == ['real', 'mockup']
+        assert args['anygrasp_mode']['value'] == 'real'
+        assert args['anygrasp_mode']['buttons'] == ['anygrasp']
+        assert 'world' in args and window._current_world() in args['world']['options']
+
+        anygrasp = next(b for b in adapter.buttons() if b['key'] == 'anygrasp')
+        assert anygrasp['args'] == {'anygrasp_mode': 'real'}
+        assert anygrasp['full_command'] == "launch_anygrasp.sh anygrasp_mode:='real'"
+        sim = next(b for b in adapter.buttons() if b['key'] == 'sim')
+        assert sim['args'] == {}
+
+        adapter.set_args({'anygrasp_mode': 'mockup'})
+        assert window._generic_arg_inputs[3].currentText() == 'mockup'
+        anygrasp = next(b for b in adapter.buttons() if b['key'] == 'anygrasp')
+        assert anygrasp['full_command'] == "launch_anygrasp.sh anygrasp_mode:='mockup'"
+
+        from mobipick_gui.remote_control import RemoteControlError
+
+        with pytest.raises(RemoteControlError):
+            adapter.set_args({'anygrasp_mode': 'gpu'})
+        with pytest.raises(RemoteControlError):
+            adapter.set_args({'unknown': 'x'})
+
+        world = args['world']['options'][-1]
+        adapter.set_args({'world': world})
+        assert window._current_world() == world
     finally:
         window._stop_remote_control()
         window.deleteLater()

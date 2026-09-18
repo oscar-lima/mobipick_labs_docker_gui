@@ -145,6 +145,17 @@ def _events_list(value: str | None) -> list[str]:
     return [item.strip() for item in value.split(',') if item.strip()]
 
 
+def _arg_values(items: Sequence[str]) -> dict[str, str]:
+    """Parse NAME=VALUE pairs into a dict; raises SystemExit on a malformed pair."""
+    values: dict[str, str] = {}
+    for item in items:
+        name, sep, value = str(item).partition('=')
+        if not sep or not name.strip():
+            raise SystemExit(f'expected NAME=VALUE, got {item!r}')
+        values[name.strip()] = value.strip()
+    return values
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog='mobipick-labs-docker-gui-remote',
@@ -158,7 +169,10 @@ def _build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser('api', help='List API endpoints')
     sub.add_parser('status', help='GUI status summary')
-    sub.add_parser('buttons', help='List toolbar buttons and their states')
+    sub.add_parser('buttons', help='List toolbar buttons with their states, arguments and readiness estimates')
+    sub.add_parser('args', help='List toolbar argument dropdowns (name, value, options) and the world selector')
+    p = sub.add_parser('set-args', help='Select toolbar argument values, e.g. anygrasp_mode=real world=moelk_tables')
+    p.add_argument('values', nargs='+', metavar='NAME=VALUE')
 
     p = sub.add_parser('hello', help='Declare that you are using the GUI (lights the window icon until "bye")')
     p.add_argument('name', help='your agent name, shown in the GUI log (any string, e.g. claude, codex, alice-laptop)')
@@ -179,13 +193,15 @@ def _build_parser() -> argparse.ArgumentParser:
     ):
         p = sub.add_parser(name, help=help_text)
         p.add_argument('key', help='button key, e.g. roscore, sim, rviz, auto_launch, terminal')
-        p.add_argument('--wait', dest='wait_for', default=None, help='comma-separated event names to wait for after pressing')
+        p.add_argument('--wait', dest='wait_for', default=None, help='comma-separated event names to wait for after pressing, e.g. button_ready')
         p.add_argument('--timeout', type=float, default=180.0, help='seconds to wait for the event')
+        p.add_argument('--arg', dest='args', action='append', default=[], metavar='NAME=VALUE', help='select a toolbar argument before pressing (repeatable)')
 
     p = sub.add_parser('wait', help='Block until an event arrives')
     p.add_argument('events', help='comma-separated event names, e.g. window_layout_applied,auto_launch_complete')
     p.add_argument('--since', type=int, default=None, help='only accept events newer than this sequence number')
     p.add_argument('--timeout', type=float, default=180.0)
+    p.add_argument('--key', default=None, help='only accept keyed events (button_state, button_ready, process_finished) for this button/tab')
 
     p = sub.add_parser('events', help='List or follow events')
     p.add_argument('--since', type=int, default=0)
@@ -274,6 +290,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             payload = client.call('GET', '/status')
         elif cmd == 'buttons':
             payload = client.call('GET', '/buttons')
+        elif cmd == 'args':
+            payload = client.call('GET', '/args')
+        elif cmd == 'set-args':
+            payload = client.call('POST', '/args', body=_arg_values(args.values))
         elif cmd == 'hello':
             body = {'name': args.name, 'note': args.note}
             if args.ttl is not None:
@@ -291,11 +311,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             body: dict = {}
             if args.wait_for:
                 body = {'wait_for': _events_list(args.wait_for), 'timeout': args.timeout}
+            if args.args:
+                body['args'] = _arg_values(args.args)
             payload = client.call('POST', f'/buttons/{args.key}/{cmd}', body=body, timeout=long_timeout(args.timeout))
         elif cmd == 'wait':
             body = {'events': _events_list(args.events), 'timeout': args.timeout}
             if args.since is not None:
                 body['since'] = args.since
+            if args.key:
+                body['key'] = args.key
             payload = client.call('POST', '/wait', body=body, timeout=long_timeout(args.timeout))
         elif cmd == 'events':
             query = {'since': args.since, 'names': args.names, 'limit': args.limit, 'timeout': args.timeout}

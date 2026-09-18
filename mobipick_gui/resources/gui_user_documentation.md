@@ -591,6 +591,15 @@ the **Install Source** tab.
   output. Closing the tab closes the shell and its container. Anyone who can
   reach the port can run commands in the containers, so use a token on
   shared networks.
+- Remote clients can select the toolbar argument dropdowns (for example
+  `anygrasp_mode`) and the world exactly as you would in the toolbar
+  (`POST /args`, `mobipick-labs-docker-gui-remote set-args anygrasp_mode=real`,
+  or `--arg name=value` on a button press); the choice shows in the toolbar
+  and in the GUI log. They also see when a running process is expected to
+  be ready: each button reports its **Configure Automation** startup estimate
+  (`duration_seconds`) and a `button_ready` event fires when that time has
+  elapsed, so an agent waits only as long as the estimate instead of a fixed
+  timeout.
 - The command line client is `mobipick-labs-docker-gui-remote`; run it with
   `--help` for the available actions.
 - A Claude Code skill describing the curl workflow ships with the package;

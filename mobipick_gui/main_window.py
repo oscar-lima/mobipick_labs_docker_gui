@@ -3066,6 +3066,11 @@ class MainWindow(QMainWindow):
         )
         self._synced_container_refs: set[str] = set()
         self._toggle_states: dict[str, str] = {}
+        # Remote-control readiness: when a button left 'red' and when its
+        # configured startup estimate (auto-launch duration_seconds) elapses.
+        self._button_started_at: dict[str, float] = {}
+        self._button_ready_at: dict[str, float] = {}
+        self._button_ready_timers: dict[str, QTimer] = {}
         self._last_log_origin: dict[str, str] = {}
         self._gui_log_color = str(CONFIG['log'].get('gui_log_color', '#ff00ff'))
         self._command_log_color = str(CONFIG['log'].get('command_log_color', '#4da3ff'))
@@ -12001,7 +12006,9 @@ CMD ["bash"]
     def _set_toggle_state(self, key: str, button: QPushButton | None, state: str, text: str, enabled: bool):
         button = button or self._get_button_widget(key)
         if not button:
+            previous = self._toggle_states.get(key)
             self._toggle_states[key] = state
+            self._track_button_readiness(key, previous, state)
             return
         button.setText(text)
         toggle_cfg = CONFIG['buttons']['sim_toggle']
@@ -12031,6 +12038,164 @@ CMD ["bash"]
                 text=text,
                 enabled=bool(enabled),
             )
+        self._track_button_readiness(key, previous, state)
+
+    # -- readiness estimates (remote control) ----------------------------
+
+    def button_startup_seconds(self, key: str) -> float | None:
+        """Configured startup estimate of a button, from the auto-launch plan."""
+        plan = self._launch_plan if isinstance(self._launch_plan, dict) else {}
+        for entry in list(plan.get('processes') or []) + list(plan.get('process_settings') or []):
+            if isinstance(entry, dict) and str(entry.get('button')) == key:
+                try:
+                    return max(0.0, float(entry.get('duration_seconds', 0) or 0))
+                except (TypeError, ValueError):
+                    return None
+        return None
+
+    def button_readiness(self, key: str) -> dict:
+        """Readiness of a running button according to its startup estimate."""
+        startup = self.button_startup_seconds(key)
+        running = self._toggle_states.get(key) == 'green'
+        started_at = self._button_started_at.get(key)
+        ready_at = self._button_ready_at.get(key)
+        ready = bool(running and (ready_at is None or time.time() >= ready_at))
+        return {
+            'startup_seconds': startup,
+            'started_at': started_at if running else None,
+            'ready_at': ready_at if running else None,
+            'ready_in_s': (
+                round(max(0.0, ready_at - time.time()), 1)
+                if running and ready_at is not None and not ready
+                else 0.0 if running else None
+            ),
+            'ready': ready,
+        }
+
+    def _track_button_readiness(self, key: str, previous: str | None, state: str) -> None:
+        """Remember when ``key`` was started and emit ``button_ready`` on its estimate."""
+        if state == previous:
+            return
+        if state == 'red' or state == 'grey':
+            self._button_started_at.pop(key, None)
+            self._button_ready_at.pop(key, None)
+            timer = self._button_ready_timers.pop(key, None)
+            if timer is not None:
+                timer.stop()
+                timer.deleteLater()
+            return
+        if previous in (None, 'red', 'grey'):
+            self._button_started_at[key] = time.time()
+        if state != 'green':
+            return
+        started = self._button_started_at.setdefault(key, time.time())
+        startup = self.button_startup_seconds(key) or 0.0
+        ready_at = started + startup
+        self._button_ready_at[key] = ready_at
+        delay_ms = int(max(0.0, ready_at - time.time()) * 1000)
+        timer = self._button_ready_timers.pop(key, None)
+        if timer is not None:
+            timer.stop()
+            timer.deleteLater()
+
+        def _ready() -> None:
+            if self._button_ready_timers.get(key) is timer:
+                self._button_ready_timers.pop(key, None)
+            if self._toggle_states.get(key) != 'green':
+                return
+            _emit_remote_event(
+                self,
+                'button_ready',
+                key=key,
+                startup_seconds=startup,
+                estimated=startup > 0,
+            )
+
+        timer = QTimer(self)
+        timer.setSingleShot(True)
+        timer.timeout.connect(_ready)
+        self._button_ready_timers[key] = timer
+        timer.start(delay_ms)
+
+    # -- generic toolbar arguments (remote control) ----------------------
+
+    def generic_args(self) -> list[dict]:
+        """Toolbar argument dropdowns: name, current value, options, buttons they apply to."""
+        inputs = getattr(self, '_generic_arg_inputs', {})
+        names = getattr(self, '_generic_arg_names_by_slot', {})
+        entries: list[dict] = []
+        for slot in GENERIC_BUTTON_ARG_SLOTS:
+            widget = inputs.get(slot)
+            name = str(names.get(slot) or '').strip()
+            if widget is None or not name:
+                continue
+            entries.append(
+                {
+                    'slot': slot,
+                    'name': name,
+                    'value': widget.currentText().strip(),
+                    'options': [widget.itemText(i) for i in range(widget.count())],
+                    'buttons': [
+                        key
+                        for key, config in self._config_buttons.items()
+                        if config.get(f'arg_{slot}_applies')
+                        and str(config.get(f'arg_{slot}_name') or '').strip() == name
+                    ],
+                }
+            )
+        world_combo = getattr(self, 'world_combo', None)
+        if world_combo is not None:
+            entries.append(
+                {
+                    'slot': 'world',
+                    'name': 'world',
+                    'value': self._current_world(),
+                    'options': [world_combo.itemText(i) for i in range(world_combo.count())],
+                    'buttons': sorted(
+                        key
+                        for key, config in self._config_buttons.items()
+                        if config.get('world_arg_name')
+                    ) + ['sim'],
+                }
+            )
+        return entries
+
+    def button_args(self, key: str) -> dict[str, str]:
+        """Argument name -> current value for the arguments ``key`` receives."""
+        config = self._config_buttons.get(key, {})
+        values: dict[str, str] = {}
+        inputs = getattr(self, '_generic_arg_inputs', {})
+        for slot in GENERIC_BUTTON_ARG_SLOTS:
+            if not config.get(f'arg_{slot}_applies'):
+                continue
+            name = str(config.get(f'arg_{slot}_name') or '').strip()
+            widget = inputs.get(slot)
+            if name and widget is not None:
+                values[name] = widget.currentText().strip()
+        return values
+
+    def set_generic_args(self, values: dict) -> list[dict]:
+        """Select toolbar argument values by name; raises ValueError on unknown input."""
+        entries = {entry['name']: entry for entry in self.generic_args()}
+        inputs = getattr(self, '_generic_arg_inputs', {})
+        for name, value in dict(values or {}).items():
+            entry = entries.get(str(name))
+            if entry is None:
+                raise ValueError(
+                    f'unknown argument {name!r}; known: {", ".join(entries) or "none"}'
+                )
+            text = str(value).strip()
+            if text not in entry['options']:
+                raise ValueError(
+                    f'{name!r} accepts {entry["options"]}, not {text!r}'
+                )
+            if entry['slot'] == 'world':
+                combo = self.world_combo
+                combo.setCurrentIndex(entry['options'].index(text))
+            else:
+                inputs[entry['slot']].setCurrentIndex(entry['options'].index(text))
+            self._log_info(f'remote control: set {name}={text}')
+        return self.generic_args()
 
     def _disable_toggle_preserving_visual(self, key: str, button: QPushButton | None):
         current_state = self._toggle_states.get(key, 'red')

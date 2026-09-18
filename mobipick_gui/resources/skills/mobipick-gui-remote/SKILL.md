@@ -79,14 +79,21 @@ checking; if it is up, reuse it and read its existing output.
 curl -s $GUI/buttons | python3 -c '
 import json,sys
 for b in json.load(sys.stdin)["buttons"]:
-    print("%-12s %-7s %-9s tab=%-16s %r  tip=%r" % (b["key"], b["state"], b["runs_on"], b["tab"], b["text"], b["tooltip"]))'
+    print("%-12s %-7s ready=%-5s in=%-5s %-9s tab=%-16s args=%s  tip=%r" % (b["key"], b["state"], b["ready"], b["ready_in_s"], b["runs_on"], b["tab"], b["args"], b["tooltip"]))'
 ```
 
 - `state`: `green` = running, `red` = stopped, `yellow` = starting or
   stopping (do not press it; wait), `grey` = unavailable in this mode.
-- `tooltip` explains what the button does; `command` shows the exact
-  command it runs; `kind` is `builtin` or `command`; `runs_on` tells you
-  whether a shell inside the container will see it directly.
+- `ready` is `true` once a running button has been up for its configured
+  startup estimate (`startup_seconds`, from the Auto Launch plan; `null`
+  when the profile has none, then `ready` equals `running`); `ready_in_s`
+  says how much of the estimate is left. **A green button with
+  `ready: true` is up: use it right away, do not wait any further.**
+- `tooltip` explains what the button does; `command` shows the configured
+  command, `args` the toolbar argument values it currently receives (for
+  example `{"anygrasp_mode": "mockup"}`) and `full_command` the two
+  combined; `kind` is `builtin` or `command`; `runs_on` tells you whether
+  a shell inside the container will see it directly.
 - `tab` is the log tab key holding that process's output, present even when
   the process was started long before you connected.
 - `curl -s $GUI/status` adds `roscore_running`, `sim_running`,
@@ -120,12 +127,28 @@ never accidentally stops something.
 ```bash
 curl -s -X POST $GUI/buttons/roscore/start -H 'Content-Type: application/json' -d '{}'
 curl -s -X POST $GUI/buttons/sim/start -H 'Content-Type: application/json' \
-     -d '{"wait_for":["button_state"],"timeout":60}'
+     -d '{"wait_for":["button_ready"],"timeout":90}'
 curl -s -X POST $GUI/buttons/rviz/stop -H 'Content-Type: application/json' -d '{}'
 ```
 
 `accepted:false` with `reason` means already running / not running / busy /
-disabled; read the reason and move on. Most container buttons auto-start
+disabled; read the reason and move on.
+
+Buttons that take a toolbar argument (a dropdown next to the toolbar, e.g.
+`anygrasp_mode: real|mockup`, or the world selector) get it from `GET /args`.
+Select a value over the API instead of editing the profile YAML: either
+`POST /args` or `args` in the press body, which is applied before the click.
+Unknown names or values are rejected with HTTP 400 and nothing is pressed.
+
+```bash
+curl -s $GUI/args | python3 -c 'import json,sys; [print(a["name"], a["value"], a["options"], a["buttons"]) for a in json.load(sys.stdin)["args"]]'
+curl -s -X POST $GUI/buttons/anygrasp/start -H 'Content-Type: application/json' \
+     -d '{"args":{"anygrasp_mode":"real"},"wait_for":["button_ready"],"timeout":60}'
+curl -s -X POST $GUI/args -H 'Content-Type: application/json' -d '{"world":"moelk_tables"}'
+```
+
+The selection is visible in the toolbar and logged, so tell the user when
+you leave a dropdown on a different value than you found it. Most container buttons auto-start
 roscore when needed; if you started roscore, or a button auto-started it for
 you, you stop it too (`/buttons/roscore/stop`) once everything else you
 started is down.
@@ -152,23 +175,36 @@ the simulator running while waiting for visual confirmation; stop it first,
 then ask what the user saw. Never stop a process that was already running
 unless the user explicitly requests it.
 
-Wait until a launch has settled. The reliable signal is the GUI replaying
-the saved window layout (`window_layout_applied`); `auto_launch_complete`
-fires when every step of an Auto Launch reached its ready time:
+Wait exactly as long as the GUI's own estimate, no longer. Every button
+carries the startup time the user configured for it (`startup_seconds`), and
+`button_ready` fires for that button when the time has elapsed (immediately
+when there is no estimate). Waiting for it in the press body is keyed to
+that button, and if the button was already running and ready the call
+returns at once with `already_ready: true` instead of blocking:
+
+```bash
+curl -s -X POST $GUI/buttons/sim/start -H 'Content-Type: application/json' \
+     -d '{"wait_for":["button_ready","process_finished"],"timeout":90}'
+# later, for a button someone else started, keyed so other buttons do not satisfy it:
+curl -s -X POST $GUI/wait -H 'Content-Type: application/json' \
+     -d '{"events":["button_ready"],"key":"sim","since":SEQ,"timeout":90}'
+```
+
+Include `process_finished` in `wait_for` so a launch that dies returns
+early (the event carries the tab key and exit code) instead of running out
+the timeout. Do **not** wait for `window_layout_applied` after a single
+button press: that event only follows an Auto Launch. Prefer
+`button_ready` over a fixed sleep, a large `timeout`, or polling the tab
+for a "ready" line; read the tab only afterwards, to confirm the last
+lines look healthy. When you pressed **Auto Launch**, the equivalent
+signals are `auto_launch_complete` (every step reached its ready time) and
+`window_layout_applied` (the saved layout was replayed):
 
 ```bash
 curl -s -X POST $GUI/buttons/auto_launch/start -H 'Content-Type: application/json' \
      -d '{"wait_for":["window_layout_applied","auto_launch_complete"],"timeout":240}'
-# or later, using the seq from a previous response so nothing is missed:
-curl -s -X POST $GUI/wait -H 'Content-Type: application/json' \
-     -d '{"events":["window_layout_applied"],"since":SEQ,"timeout":240}'
 curl -s "$GUI/events?since=SEQ"          # history; add &follow=1&timeout=60 with curl -N to stream
 ```
-
-For a single process without a layout, poll `state` until it is `green`
-and then check its tab for the line you expect (for example `grep=ready`
-or the launch's final message). `process_finished` events report a tab
-key and exit code when something dies.
 
 ## 4. Modal dialogs
 
@@ -254,11 +290,12 @@ states, and `rospy.wait_for_message`.
 - `POST /command -d '{"command":"..."}'` runs text through the GUI's own
   Custom Command box (a `customN` tab, roscore auto-started).
 - `POST /reload` re-reads `gui_settings.yaml` and the workspace button
-  profile. Use it when a toolbar command has to change (for example adding
-  `grasp_fix:=true` to the Sim button): edit the profile YAML, `POST /reload`,
-  then press the button. This replaces asking the user to restart the GUI.
-  Running processes are preserved, so stop a process first if you need it
-  relaunched with the new command.
+  profile. Use it only when a toolbar *command* has to change (for example
+  adding `grasp_fix:=true` to the Sim button): edit the profile YAML,
+  `POST /reload`, then press the button. This replaces asking the user to
+  restart the GUI. Running processes are preserved, so stop a process first
+  if you need it relaunched with the new command. Picking a value of an
+  existing dropdown never needs this: use `/args` (section 3).
 - `POST /quit` closes the GUI **and stops all its containers**. Only on
   explicit user request.
 - The GUI log tab (`/tabs/log`) records every remote action, so the user
@@ -268,13 +305,14 @@ states, and `rospy.wait_for_message`.
 
 0. `POST /presence` with your name so the GUI icon glows and the log shows
    who is working; repeat it every 10 minutes.
-1. `GET /status` and `/buttons`: note what is green, read tooltips of
-   anything unfamiliar. Write down what was already running: that is the
-   state you hand back.
+1. `GET /status` and `/buttons`: note what is green and `ready`, read
+   tooltips of anything unfamiliar. Write down what was already running:
+   that is the state you hand back. A ready process needs no waiting.
 2. Reuse running processes; `GET /tabs/<key>?tail=…&grep=…` for their
    history.
-3. `start` only what is missing, wait for `window_layout_applied` or a
-   green state plus an expected log line.
+3. `start` only what is missing, with the `args` it needs, and wait for
+   `button_ready` (plus `process_finished` to catch a crash); after an
+   Auto Launch wait for `window_layout_applied`.
 4. Open one shell, run checks with `stream:false`/`tail`/`grep`, follow
    long commands with `--no-wait` plus `follow=1`.
 5. Hand-over checklist, before your final message and before any message
