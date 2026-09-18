@@ -161,7 +161,7 @@ def _build_parser() -> argparse.ArgumentParser:
     sub.add_parser('buttons', help='List toolbar buttons and their states')
 
     p = sub.add_parser('hello', help='Declare that you are using the GUI (lights the window icon until "bye")')
-    p.add_argument('name', help='client name shown in the GUI log, e.g. claude')
+    p.add_argument('name', help='your agent name, shown in the GUI log (any string, e.g. claude, codex, alice-laptop)')
     p.add_argument('--ttl', type=float, default=None, help='seconds until the declaration expires (default 600, max 1800); repeat hello to refresh')
     p.add_argument('--note', default='', help='what you are doing, shown in /status')
     p = sub.add_parser('bye', help='Declare that you are done; the GUI stops what you started unless --keep')

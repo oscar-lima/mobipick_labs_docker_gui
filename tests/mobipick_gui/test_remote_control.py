@@ -1015,3 +1015,32 @@ def test_reload_configuration_picks_up_changed_command(tmp_path, monkeypatch):
     finally:
         window._stop_remote_control()
         window.close()
+
+
+def test_presence_supports_several_named_agents():
+    """The client name is runtime data: any agent may use its own name."""
+    adapter = FakeAdapter()
+    server = RemoteControlServer(adapter, host='127.0.0.1', port=0)
+    adapter.server = server
+    host, port = server.start()
+    try:
+        api = _Api(f'http://{host}:{port}')
+        api('POST', '/presence', {'name': 'codex'})
+        api('POST', '/presence', {'name': 'alice-laptop'})
+        assert {c['name'] for c in server.clients()} == {'codex', 'alice-laptop'}
+        assert server.in_use
+
+        # Ownership is tracked per agent, not globally.
+        api('POST', '/buttons/roscore/start', {})
+        owner = {e['key'] for e in server.owned_by('codex')}
+        assert owner == {'roscore'}  # first-declared agent owns what it started
+        assert server.owned_by('alice-laptop') == []
+
+        # The GUI stays "in use" until the last agent leaves.
+        api('DELETE', '/presence', {'name': 'alice-laptop'})
+        assert server.in_use and [c['name'] for c in server.clients()] == ['codex']
+        api('DELETE', '/presence', {'name': 'codex'})
+        assert not server.in_use
+        assert {e['key'] for e in server.take_owned('codex')} == {'roscore'}
+    finally:
+        server.stop()
