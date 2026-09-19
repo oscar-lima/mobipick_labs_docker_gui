@@ -3633,9 +3633,10 @@ class MainWindow(QMainWindow):
             timer.setInterval(REMOTE_ICON_GLOW_TICK_MS)
             timer.timeout.connect(self._update_remote_icon_glow)
             self._remote_icon_timer = timer
-        if self._remote_app_glow is None:
+        if self._remote_app_glow is None or not self._remote_app_glow.available:
             # GNOME ignores the window icon; glow the dock icon via the
-            # shell extension when it is installed and recent enough.
+            # shell extension when it is installed and recent enough.  A
+            # client that lost the extension is re-probed on every enable.
             self._remote_app_glow = GnomeAppGlow(
                 APPLICATION_DESKTOP_ID,
                 color=(

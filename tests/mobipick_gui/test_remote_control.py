@@ -1253,3 +1253,41 @@ def test_presence_supports_several_named_agents():
         assert {e['key'] for e in server.take_owned('codex')} == {'roscore'}
     finally:
         server.stop()
+
+
+def test_gnome_app_glow_survives_a_transient_call_failure(monkeypatch):
+    from mobipick_gui.window_control import GnomeAppGlow
+
+    glow = GnomeAppGlow('app', probe=False)
+    glow._available = True
+    glow.retry_delay = 0.01
+    calls = []
+
+    def fake_call(self, method, *args):
+        calls.append(method)
+        if method == 'Version':
+            return (4,)
+        # first SetAppGlow fails the way a disposed dock icon makes it fail
+        return None if calls.count('SetAppGlow') == 1 else (1,)
+
+    monkeypatch.setattr(GnomeAppGlow, '_call', fake_call)
+    glow.set_level(0.7)
+    deadline = time.time() + 5
+    while calls.count('SetAppGlow') < 2 and time.time() < deadline:
+        time.sleep(0.01)
+    assert glow.available
+    assert calls.count('SetAppGlow') == 2 and 'Version' in calls
+    glow.clear()
+
+
+def test_gnome_app_glow_gives_up_when_extension_is_gone(monkeypatch):
+    from mobipick_gui.window_control import GnomeAppGlow
+
+    glow = GnomeAppGlow('app', probe=False)
+    glow._available = True
+    monkeypatch.setattr(GnomeAppGlow, '_call', lambda self, method, *args: None)
+    glow.set_level(0.7)
+    deadline = time.time() + 5
+    while glow.available and time.time() < deadline:
+        time.sleep(0.01)
+    assert not glow.available

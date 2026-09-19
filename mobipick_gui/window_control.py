@@ -14,6 +14,7 @@ import re
 import shutil
 import subprocess
 import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Mapping
@@ -574,6 +575,7 @@ class GnomeAppGlow:
         self.color = color
         self._gdbus_bin = gdbus_bin
         self._log_warning = log_warning or (lambda _msg: None)
+        self.retry_delay = 0.5  # seconds before resending after a transient failure
         self._available = False
         self._level: float | None = None
         self._sent: tuple[float, str] | None = None
@@ -632,12 +634,23 @@ class GnomeAppGlow:
                     self._cond.wait()
                 level, color = self._level, self.color
             result = self._call('SetAppGlow', self.app_id, level, color)
+            transient = False
+            if result is None:
+                # A single failed call is usually a transient shell-side
+                # error (e.g. the dock rebuilt its icons mid-call); only
+                # give up when the extension itself stopped answering.
+                transient = bool(self._call('Version'))
             with self._cond:
-                self._sent = (level, color)
-                if result is None:
+                if result is not None:
+                    self._sent = (level, color)
+                elif transient:
+                    self._sent = None
+                else:
                     self._available = False
                     self._thread = None
                     return
+            if transient:
+                time.sleep(self.retry_delay)
 
     def _call(self, method: str, *args) -> tuple | None:
         cmd = [

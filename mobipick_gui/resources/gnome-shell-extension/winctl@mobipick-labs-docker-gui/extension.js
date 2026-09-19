@@ -88,7 +88,13 @@ function collectAppIcons(appId, node, out) {
 }
 
 function isLiveActor(actor) {
-    return actor && !actor.is_finalized?.() && actor.get_stage() !== null;
+    // A dock that rebuilt its icons leaves disposed GObjects behind; GJS
+    // throws on any access to those, so treat that as "gone" too.
+    try {
+        return Boolean(actor) && !actor.is_finalized?.() && actor.get_stage() !== null;
+    } catch (_error) {
+        return false;
+    }
 }
 
 function glowStyle(level, color) {
