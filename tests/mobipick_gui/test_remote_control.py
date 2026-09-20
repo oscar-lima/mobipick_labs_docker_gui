@@ -1126,6 +1126,75 @@ def test_stop_tab_endpoint_and_ownership_cleanup():
         server.stop()
 
 
+def test_requests_refresh_presence(monkeypatch):
+    """Any request is activity: a client working through the API never needs a heartbeat."""
+    server = RemoteControlServer(FakeAdapter(), host='127.0.0.1', port=0)
+    now = [1000.0]
+    monkeypatch.setattr('mobipick_gui.remote_control.time.time', lambda: now[0])
+    server.declare_presence('claude', ttl_s=10)
+    now[0] += 8
+    status, _ = server.handle('GET', '/buttons', {}, {})
+    assert status == 200
+    now[0] += 8                      # 16 s after declaring, 8 s after the last request
+    assert [c['name'] for c in server.clients()] == ['claude']
+    assert server.clients()[0]['idle_s'] == 8.0
+    # reads of the endpoint list and of the presence itself are not activity
+    now[0] += 4
+    server.handle('GET', '/', {}, {})
+    server.handle('GET', '/presence', {}, {})
+    assert not server.in_use
+
+
+def test_named_client_refreshes_only_itself(monkeypatch):
+    server = RemoteControlServer(FakeAdapter(), host='127.0.0.1', port=0)
+    now = [1000.0]
+    monkeypatch.setattr('mobipick_gui.remote_control.time.time', lambda: now[0])
+    server.declare_presence('codex', ttl_s=10)
+    server.declare_presence('claude', ttl_s=10)
+    now[0] += 8
+    # the header names the client; a body / query field does the same
+    server.handle('GET', '/buttons', {}, {}, client='claude')
+    server.handle('GET', '/buttons', {'client': 'claude'}, {})
+    # without a name the request refreshes the client present the longest (codex)
+    server.handle('GET', '/tabs', {}, {})
+    now[0] += 4
+    assert {c['name'] for c in server.clients()} == {'codex', 'claude'}
+    now[0] += 5                      # codex: 9 s idle, claude: 9 s idle -> both still there
+    assert {c['name'] for c in server.clients()} == {'codex', 'claude'}
+    server.handle('GET', '/tabs', {}, {}, client='claude')
+    now[0] += 3                      # codex 12 s idle -> gone; claude refreshed
+    assert [c['name'] for c in server.clients()] == ['claude']
+    # unknown names never create a client
+    server.handle('GET', '/tabs', {}, {}, client='nobody')
+    assert [c['name'] for c in server.clients()] == ['claude']
+
+
+def test_running_shell_command_keeps_client_present(api_server, monkeypatch):
+    server, adapter, api = api_server
+    api('POST', '/presence', {'name': 'claude', 'ttl_s': 1})
+    session_id = api('POST', '/shell', {'name': 'claude'})[1]['session']['id']
+    api('POST', f'/shell/{session_id}/exec', {'command': 'sleep 2.5; echo done', 'wait': False})
+    time.sleep(1.6)                  # well past the TTL, no request in between
+    assert [c['name'] for c in server.clients()] == ['claude']
+    assert server.clients()[0]['expires_in_s'] > 0
+    deadline = time.time() + 5
+    while time.time() < deadline and server.session(session_id).busy:
+        time.sleep(0.1)
+    assert not server.session(session_id).busy
+    time.sleep(1.3)                  # idle after the command: the TTL applies again
+    assert server.clients() == []
+    assert server.leave_reason('claude') == 'presence expired'
+
+
+def test_open_stream_keeps_client_present(api_server, monkeypatch):
+    server, adapter, api = api_server
+    api('POST', '/presence', {'name': 'claude', 'ttl_s': 1})
+    # a follow stream that waits 2.5 s for events (none come) is activity throughout
+    lines = api.stream('/events?follow=1&timeout=2.5&names=never', timeout=10)
+    assert lines[-1]['name'] == 'stream_timeout'
+    assert [c['name'] for c in server.clients()] == ['claude']
+
+
 def test_presence_ttl_is_capped():
     server = RemoteControlServer(FakeAdapter(), host='127.0.0.1', port=0)
     entry = server.declare_presence('claude', ttl_s=99999)

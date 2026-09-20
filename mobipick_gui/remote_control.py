@@ -666,10 +666,19 @@ class RemoteShellSession:
 # ---------------------------------------------------------------------------
 
 
-# A client must re-declare presence at least this often; when it lapses the
-# GUI stops everything that client started (see MainWindow._sync_remote_clients).
+# A client's presence lapses this long after its last activity; when it lapses
+# the GUI stops everything that client started (see
+# MainWindow._sync_remote_clients).  Every request the client sends counts as
+# activity (see RemoteControlServer.touch_presence), and a client is kept while
+# one of its shells runs a command or it streams events / output, so a client
+# never needs a heartbeat process of its own: a background refresher that
+# outlives its owner is exactly how a stale presence once lingered for hours.
 PRESENCE_DEFAULT_TTL_S = 600.0
 PRESENCE_MAX_TTL_S = 1800.0
+# Header (or body / query field ``client``) naming the client a request belongs
+# to; without it a request refreshes the client that owns new processes, i.e.
+# the one present the longest.
+CLIENT_HEADER = 'X-Client-Name'
 
 API_INDEX = [
     ('GET', '/', 'This endpoint list.'),
@@ -681,7 +690,7 @@ API_INDEX = [
     ('GET', '/args', 'Toolbar argument dropdowns (name, value, options, buttons they apply to) plus the world selector.'),
     ('POST', '/args', 'Select argument values without touching the profile. Body: {"anygrasp_mode": "real", "world": "moelk_tables"}.'),
     ('GET', '/presence', 'Clients that declared they are using the GUI (lights the window icon). Any number of differently named agents may be present at once.'),
-    ('POST', '/presence', 'Declare that you are using the GUI. Body: {"name": "<agent>", "ttl_s": 600, "note": ""}. Repeat before ttl_s (max 1800) runs out; when it lapses the GUI stops what you started.'),
+    ('POST', '/presence', 'Declare that you are using the GUI. Body: {"name": "<agent>", "ttl_s": 600, "note": ""}. Every later request refreshes it (name yourself with the X-Client-Name header or a "client" field when several agents are present), as does a running shell command or an open stream; ttl_s (max 1800) idle time without any of those lapses it and the GUI stops what you started.'),
     ('DELETE', '/presence', 'Declare that you are done; stops what you started unless {"keep": true}. Body or query: {"name": "<agent>"}.'),
     ('GET', '/events?since=N&names=a,b&follow=1&timeout=s', 'List or stream (NDJSON) events.'),
     ('POST', '/wait', 'Block until an event. Body: {"events": [names], "since": N, "timeout": s, "key": "sim"}.'),
@@ -772,8 +781,10 @@ class RemoteControlServer:
     #
     # A client that plans to send several requests announces itself first so
     # the GUI can show "in use" (window icon glow) for the whole session
-    # instead of flickering per request.  Entries expire after ``ttl_s`` in
-    # case the client dies without saying goodbye.
+    # instead of flickering per request.  Entries expire ``ttl_s`` after the
+    # client's last activity in case it dies without saying goodbye; activity
+    # is any request, a shell command it started that still runs, or a stream
+    # it keeps open, so a present client is never expired while it works.
 
     def declare_presence(self, name: str, ttl_s: float | None = None, note: str = '') -> dict:
         name = str(name or '').strip()
@@ -789,6 +800,7 @@ class RemoteControlServer:
             if fresh:
                 entry = {'name': name, 'since': now}
                 self._clients[name] = entry
+            entry['last_activity'] = now
             entry['expires'] = now + ttl
             entry['ttl_s'] = ttl
             entry['note'] = str(note or '')
@@ -796,6 +808,31 @@ class RemoteControlServer:
         if fresh:
             self.events.emit('client_connected', name=name, note=snapshot['note'])
         return snapshot
+
+    def touch_presence(self, name: str | None = None) -> str | None:
+        """Count a request as activity of ``name`` (default: the current client).
+
+        Returns the client refreshed, or None when nobody is present. Unknown
+        names are ignored: only ``POST /presence`` creates a client.
+        """
+        name = str(name or '').strip() or self._current_client()
+        if not name:
+            return None
+        now = time.time()
+        with self._clients_lock:
+            entry = self._clients.get(name)
+            if entry is None:
+                return None
+            entry['expires'] = max(entry['expires'], now + entry['ttl_s'])
+            entry['last_activity'] = now
+        return name
+
+    def _client_is_working(self, name: str) -> bool:
+        """True while a shell this client started runs a command."""
+        shell_ids = {e['key'] for e in self._owned.get(name, []) if e['kind'] == 'shell'}
+        if not shell_ids:
+            return False
+        return any(session.id in shell_ids and session.busy for session in self.sessions())
 
     def withdraw_presence(self, name: str, *, keep: bool = False) -> bool:
         """Forget ``name``; with ``keep`` its processes are left running."""
@@ -856,6 +893,7 @@ class RemoteControlServer:
             self.events.emit('client_disconnected', name=name, expired=True)
         for entry in entries:
             entry['expires_in_s'] = round(max(0.0, entry['expires'] - now), 1)
+            entry['idle_s'] = round(max(0.0, now - entry.get('last_activity', entry['since'])), 1)
         return sorted(entries, key=lambda entry: entry['since'])
 
     @property
@@ -863,10 +901,18 @@ class RemoteControlServer:
         return bool(self.clients())
 
     def _expire_clients_locked(self, now: float) -> list[str]:
-        expired = [name for name, entry in self._clients.items() if entry['expires'] <= now]
-        for name in expired:
+        expired = []
+        for name, entry in list(self._clients.items()):
+            if entry['expires'] > now:
+                continue
+            if self._client_is_working(name):
+                # a command of theirs is still running: that is activity too
+                entry['expires'] = now + entry['ttl_s']
+                entry['last_activity'] = now
+                continue
             del self._clients[name]
             self._leave_reasons[name] = 'presence expired'
+            expired.append(name)
         return expired
 
     @property
@@ -1047,9 +1093,16 @@ class RemoteControlServer:
 
     # -- request dispatch ------------------------------------------------
 
-    def handle(self, method: str, path: str, query: dict[str, str], body: dict) -> tuple[int, dict]:
-        """Dispatch a non-streaming request; returns ``(status, payload)``."""
+    def handle(self, method: str, path: str, query: dict[str, str], body: dict,
+               client: str | None = None) -> tuple[int, dict]:
+        """Dispatch a non-streaming request; returns ``(status, payload)``.
+
+        ``client`` (the ``X-Client-Name`` header) names whose presence the
+        request refreshes; ``client`` in the body or query does the same.
+        """
         parts = [unquote(part) for part in path.strip('/').split('/') if part]
+        if parts and parts != ['presence']:
+            self.touch_presence(client or body.get('client') or query.get('client'))
         try:
             payload = self._dispatch(method, parts, query, body)
         except GuiTimeout as exc:
@@ -1366,16 +1419,19 @@ class RemoteControlServer:
 
     # -- streaming ---------------------------------------------------------
 
-    def stream_events(self, query: dict[str, str], write: Callable[[dict], bool]) -> None:
+    def stream_events(self, query: dict[str, str], write: Callable[[dict], bool],
+                      client: str | None = None) -> None:
         since = _int_param(query.get('since'), self.events.last_seq)
         names = _list_param(query.get('names'))
         timeout = _float_param(query.get('timeout'), 300.0)
         deadline = time.monotonic() + timeout
+        client = self.touch_presence(client or query.get('client'))
         for event in self.events.since(since, names):
             since = event['seq']
             if not write(event):
                 return
         while True:
+            self.touch_presence(client)      # an open stream is activity
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 write({'name': 'stream_timeout', 'seq': self.events.last_seq})
@@ -1392,6 +1448,7 @@ class RemoteControlServer:
         session: RemoteShellSession,
         query: dict[str, str],
         write: Callable[[dict], bool],
+        client: str | None = None,
     ) -> None:
         since = _int_param(query.get('since'), None)
         grep = query.get('grep') or None
@@ -1401,7 +1458,9 @@ class RemoteControlServer:
         if since is None:
             since = record.first_seq if record else session.last_seq
         deadline = time.monotonic() + timeout
+        client = self.touch_presence(client or query.get('client'))
         while True:
+            self.touch_presence(client)      # an open stream is activity
             lines, _, _ = session.lines(since=since, grep=grep, max_lines=None)
             for entry in lines:
                 since = entry['seq']
@@ -1499,23 +1558,24 @@ class _RequestHandler(BaseHTTPRequestHandler):
         except RemoteControlError as exc:
             self._send_json(int(exc.status), {'ok': False, 'error': exc.message})
             return
+        client = (self.headers.get(CLIENT_HEADER) or '').strip() or None
         if method == 'GET' and _bool_param(query.get('follow'), False):
-            if self._stream(split.path, query):
+            if self._stream(split.path, query, client):
                 return
-        status, payload = self.remote.handle(method, split.path, query, body)
+        status, payload = self.remote.handle(method, split.path, query, body, client)
         self._send_json(status, payload)
 
-    def _stream(self, path: str, query: dict[str, str]) -> bool:
+    def _stream(self, path: str, query: dict[str, str], client: str | None = None) -> bool:
         parts = [unquote(part) for part in path.strip('/').split('/') if part]
         if parts == ['events']:
-            producer = lambda write: self.remote.stream_events(query, write)  # noqa: E731
+            producer = lambda write: self.remote.stream_events(query, write, client)  # noqa: E731
         elif len(parts) == 3 and parts[0] == 'shell' and parts[2] == 'output':
             try:
                 session = self.remote.session(parts[1])
             except RemoteControlError as exc:
                 self._send_json(int(exc.status), {'ok': False, 'error': exc.message})
                 return True
-            producer = lambda write: self.remote.stream_shell_output(session, query, write)  # noqa: E731
+            producer = lambda write: self.remote.stream_shell_output(session, query, write, client)  # noqa: E731
         else:
             return False
         self.send_response(int(HTTPStatus.OK))
