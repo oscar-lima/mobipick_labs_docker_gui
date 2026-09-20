@@ -691,7 +691,7 @@ API_INDEX = [
     ('POST', '/args', 'Select argument values without touching the profile. Body: {"anygrasp_mode": "real", "world": "moelk_tables"}.'),
     ('GET', '/presence', 'Clients that declared they are using the GUI (lights the window icon). Any number of differently named agents may be present at once.'),
     ('POST', '/presence', 'Declare that you are using the GUI. Body: {"name": "<agent>", "ttl_s": 600, "note": ""}. Every later request refreshes it (name yourself with the X-Client-Name header or a "client" field when several agents are present), as does a running shell command or an open stream; ttl_s (max 1800) idle time without any of those lapses it and the GUI stops what you started.'),
-    ('DELETE', '/presence', 'Declare that you are done; stops what you started unless {"keep": true}. Body or query: {"name": "<agent>"}.'),
+    ('DELETE', '/presence', 'Declare that you are done; stops what you started unless {"keep": true}. Body: {"name": "<agent>", "token": "<token from the first POST /presence reply>"}; a wrong token is refused (409) so two agents with the same name cannot withdraw each other.'),
     ('GET', '/events?since=N&names=a,b&follow=1&timeout=s', 'List or stream (NDJSON) events.'),
     ('POST', '/wait', 'Block until an event. Body: {"events": [names], "since": N, "timeout": s, "key": "sim"}.'),
     ('POST', '/reload', 'Re-read gui_settings.yaml and the workspace button profile without restarting the GUI.'),
@@ -798,7 +798,10 @@ class RemoteControlServer:
             entry = self._clients.get(name)
             fresh = entry is None
             if fresh:
-                entry = {'name': name, 'since': now}
+                # The token is only returned to the client that registered the
+                # name; a bye must present it, so two agents that picked the same
+                # name cannot withdraw (and clean up after) each other.
+                entry = {'name': name, 'since': now, 'token': secrets.token_hex(8)}
                 self._clients[name] = entry
             entry['last_activity'] = now
             entry['expires'] = now + ttl
@@ -807,6 +810,8 @@ class RemoteControlServer:
             snapshot = dict(entry)
         if fresh:
             self.events.emit('client_connected', name=name, note=snapshot['note'])
+        else:
+            snapshot.pop('token', None)  # a refresh does not reveal the token to a namesake
         return snapshot
 
     def touch_presence(self, name: str | None = None) -> str | None:
@@ -834,10 +839,21 @@ class RemoteControlServer:
             return False
         return any(session.id in shell_ids and session.busy for session in self.sessions())
 
-    def withdraw_presence(self, name: str, *, keep: bool = False) -> bool:
-        """Forget ``name``; with ``keep`` its processes are left running."""
+    def withdraw_presence(self, name: str, *, keep: bool = False, token: str | None = None) -> bool:
+        """Forget ``name``; with ``keep`` its processes are left running.
+
+        ``token`` must be the one ``declare_presence`` returned for this
+        registration; a wrong token is a namesake trying to say bye for
+        somebody else and is refused with 409.
+        """
         name = str(name or '').strip()
         with self._clients_lock:
+            entry = self._clients.get(name)
+            if entry is not None and entry.get('token') and str(token or '') != entry['token']:
+                raise Conflict(
+                    f'client {name!r} was registered by another session; pass the token '
+                    'its POST /presence returned, or use a unique name per session'
+                )
             removed = self._clients.pop(name, None) is not None
             if keep:
                 self._owned.pop(name, None)
@@ -892,6 +908,7 @@ class RemoteControlServer:
         for name in expired:
             self.events.emit('client_disconnected', name=name, expired=True)
         for entry in entries:
+            entry.pop('token', None)
             entry['expires_in_s'] = round(max(0.0, entry['expires'] - now), 1)
             entry['idle_s'] = round(max(0.0, now - entry.get('last_activity', entry['since'])), 1)
         return sorted(entries, key=lambda entry: entry['since'])
@@ -1167,7 +1184,8 @@ class RemoteControlServer:
             if method == 'DELETE':
                 name = str(body.get('name') or query.get('name') or '')
                 keep = _bool_param(body.get('keep', query.get('keep')), False)
-                return {'removed': self.withdraw_presence(name, keep=keep), 'clients': self.clients()}
+                token = str(body.get('token') or query.get('presence_token') or '')
+                return {'removed': self.withdraw_presence(name, keep=keep, token=token), 'clients': self.clients()}
             raise RemoteControlError('method not allowed', status=HTTPStatus.METHOD_NOT_ALLOWED)
         if head == 'events' and method == 'GET':
             since = _int_param(query.get('since'), 0)

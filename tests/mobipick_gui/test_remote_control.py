@@ -983,7 +983,7 @@ def test_main_window_glows_icon_while_remote_control_is_active(tmp_path, monkeyp
         # A client declaring presence lights the icon fully until it withdraws.
         # Presence switches the halo to the green in-use colour, which is far
         # easier to spot on the dock than a brightness change alone.
-        server.declare_presence('claude')
+        token = server.declare_presence('claude')['token']
         window._update_remote_icon_glow()
         assert window._remote_icon_level == (
             mw.REMOTE_ICON_GLOW_LEVELS,
@@ -991,7 +991,7 @@ def test_main_window_glows_icon_while_remote_control_is_active(tmp_path, monkeyp
         )
         assert mw.REMOTE_ICON_GLOW_COLOR_IN_USE.rgb() != mw.REMOTE_ICON_GLOW_COLOR.rgb()
         assert window._remote_client_names == {'claude'}
-        server.withdraw_presence('claude')
+        server.withdraw_presence('claude', token=token)
         window._update_remote_icon_glow()
         assert window._remote_icon_level == idle_level
         assert window._remote_client_names == set()
@@ -1039,6 +1039,7 @@ def test_presence_endpoints_track_clients(monkeypatch):
         before = server.events.last_seq
         status, payload = api('POST', '/presence', {'name': 'claude', 'ttl_s': 5, 'note': 'tables demo'})
         assert status == 200 and payload['client']['name'] == 'claude'
+        token = payload['client']['token']
         assert 0 < payload['client']['expires_in_s'] <= 5
         assert [c['name'] for c in payload['clients']] == ['claude']
         assert server.in_use
@@ -1046,7 +1047,7 @@ def test_presence_endpoints_track_clients(monkeypatch):
         assert len(events) == 1 and events[0]['data']['note'] == 'tables demo'
 
         # Refreshing does not emit a second connect event.
-        api('POST', '/presence', {'name': 'claude'})
+        assert 'token' not in api('POST', '/presence', {'name': 'claude'})[1]['client']
         assert len(server.events.since(before, names=['client_connected'])) == 1
 
         status, payload = api('GET', '/status')
@@ -1055,11 +1056,11 @@ def test_presence_endpoints_track_clients(monkeypatch):
         status, payload = api('POST', '/presence', {})
         assert status == 400
 
-        status, payload = api('DELETE', '/presence', {'name': 'claude'})
+        status, payload = api('DELETE', '/presence', {'name': 'claude', 'token': token})
         assert status == 200 and payload['removed'] is True and payload['clients'] == []
         assert not server.in_use
         assert server.events.since(before, names=['client_disconnected'])[-1]['data']['name'] == 'claude'
-        status, payload = api('DELETE', '/presence', {'name': 'claude'})
+        status, payload = api('DELETE', '/presence', {'name': 'claude', 'token': token})
         assert payload['removed'] is False
     finally:
         server.stop()
@@ -1087,7 +1088,7 @@ def test_stop_tab_endpoint_and_ownership_cleanup():
     host, port = server.start()
     try:
         api = _Api(f'http://{host}:{port}')
-        api('POST', '/presence', {'name': 'claude'})
+        token = api('POST', '/presence', {'name': 'claude'})[1]['client']['token']
         assert api('POST', '/buttons/roscore/start', {})[1]['accepted']
         assert api('POST', '/command', {'command': 'roslaunch x y.launch'})[1]['tab'] == 'custom1'
         owned = {(e['kind'], e['key']) for e in server.owned_by('claude')}
@@ -1106,7 +1107,7 @@ def test_stop_tab_endpoint_and_ownership_cleanup():
         api('POST', '/buttons/sim/start', {})
         api('POST', '/command', {'command': 'rostopic echo /x'})
         assert len(server.owned_by('claude')) == 2
-        api('DELETE', '/presence', {'name': 'claude'})
+        api('DELETE', '/presence', {'name': 'claude', 'token': token})
         assert server.leave_reason('claude') == 'done'
         leftovers = server.take_owned('claude')
         assert {(e['kind'], e['key']) for e in leftovers} == {('button', 'sim'), ('tab', 'custom1')}
@@ -1114,9 +1115,9 @@ def test_stop_tab_endpoint_and_ownership_cleanup():
         assert server.take_owned('claude') == []
 
         # Bye with keep: nothing is collected.
-        api('POST', '/presence', {'name': 'claude'})
+        token = api('POST', '/presence', {'name': 'claude'})[1]['client']['token']
         api('POST', '/buttons/sim/start', {})
-        api('DELETE', '/presence', {'name': 'claude', 'keep': True})
+        api('DELETE', '/presence', {'name': 'claude', 'keep': True, 'token': token})
         assert server.leave_reason('claude') == 'done (processes kept)'
         assert server.take_owned('claude') == []
 
@@ -1328,8 +1329,8 @@ def test_presence_supports_several_named_agents():
     host, port = server.start()
     try:
         api = _Api(f'http://{host}:{port}')
-        api('POST', '/presence', {'name': 'codex'})
-        api('POST', '/presence', {'name': 'alice-laptop'})
+        codex = api('POST', '/presence', {'name': 'codex'})[1]['client']['token']
+        alice = api('POST', '/presence', {'name': 'alice-laptop'})[1]['client']['token']
         assert {c['name'] for c in server.clients()} == {'codex', 'alice-laptop'}
         assert server.in_use
 
@@ -1340,9 +1341,9 @@ def test_presence_supports_several_named_agents():
         assert server.owned_by('alice-laptop') == []
 
         # The GUI stays "in use" until the last agent leaves.
-        api('DELETE', '/presence', {'name': 'alice-laptop'})
+        api('DELETE', '/presence', {'name': 'alice-laptop', 'token': alice})
         assert server.in_use and [c['name'] for c in server.clients()] == ['codex']
-        api('DELETE', '/presence', {'name': 'codex'})
+        api('DELETE', '/presence', {'name': 'codex', 'token': codex})
         assert not server.in_use
         assert {e['key'] for e in server.take_owned('codex')} == {'roscore'}
     finally:
@@ -1422,12 +1423,34 @@ def test_recording_is_stopped_when_its_client_leaves():
     host, port = server.start()
     try:
         api = _Api(f'http://{host}:{port}')
-        api('POST', '/presence', {'name': 'claude'})
+        token = api('POST', '/presence', {'name': 'claude'})[1]['client']['token']
         api('POST', '/recording/start', {})
         assert server.owned_by('claude') and server.owned_by('claude')[0]['kind'] == 'recording'
-        api('DELETE', '/presence', {'name': 'claude'})
+        api('DELETE', '/presence', {'name': 'claude', 'token': token})
         leftovers = server.take_owned('claude')
         assert [(e['kind'], e['key']) for e in leftovers] == [('recording', 'screen')]
         assert server.take_owned('claude') == []
+    finally:
+        server.stop()
+
+
+def test_presence_bye_needs_the_registration_token():
+    """Two sessions that picked the same name cannot withdraw each other."""
+    adapter = FakeAdapter()
+    server = RemoteControlServer(adapter, host='127.0.0.1', port=0)
+    host, port = server.start()
+    try:
+        api = _Api(f'http://{host}:{port}')
+        status, payload = api('POST', '/presence', {'name': 'claude', 'note': 'session A'})
+        token = payload['client']['token']
+        assert 'token' not in api('GET', '/presence')[1]['clients'][0]
+        # session B, same name: its refresh gets no token and its bye is refused
+        assert 'token' not in api('POST', '/presence', {'name': 'claude', 'note': 'session B'})[1]['client']
+        status, payload = api('DELETE', '/presence', {'name': 'claude'})
+        assert status == 409 and 'another session' in payload['error']
+        status, payload = api('DELETE', '/presence', {'name': 'claude', 'token': 'wrong'})
+        assert status == 409 and server.in_use
+        status, payload = api('DELETE', '/presence', {'name': 'claude', 'token': token})
+        assert status == 200 and payload['removed'] is True and not server.in_use
     finally:
         server.stop()

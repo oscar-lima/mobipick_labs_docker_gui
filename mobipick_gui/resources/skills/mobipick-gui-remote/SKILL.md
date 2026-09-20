@@ -48,27 +48,37 @@ prefer the narrow queries below to save tokens.
 
 The GUI shows the user who is working on it: its window icon glows light
 green while a client is present (light blue when idle) and the GUI log
-records the name. Declare
-yourself before the first real request and withdraw as the very last call
-(also when you give up or fail).
+records the name. Declare yourself before the first real request and
+withdraw as the very last call (also when you give up or fail).
+
+**Use a name that is unique to your session** (`claude-<4 hex chars>`,
+e.g. `claude-51bf`), never a bare `claude`: several agents may drive the GUI
+at the same time and a bye for a shared name withdraws the other session and
+makes the GUI stop what *it* started. First `GET /presence` and, if someone
+else is listed, tell the user before pressing buttons that could disturb
+them; never withdraw or refresh a name that is not yours.
 
 ```bash
-curl -s -X POST $GUI/presence -H 'Content-Type: application/json' -d '{"name":"claude","note":"what you are doing"}'
+ME=claude-$(head -c2 /dev/urandom | xxd -p)
+curl -s -X POST $GUI/presence -H 'Content-Type: application/json' -d "{\"name\":\"$ME\",\"note\":\"what you are doing\",\"ttl_s\":1800}"
+# the FIRST reply carries "token": keep it, the bye needs it (a refresh does not repeat it)
 # ... work ...
-curl -s -X DELETE $GUI/presence -H 'Content-Type: application/json' -d '{"name":"claude"}'
+curl -s -X DELETE $GUI/presence -H 'Content-Type: application/json' -d "{\"name\":\"$ME\",\"token\":\"$TOKEN\"}"
 ```
 
-The declaration expires after `ttl_s` (default 600 s, at most 1800 s), so
-**repeat the `POST` at least every 10 minutes** while you work; put it before
-every long wait (`/wait`, `follow=1`, a long `exec`). The GUI remembers
-every button, `/command` tab and shell you start. When your presence lapses,
-or you say bye, it **stops all of them** and logs what it stopped. That is
-the safety net for a crashed or forgetful agent, not a substitute for
-stopping things yourself: stop them, then bye. Only when the user asked you
-to leave something running (e.g. "start the sim for me") send
-`{"name":"claude","keep":true}` and say in your final message what you left
-running. `GET /status` lists present `clients` and `in_use`; if another
-client is listed, tell the user before pressing buttons that could disturb it.
+Presence is kept alive by activity: every request you send refreshes it, as
+does a shell command that is still running or a `follow=1` stream you keep
+open, so no separate heartbeat process is needed (one that outlives you keeps
+a dead agent "present"). Only `ttl_s` (default 600 s, at most 1800 s) of
+complete idleness lapses it; ask for 1800 when a robot run will keep you
+waiting. The GUI remembers every button, `/command` tab, shell and screen
+recording you start. When your presence lapses, or you say bye, it **stops
+all of them** and logs what it stopped. That is the safety net for a crashed
+or forgetful agent, not a substitute for stopping things yourself: stop them,
+then bye. Only when the user asked you to leave something running (e.g.
+"start the sim for me") add `"keep":true` to the bye and say in your final
+message what you left running. `GET /status` lists present `clients` and
+`in_use`.
 
 ## 1. Always check what is already running first
 
@@ -301,10 +311,106 @@ states, and `rospy.wait_for_message`.
 - The GUI log tab (`/tabs/log`) records every remote action, so the user
   can audit what you did.
 
+## 7. Robot experiments go through the planner/executor agent
+
+Do **not** drive the robot yourself for an experiment (`mobipick_api`,
+action clients, `base.move`, teleporting models): you lack the operating
+knowledge the planner has (retract the arm to `transport`/`home` before
+navigating, perceive before picking, which poses work) and you would test
+only a slice of the system. Give the goal to the GPT planner/executor agent
+instead; that exercises the whole pipeline. For tests always select the cheap
+`model_profile: deepseek-v4.1-flash` (it also serves the VLM verifier, see
+`gpt_robot_demo` tab: `models={...}` and `VLM verifier ready: model=...`) and
+the mockups (`disc_mode: mockup`, `anygrasp_mode: mockup`) unless the user
+asks for the real modules.
+
+```bash
+curl -s -X POST $GUI/args -H 'Content-Type: application/json' \
+     -d '{"model_profile":"deepseek-v4.1-flash","disc_mode":"mockup","anygrasp_mode":"mockup"}'
+curl -s -X POST $GUI/buttons/auto_launch/start -H 'Content-Type: application/json' \
+     -d '{"wait_for":["window_layout_applied","auto_launch_complete"],"timeout":300}'
+```
+
+**Auto Launch brings up everything the agents need** (roscore, sim, RViz,
+DISC, LiteLLM, AnyGrasp, GPT Robot Demo, ...); afterwards check `/buttons`
+for anything still red and the `gpt_robot_demo`, `disc`, `anygrasp` and
+`litellm` tabs for `ready`/`ERROR` lines before sending a goal.
+
+The goal is a `std_msgs/String` on `/recognized_speech` (what the GUI's
+speech input publishes). The agent talks back on `/mobipick_gpt/gpt_debug`
+(JSON per message; `kind` is `human`, `agent_run`, `env_snapshot`, `act`,
+...; `act` lines read `11) pick(sugar box, table_1)` and later
+`pick(sugar box, table_1) -> success`), `/mobipick_gpt/gpt_debug_reasoning`
+and `/speak` (what it says to the human). The `gpt_robot_demo` tab holds the
+same log. Use `mobipick_gpt/scripts/agent_experiment.py` from a remote shell
+(section 5): it publishes the goal, logs everything with timestamps, takes
+the evidence snapshots and returns when the agent has spoken and gone quiet.
+
+```bash
+# in a remote shell, after starting the recorder of section 8; wait:false, then follow the log
+rosrun mobipick_gpt agent_experiment.py 'Grab the sugar box from table 1 and insert it into the box on table 2.' --log /home/oscar/ros_ws/claude_tmp/run.log
+```
+
+**Take what the agent says with a pinch of salt**: it sometimes hallucinates
+success. Trust the tool result lines (`insert(klt_1) -> insert succeeded`)
+over its prose, and verify the outcome yourself: in simulation
+`/gazebo/model_states` (object position relative to the box/table), the pose
+selector (`/pick_pose_selector_node/pose_selector_get_all`), the planning
+scene, or a snapshot of the cameras. Report the agent's claim and your check
+separately.
+
+## 8. Evidence: photos and videos of every experiment
+
+The user wants to *see* what happened, every time. Two recorders, both
+holding only the moments the robot moves (idle phases such as the LLM
+thinking are cut) and both producing a 4x version:
+
+1. **Camera videos** (cannot be blocked by windows): the simulation has a
+   fixed camera over the three tables, `/experiment_camera/image_raw`.
+   Start the recorder in a remote shell *before* the goal
+   (`wait:false`; add the robot camera as a second topic):
+
+   ```bash
+   roslaunch experiment_camera_recorder video_recorder.launch name:=<experiment> \
+       image_topics:=/experiment_camera/image_raw,/mobipick/eef_main_cam/rgb/image_raw fps:=6
+   ```
+
+   It writes frames only while `/mobipick/cmd_vel` or an arm joint moves
+   (`auto_pause`), `rosservice call /experiment_video_recorder/pause|resume`
+   overrides that, `rostopic pub -1 /experiment_video_recorder/snapshot
+   std_msgs/String "data: 'label'"` saves a JPEG of every camera
+   (`agent_experiment.py` does this for each robot action and each spoken
+   sentence), and `rosservice call /experiment_video_recorder/stop` closes
+   the videos and writes `summary.json`. Output:
+   `/data/experiment_recordings/<timestamp>_<experiment>/` with
+   `<topic>.mp4`, `<topic>_4x.mp4`, `snapshots/NNN_<label>_<topic>.jpg`,
+   `events.jsonl` (host and container see the same path).
+2. **Screen recording** of the GUI/RViz/Gazebo windows through the API,
+   started paused and resumed by `agent_experiment.py` whenever the camera
+   recorder reports motion:
+
+   ```bash
+   curl -s -X POST $GUI/recording/start -H 'Content-Type: application/json' -d '{}'   # then /recording/pause
+   ...
+   curl -s -X POST $GUI/recording/stop  -H 'Content-Type: application/json' -d '{}'   # concat + 4x export
+   ```
+
+   `GET /recording` shows `segments`, `recorded_s`, `video_path` and
+   `video_speedup_path`; the `recording_exported` event (and the GUI log)
+   tells when the files are written. The folder is the GUI's
+   `recording.output_dir` setting.
+
+After every experiment: stop both recorders, pick the key snapshots (goal
+sent, pick, transport, insert/place, the state after the agent's final
+sentence; add the robot-camera frame when it shows the grasp), **send them
+to the user in the chat** (`SendUserFile`), and state the folder of the
+camera videos and the path of the screen recording (`_4x.mp4` first). Never
+send every snapshot; four to six tell the story.
+
 ## Typical session
 
-0. `POST /presence` with your name so the GUI icon glows and the log shows
-   who is working; repeat it every 10 minutes.
+0. `GET /presence`, then `POST /presence` with your unique name (section 0)
+   and keep the token from the reply.
 1. `GET /status` and `/buttons`: note what is green and `ready`, read
    tooltips of anything unfamiliar. Write down what was already running:
    that is the state you hand back. A ready process needs no waiting.
@@ -312,18 +418,26 @@ states, and `rospy.wait_for_message`.
    history.
 3. `start` only what is missing, with the `args` it needs, and wait for
    `button_ready` (plus `process_finished` to catch a crash); after an
-   Auto Launch wait for `window_layout_applied`.
-4. Open one shell, run checks with `stream:false`/`tail`/`grep`, follow
-   long commands with `--no-wait` plus `follow=1`.
+   Auto Launch wait for `window_layout_applied`. For an experiment: mockups
+   + `deepseek-v4.1-flash`, Auto Launch (section 7).
+4. Open shells (one per background process: a `wait:false` command keeps
+   its shell busy, HTTP 409 for anything else), run checks with
+   `stream:false`/`tail`/`grep`, follow long commands with `wait:false` plus
+   `follow=1`. Start the recorders (section 8) before the goal, send the goal
+   through `agent_experiment.py` (section 7), verify the outcome yourself.
 5. Hand-over checklist, before your final message and before any message
    that asks the user to do something (restart the GUI, look at the screen,
    answer a question): run `GET /status` and compare `buttons` (`green` or
    `yellow`), `tabs` (`running`) and `shells` with what was running when you
    arrived. Stop every difference with the table in section 3, wait until
    the button is `red` or the tab is not `running`, and close your shells.
+   Stop the camera recorder (`/experiment_video_recorder/stop`) and the
+   screen recording (`POST /recording/stop`) first so the videos get
+   exported, then send the evidence photos (section 8).
    Leave pre-existing processes alone unless the user asked you to stop them.
    If something you started cannot be stopped, the first line of your message
    says so and asks the user to stop it.
-6. `DELETE /presence` with your name as the very last call. The reply's
-   `clients` should be empty and the GUI log will show whether it had to
-   clean anything up after you; if it did, say so.
+6. `DELETE /presence` with your name and token as the very last call. The
+   reply's `clients` should list only other sessions (or nobody) and the GUI
+   log will show whether it had to clean anything up after you; if it did,
+   say so.

@@ -47,6 +47,8 @@ services:
       - type: bind
         source: ${MOBIPICK_WORKSPACE_MOUNT_SOURCE:-./empty_workspace}
         target: ${MOBIPICK_WORKSPACE_MOUNT_TARGET:-/tmp/mobipick-empty-workspace}
+      # host data folder (experiment recordings, datasets) at the same path inside
+      - ${MOBIPICK_DATA_DIR:-/data}:/data:rw
     expose:
       - 11311 # roscore
       - 12345 # gzserver
@@ -104,6 +106,8 @@ services:
       - type: bind
         source: ${MOBIPICK_WORKSPACE_MOUNT_SOURCE:-./empty_workspace}
         target: ${MOBIPICK_WORKSPACE_MOUNT_TARGET:-/tmp/mobipick-empty-workspace}
+      # host data folder (experiment recordings, datasets) at the same path inside
+      - ${MOBIPICK_DATA_DIR:-/data}:/data:rw
       - ~/.ssh:${HOME}/.ssh:rw # for git access
     privileged: true  # for Gazebo GUI
 
@@ -148,6 +152,8 @@ services:
       - type: bind
         source: ${MOBIPICK_WORKSPACE_MOUNT_SOURCE:-./empty_workspace}
         target: ${MOBIPICK_WORKSPACE_MOUNT_TARGET:-/tmp/mobipick-empty-workspace}
+      # host data folder (experiment recordings, datasets) at the same path inside
+      - ${MOBIPICK_DATA_DIR:-/data}:/data:rw
 
 networks:
   default:
