@@ -1005,6 +1005,54 @@ def test_main_window_glows_icon_while_remote_control_is_active(tmp_path, monkeyp
         window.close()
 
 
+def test_remote_glow_is_cleared_before_exit_cleanup(monkeypatch):
+    from types import SimpleNamespace
+
+    from PyQt5.QtWidgets import QApplication
+
+    from mobipick_gui import main_window as mw
+
+    app = QApplication.instance() or QApplication([])  # noqa: F841 - keep alive
+    events = []
+    harness = SimpleNamespace(
+        _exit_in_progress=False,
+        _exit_dialog=None,
+        _stop_remote_icon_glow=lambda: events.append('clear_glow'),
+        _save_window_state=lambda: events.append('save'),
+        _console_log=lambda *_args: events.append('log'),
+        hide=lambda: events.append('hide'),
+        keep_window_above=lambda _dialog: events.append('dialog'),
+        _perform_exit_cleanup=lambda: events.append('cleanup'),
+    )
+    monkeypatch.setattr(
+        mw.QTimer,
+        'singleShot',
+        lambda _delay, callback: events.append(('scheduled', callback)),
+    )
+
+    mw.MainWindow._begin_exit_sequence(harness)
+
+    assert events[:4] == ['clear_glow', 'save', 'log', 'hide']
+    assert events[-1][0] == 'scheduled'
+    harness._exit_dialog.close()
+
+
+def test_stopping_absent_remote_server_still_clears_glow():
+    from types import SimpleNamespace
+
+    from mobipick_gui.main_window import MainWindow
+
+    cleared = []
+    harness = SimpleNamespace(
+        remote_control=None,
+        _stop_remote_icon_glow=lambda: cleared.append(True),
+    )
+
+    MainWindow._stop_remote_control(harness)
+
+    assert cleared == [True]
+
+
 def test_remote_glow_icon_adds_halo_margin():
     from PyQt5.QtCore import Qt
     from PyQt5.QtGui import QColor, QIcon, QPixmap

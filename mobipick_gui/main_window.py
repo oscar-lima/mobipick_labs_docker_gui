@@ -3599,10 +3599,13 @@ class MainWindow(QMainWindow):
 
     def _stop_remote_control(self) -> None:
         server = self.remote_control
+        # The GNOME extension owns the dock-icon style independently of this
+        # process.  Always restore it, even when the server has already been
+        # detached or failed to start.
+        self._stop_remote_icon_glow()
         if server is None:
             return
         self.remote_control = None
-        self._stop_remote_icon_glow()
         try:
             server.stop()
         finally:
@@ -13810,6 +13813,10 @@ CMD ["bash"]
         if self._exit_in_progress:
             return
         self._exit_in_progress = True
+        # Clear the shell-owned dock halo before any shutdown work that may
+        # wait on child processes.  Otherwise the icon can remain green while
+        # the main window is already hidden.
+        self._stop_remote_icon_glow()
         self._save_window_state()
         exit_cfg = CONFIG['exit']
         self._console_log(1, exit_cfg['log_start_message'])
