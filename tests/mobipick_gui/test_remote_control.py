@@ -128,6 +128,31 @@ class FakeAdapter(GuiAdapter):
         self.reloads.append(True)
         return {'reloaded': True, 'buttons': ['sim', 'rviz'], 'profile': 'profile.yaml'}
 
+    def recording(self):
+        return dict(getattr(self, 'recording_state', {'active': False, 'paused': False, 'armed': False}))
+
+    def recording_action(self, action):
+        state = getattr(self, 'recording_state', {'active': False, 'paused': False, 'armed': False})
+        self.recording_state = state
+        if action == 'start':
+            if state['active']:
+                return {'accepted': False, 'reason': 'recording already active', **state}
+            state.update(active=True, paused=False, segments=1, video_path='/tmp/rec/rec.mp4')
+        elif not state['active']:
+            return {'accepted': False, 'reason': 'no recording active', **state}
+        elif action == 'pause':
+            if state['paused']:
+                return {'accepted': False, 'reason': 'already paused', **state}
+            state['paused'] = True
+        elif action == 'resume':
+            if not state['paused']:
+                return {'accepted': False, 'reason': 'not paused', **state}
+            state['paused'] = False
+            state['segments'] = state.get('segments', 1) + 1
+        elif action == 'stop':
+            state.update(active=False, paused=False)
+        return {'accepted': True, 'reason': None, **state}
+
     def stop_tab(self, key):
         self.stopped_tabs.append(key)
         return {'tab': key, 'stopped': True, 'kind': 'process'}
@@ -1291,3 +1316,49 @@ def test_gnome_app_glow_gives_up_when_extension_is_gone(monkeypatch):
     while glow.available and time.time() < deadline:
         time.sleep(0.01)
     assert not glow.available
+
+
+def test_recording_endpoints_control_segments_and_emit_events():
+    adapter = FakeAdapter()
+    server = RemoteControlServer(adapter, host='127.0.0.1', port=0)
+    host, port = server.start()
+    try:
+        api = _Api(f'http://{host}:{port}')
+        status, payload = api('GET', '/recording')
+        assert status == 200 and payload['recording']['active'] is False
+        status, payload = api('POST', '/recording/pause', {})
+        assert status == 200 and payload['accepted'] is False and 'no recording' in payload['reason']
+        status, payload = api('POST', '/recording/start', {})
+        assert status == 200 and payload['accepted'] is True and payload['segments'] == 1
+        status, payload = api('POST', '/recording/start', {})
+        assert payload['accepted'] is False
+        status, payload = api('POST', '/recording/pause', {})
+        assert payload['accepted'] is True and payload['paused'] is True
+        status, payload = api('POST', '/recording/resume', {})
+        assert payload['accepted'] is True and payload['paused'] is False and payload['segments'] == 2
+        status, payload = api('POST', '/recording/stop', {})
+        assert payload['accepted'] is True and payload['active'] is False
+        assert api('POST', '/recording/rewind', {})[0] == 404
+        names = [e['name'] for e in api('GET', '/events?since=0')[1]['events']]
+        assert ['recording_started', 'recording_paused', 'recording_resumed', 'recording_stopped'] == [
+            n for n in names if n.startswith('recording_')
+        ]
+    finally:
+        server.stop()
+
+
+def test_recording_is_stopped_when_its_client_leaves():
+    adapter = FakeAdapter()
+    server = RemoteControlServer(adapter, host='127.0.0.1', port=0)
+    host, port = server.start()
+    try:
+        api = _Api(f'http://{host}:{port}')
+        api('POST', '/presence', {'name': 'claude'})
+        api('POST', '/recording/start', {})
+        assert server.owned_by('claude') and server.owned_by('claude')[0]['kind'] == 'recording'
+        api('DELETE', '/presence', {'name': 'claude'})
+        leftovers = server.take_owned('claude')
+        assert [(e['kind'], e['key']) for e in leftovers] == [('recording', 'screen')]
+        assert server.take_owned('claude') == []
+    finally:
+        server.stop()

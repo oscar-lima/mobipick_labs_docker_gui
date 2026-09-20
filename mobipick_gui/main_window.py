@@ -3158,6 +3158,10 @@ class MainWindow(QMainWindow):
         self._recording_show_control_window = bool(
             self._recording_cfg.get('show_control_window', True)
         )
+        try:
+            self._recording_speedup = max(1.0, float(self._recording_cfg.get('speedup', 4.0) or 0))
+        except (TypeError, ValueError):
+            self._recording_speedup = 4.0
         self._recording_output_root = self._resolve_recording_output_root()
         self._recording_workspace_name = self._normalize_workspace_name(self._recording_cfg.get('workspace_name'))
         active_workspace = self._workspace_registry.active_workspace()
@@ -3172,6 +3176,8 @@ class MainWindow(QMainWindow):
         self._recording_session: dict | None = None
         self._recording_window: QDialog | None = None
         self._recording_stop_button: QPushButton | None = None
+        self._recording_pause_button: QPushButton | None = None
+        self._recording_export_procs: list[QProcess] = []
         self._recording_path_label: QLabel | None = None
         self._recording_indicator_timer: QTimer | None = None
         self._recording_indicator_on = False
@@ -9615,6 +9621,18 @@ CMD ["bash"]
             )
             self._set_auto_launch_recording_hint('active')
             self._start_recording_indicator_flash()
+        elif state == 'paused':
+            self.recording_indicator.setText('● REC paused')
+            self.recording_indicator.setToolTip(
+                'Recording is paused: nothing is captured until it is resumed '
+                '(Recording Control window or the remote API).'
+            )
+            self._set_auto_launch_recording_hint('active')
+            self.recording_indicator.setStyleSheet(
+                'QLabel { color: #6c3b00; background: #fff3cd; '
+                'border: 1px solid #f0c36d; border-radius: 4px; '
+                'padding: 2px 6px; font-weight: bold; }'
+            )
         elif state == 'armed':
             self.recording_indicator.setText('REC armed: press Auto Launch')
             self.recording_indicator.setToolTip(
@@ -10061,6 +10079,10 @@ CMD ["bash"]
         self._recording_path_label = QLabel('')
         self._recording_path_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         layout.addWidget(self._recording_path_label)
+        pause_button = QPushButton('Pause Recording')
+        pause_button.clicked.connect(self._on_recording_pause_clicked)
+        layout.addWidget(pause_button)
+        self._recording_pause_button = pause_button
         button = QPushButton('Stop Recording')
         button.clicked.connect(self._on_recording_stop_clicked)
         layout.addWidget(button)
@@ -10081,9 +10103,32 @@ CMD ["bash"]
             self._recording_path_label.setText(str(video_path))
         if self._recording_stop_button:
             self._recording_stop_button.setEnabled(True)
+        self._update_recording_pause_button()
         dialog.show()
         self.bring_window_to_front(dialog)
         self.keep_window_above(dialog)
+
+    def _update_recording_pause_button(self) -> None:
+        button = self._recording_pause_button
+        if button is None:
+            return
+        try:
+            session = self._recording_session
+            button.setEnabled(session is not None and not session.get('stop_requested'))
+            button.setText('Resume Recording' if session and session.get('paused') else 'Pause Recording')
+        except RuntimeError:
+            self._recording_pause_button = None
+
+    def _on_recording_pause_clicked(self):
+        session = self._recording_session
+        if session is None:
+            return
+        if session.get('paused'):
+            self._log_event('user requested recording resume')
+            self.resume_recording()
+        else:
+            self._log_event('user requested recording pause')
+            self.pause_recording()
 
     def _on_recording_stop_clicked(self):
         self._log_event('user requested recording stop')
@@ -10109,24 +10154,56 @@ CMD ["bash"]
         base_name = f'{next_idx}_{self._recording_workspace_name}_{now:%d_%m_%H%M%S}'
         base_dir = self._recording_output_root / base_name
         try:
-            base_dir.mkdir(parents=True, exist_ok=True)
+            (base_dir / 'segments').mkdir(parents=True, exist_ok=True)
         except Exception as exc:
             self._append_gui_html('log', f'<i>Failed to create recording folder: {html.escape(str(exc))}</i>')
             return
         video_path = base_dir / f'{base_name}.mp4'
         ffmpeg_log = base_dir / 'ffmpeg.log'
         self._log_info(f'Auto Launch recording session folder: {base_dir}')
+        # The recording is a list of segments: pausing ends the running ffmpeg
+        # segment, resuming starts the next one, and stopping concatenates them
+        # into video_path plus a sped-up copy, so idle time is simply never captured.
         self._recording_session = {
             'base_dir': base_dir,
             'video_path': video_path,
+            'video_speedup_path': base_dir / f'{base_name}_{self._recording_speedup:g}x.mp4',
+            'ffmpeg_log': ffmpeg_log,
             'logs_dir': base_dir / 'logs',
             'save_logs': False,
+            'segments': [],
+            'segment_seconds': [],
+            'segment_started': None,
+            'paused': False,
+            'stop_requested': False,
+            'started': time.time(),
         }
+        if not self._start_recording_segment():
+            self._recording_session = None
+            if getattr(self, 'record_checkbox', None):
+                self.record_checkbox.blockSignals(True)
+                self.record_checkbox.setChecked(False)
+                self.record_checkbox.blockSignals(False)
+            self._set_recording_indicator('off')
+            return
+        if self._recording_show_control_window:
+            self._show_recording_window(video_path)
+
+    def _start_recording_segment(self) -> bool:
+        session = self._recording_session
+        if session is None:
+            return False
+        if self._recording_proc and self._recording_proc.state() != QProcess.NotRunning:
+            return True
+        base_dir: Path = session['base_dir']
+        ffmpeg_log: Path = session['ffmpeg_log']
+        index = len(session['segments']) + 1
+        segment_path = base_dir / 'segments' / f'segment_{index:03d}.mp4'
         proc = QProcess(self)
         proc.setProgram('ffmpeg')
         proc.setProcessChannelMode(QProcess.SeparateChannels)
         try:
-            proc.setStandardOutputFile(str(ffmpeg_log))
+            proc.setStandardOutputFile(str(ffmpeg_log), mode=QIODevice.Append)
             proc.setStandardErrorFile(str(ffmpeg_log), mode=QIODevice.Append)
         except Exception:
             # fallback: let ffmpeg print to stdout/stderr
@@ -10142,17 +10219,20 @@ CMD ["bash"]
             '-pix_fmt', 'yuv420p',
             '-preset', 'veryfast',
             '-threads', '8',
-            str(video_path),
+            str(segment_path),
         ]
-        proc.finished.connect(self._on_recording_finished)
+        proc.finished.connect(lambda code, status, p=proc: self._on_recording_segment_finished(p, code, status))
         proc.errorOccurred.connect(lambda _err: self._append_gui_html(
             'log',
             f'<i>Recording error: {html.escape(proc.errorString())}</i>',
         ))
         self._recording_proc = proc
-        self._log_info(f'starting Auto Launch recording at {requested_res} to {video_path}')
-        self._log_info(f'recording command: {shlex.join(["ffmpeg", *args])}')
-        self._log_info(f'ffmpeg output log: {ffmpeg_log}')
+        if index == 1:
+            self._log_info(f'starting Auto Launch recording at {requested_res} to {session["video_path"]}')
+            self._log_info(f'recording command: {shlex.join(["ffmpeg", *args])}')
+            self._log_info(f'ffmpeg output log: {ffmpeg_log}')
+        else:
+            self._log_info(f'recording resumed: segment {index} -> {segment_path.name}')
         proc.start('ffmpeg', args)
         if not proc.waitForStarted(3000):
             self._append_gui_html(
@@ -10161,16 +10241,65 @@ CMD ["bash"]
                 f'Check {html.escape(str(ffmpeg_log))}.</i>',
             )
             self._recording_proc = None
-            self._recording_session = None
-            if getattr(self, 'record_checkbox', None):
-                self.record_checkbox.blockSignals(True)
-                self.record_checkbox.setChecked(False)
-                self.record_checkbox.blockSignals(False)
-            self._set_recording_indicator('off')
-            return
+            return False
+        session['segments'].append(segment_path)
+        session['segment_started'] = time.time()
+        session['paused'] = False
         self._set_recording_indicator('active')
-        if self._recording_show_control_window:
-            self._show_recording_window(video_path)
+        self._update_recording_pause_button()
+        return True
+
+    def pause_recording(self) -> bool:
+        """End the running segment; nothing is captured until :meth:`resume_recording`."""
+        session = self._recording_session
+        if session is None or session.get('stop_requested') or session.get('paused'):
+            return False
+        proc = self._recording_proc
+        session['paused'] = True
+        self._log_info('recording paused')
+        self._set_recording_indicator('paused')
+        self._update_recording_pause_button()
+        if proc is not None and proc.state() != QProcess.NotRunning:
+            self._request_ffmpeg_stop(proc)
+            QTimer.singleShot(5000, lambda: self._terminate_recording_if_running(proc))
+        return True
+
+    def resume_recording(self) -> bool:
+        """Start the next segment of a paused recording."""
+        session = self._recording_session
+        if session is None or session.get('stop_requested') or not session.get('paused'):
+            return False
+        proc = self._recording_proc
+        if proc is not None and proc.state() != QProcess.NotRunning:
+            # the previous segment is still flushing; resume once it has finished
+            session['resume_pending'] = True
+            return True
+        return self._start_recording_segment()
+
+    def recording_status(self) -> dict:
+        """State of the screen recording for the remote API and tests."""
+        session = self._recording_session
+        armed = bool(getattr(self, 'record_checkbox', None) and self.record_checkbox.isChecked())
+        if session is None:
+            return {'active': False, 'paused': False, 'armed': armed, 'exporting': bool(self._recording_export_procs)}
+        recorded = sum(session.get('segment_seconds') or [])
+        started = session.get('segment_started')
+        if started and not session.get('paused'):
+            recorded += time.time() - started
+        return {
+            'active': True,
+            'paused': bool(session.get('paused')),
+            'stopping': bool(session.get('stop_requested')),
+            'armed': armed,
+            'base_dir': str(session['base_dir']),
+            'video_path': str(session['video_path']),
+            'video_speedup_path': str(session['video_speedup_path']),
+            'speedup': self._recording_speedup,
+            'segments': len(session.get('segments') or []),
+            'recorded_s': round(recorded, 1),
+            'elapsed_s': round(time.time() - session['started'], 1),
+            'exporting': bool(self._recording_export_procs),
+        }
 
     def _stop_screen_recording(self, *, save_logs: bool, reason: str | None = None):
         self._cancel_recording_schedule()
@@ -10186,9 +10315,12 @@ CMD ["bash"]
             state = proc.state() if proc else None
         except RuntimeError:
             return
+        if session is not None:
+            session['resume_pending'] = False
         if proc and state != QProcess.NotRunning:
-            if not session.get('stop_requested'):
+            if session is not None and not session.get('stop_requested'):
                 session['stop_requested'] = True
+                self._update_recording_pause_button()
                 self._request_ffmpeg_stop(proc)
                 QTimer.singleShot(
                     5000,
@@ -10244,9 +10376,26 @@ CMD ["bash"]
             except Exception:
                 pass
 
-    def _on_recording_finished(self, code: int, _status):
-        if self._recording_session is not None:
-            self._recording_session['exit_code'] = code
+    def _on_recording_segment_finished(self, proc: QProcess, code: int, _status):
+        session = self._recording_session
+        if proc is self._recording_proc:
+            self._recording_proc = None
+        if session is None:
+            return
+        started = session.get('segment_started')
+        if started:
+            session.setdefault('segment_seconds', []).append(time.time() - started)
+        session['segment_started'] = None
+        session['exit_code'] = code
+        if session.get('stop_requested'):
+            self._finalize_recording_session()
+            return
+        if session.get('paused'):
+            if session.pop('resume_pending', False):
+                self._start_recording_segment()
+            return
+        # ffmpeg died on its own (display lost, disk full, ...): end the session
+        self._append_gui_html('log', f'<i>Recording segment ended unexpectedly (exit code {code}).</i>')
         self._finalize_recording_session()
 
     def _finalize_recording_session(self):
@@ -10265,12 +10414,17 @@ CMD ["bash"]
         base_dir = session.get('base_dir')
         video_path = session.get('video_path')
         exit_code = session.get('exit_code')
-        video_file = Path(video_path) if video_path else None
-        video_exists = bool(video_file and video_file.is_file())
+        segments = [Path(p) for p in (session.get('segments') or []) if Path(p).is_file()]
+        video_exists = bool(segments)
         if video_exists:
-            size_kb = video_file.stat().st_size / 1024.0 if video_file else 0.0
-            size_text = f' ({size_kb:.0f} KB)' if size_kb > 0 else ''
-            self._append_gui_html('log', f'<i>Recording saved to {html.escape(str(video_file))}{html.escape(size_text)}</i>')
+            recorded = sum(session.get('segment_seconds') or [])
+            self._append_gui_html(
+                'log',
+                f'<i>Recording captured {len(segments)} segment(s), {recorded:.0f} s of footage; '
+                f'exporting {html.escape(str(video_path))} and the '
+                f'{self._recording_speedup:g}x version.</i>',
+            )
+            self._export_recording(session, segments)
         if session.get('save_logs') and base_dir:
             logs_dir = session.get('logs_dir') or base_dir
             saved = self._save_logs_to_directory(Path(logs_dir))
@@ -10298,6 +10452,78 @@ CMD ["bash"]
                 proc.deleteLater()
             except Exception:
                 pass
+
+    def _export_recording(self, session: dict, segments: list[Path]) -> None:
+        """Concatenate the segments into the final video, then render the sped-up copy."""
+        base_dir: Path = session['base_dir']
+        video_path: Path = session['video_path']
+        speedup_path: Path = session['video_speedup_path']
+        ffmpeg_log: Path = session['ffmpeg_log']
+        list_file = base_dir / 'segments' / 'segments.txt'
+        try:
+            list_file.write_text(''.join(f"file '{p}'\n" for p in segments), encoding='utf-8')
+        except Exception as exc:
+            self._append_gui_html('log', f'<i>Failed to write segment list: {html.escape(str(exc))}</i>')
+            return
+        concat_args = ['-y', '-f', 'concat', '-safe', '0', '-i', str(list_file), '-c', 'copy', str(video_path)]
+        factor = self._recording_speedup
+        speedup_args = [
+            '-y', '-i', str(video_path),
+            '-filter:v', f'setpts=PTS/{factor:g}', '-r', '30', '-an',
+            '-vcodec', 'libx264', '-pix_fmt', 'yuv420p', '-preset', 'veryfast', '-threads', '8',
+            str(speedup_path),
+        ]
+
+        def _run(args: list[str], on_done) -> None:
+            proc = QProcess(self)
+            try:
+                proc.setStandardOutputFile(str(ffmpeg_log), mode=QIODevice.Append)
+                proc.setStandardErrorFile(str(ffmpeg_log), mode=QIODevice.Append)
+            except Exception:
+                pass
+            self._recording_export_procs.append(proc)
+
+            def _finished(code: int, _status):
+                if proc in self._recording_export_procs:
+                    self._recording_export_procs.remove(proc)
+                try:
+                    proc.deleteLater()
+                except Exception:
+                    pass
+                on_done(code)
+
+            proc.finished.connect(_finished)
+            self._log_info(f'recording export: {shlex.join(["ffmpeg", *args])}')
+            proc.start('ffmpeg', args)
+            if not proc.waitForStarted(3000):
+                if proc in self._recording_export_procs:
+                    self._recording_export_procs.remove(proc)
+                self._append_gui_html('log', f'<i>Unable to start ffmpeg for the recording export; check {html.escape(str(ffmpeg_log))}.</i>')
+
+        def _speedup_done(code: int) -> None:
+            if code == 0 and speedup_path.is_file():
+                size_mb = speedup_path.stat().st_size / (1024.0 * 1024.0)
+                self._append_gui_html(
+                    'log', f'<i>{factor:g}x recording saved to {html.escape(str(speedup_path))} ({size_mb:.1f} MB)</i>'
+                )
+            else:
+                self._append_gui_html('log', f'<i>Sped-up export failed (exit code {code}); check {html.escape(str(ffmpeg_log))}.</i>')
+            _emit_remote_event(
+                self, 'recording_exported',
+                video_path=str(video_path),
+                video_speedup_path=str(speedup_path) if speedup_path.is_file() else None,
+            )
+
+        def _concat_done(code: int) -> None:
+            if code != 0 or not video_path.is_file():
+                self._append_gui_html('log', f'<i>Recording export failed (exit code {code}); segments kept in {html.escape(str(base_dir / "segments"))}.</i>')
+                _emit_remote_event(self, 'recording_exported', video_path=None, video_speedup_path=None)
+                return
+            size_mb = video_path.stat().st_size / (1024.0 * 1024.0)
+            self._append_gui_html('log', f'<i>Recording saved to {html.escape(str(video_path))} ({size_mb:.1f} MB)</i>')
+            _run(speedup_args, _speedup_done)
+
+        _run(concat_args, _concat_done)
 
     def _toggle_auto_launch_stack(self):
         if self._auto_launch_running:

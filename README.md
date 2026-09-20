@@ -620,8 +620,16 @@ recording startup.
 
 Recording captures X11 screen video with `ffmpeg -f x11grab`. It is armed by the
 GUI checkbox and starts only after Auto Launch begins and the timeline/layout
-delay has elapsed. Recording sessions create timestamped folders containing the
-MP4, `ffmpeg.log`, and saved HTML logs when requested.
+delay has elapsed, or at once through `POST /recording/start` on the remote
+API. Recording sessions create timestamped folders containing the MP4,
+`ffmpeg.log`, and saved HTML logs when requested.
+
+A recording is a list of segments (`segments/segment_NNN.mp4`): **Pause**
+(Recording Control window or `POST /recording/pause`) ends the running ffmpeg
+segment and **Resume** starts the next one, so idle time is never captured.
+**Stop** concatenates the segments into `<name>.mp4` and renders
+`<name>_<speedup>x.mp4` next to it (`recording.speedup`, default 4); the API
+emits `recording_exported` with both paths when the export is done.
 
 Window layout capture uses `WindowLayoutManager` on top of a backend from
 `window_control.py`. On X11 sessions the backend shells out to `wmctrl` and
@@ -689,6 +697,7 @@ click with a wait without missing events.
 | `GET /args`, `POST /args` | The toolbar argument dropdowns (generic `arg_N` slots from the button profile) and the world selector: `name`, current `value`, `options` and the `buttons` each applies to. `POST` selects values by name (`{"anygrasp_mode": "real", "world": "moelk_tables"}`) exactly like choosing them in the toolbar, so no profile edit or reload is needed; unknown names or values are rejected. |
 | `GET /presence`, `POST /presence`, `DELETE /presence` | Declare that a client is using the GUI (`{"name": "<agent>", "ttl_s": 600, "note": ""}`; the name is chosen by the client, so any agent can use its own, and several may be present at once), refresh it, or withdraw it. While a client is present the window icon glows bright and the GUI log records who is working. The server remembers every button, custom command, and shell the client started; when the client withdraws (without `"keep": true`) or its `ttl_s` (default 10 min, max 30 min) lapses, the GUI stops those and logs the cleanup, so a crashed agent cannot leave the simulator running. |
 | `POST /reload` | Re-read `gui_settings.yaml` and the workspace button profile without restarting the GUI. Button commands, labels, tooltips and argument slots are picked up for the next press; running processes and their tabs are preserved. |
+| `GET /recording`, `POST /recording/{start\|pause\|resume\|stop}` | Screen recording state (`active`, `paused`, `segments`, `recorded_s`, `video_path`, `video_speedup_path`) and its control without Auto Launch. A recording started by a client is stopped when that client leaves. |
 | `POST /tabs/{key}/stop` | Stop the process behind a log tab: a button process (same as `/buttons/{key}/stop`), a `customN` command started with `/command`, or a remote shell. |
 | `GET /events?since=N&names=a,b` | Event history; add `follow=1&timeout=s` to stream NDJSON. |
 | `POST /wait` | Block until one of `events` arrives after `since` (default: now) or `timeout`; `key` restricts keyed events to one button or tab. |

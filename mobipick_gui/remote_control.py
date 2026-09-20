@@ -686,6 +686,8 @@ API_INDEX = [
     ('GET', '/events?since=N&names=a,b&follow=1&timeout=s', 'List or stream (NDJSON) events.'),
     ('POST', '/wait', 'Block until an event. Body: {"events": [names], "since": N, "timeout": s, "key": "sim"}.'),
     ('POST', '/reload', 'Re-read gui_settings.yaml and the workspace button profile without restarting the GUI.'),
+    ('GET', '/recording', 'Screen recording state: active, paused, segments, recorded_s, video_path and the sped-up video_speedup_path.'),
+    ('POST', '/recording/{start|pause|resume|stop}', 'Control the screen recording without Auto Launch. Pause ends the current segment, resume starts the next one; stop concatenates the segments and renders the sped-up copy (event recording_exported).'),
     ('POST', '/tabs/{key}/stop', 'Stop the process behind a log tab: a button process, a customN command, or a remote shell.'),
     ('GET', '/tabs', 'Log tabs and whether their process runs.'),
     ('GET', '/tabs/{key}?tail=N&grep=RE', 'Plain text of a log tab.'),
@@ -1080,6 +1082,8 @@ class RemoteControlServer:
                     'auto_launch_stopped', 'window_layout_applied', 'shell_opened',
                     'shell_exited', 'shell_closed', 'client_connected',
                     'client_disconnected', 'config_reloaded', 'gui_closing',
+                    'recording_started', 'recording_paused', 'recording_resumed',
+                    'recording_stopped', 'recording_exported',
                 ],
             }
         head = parts[0]
@@ -1133,6 +1137,23 @@ class RemoteControlServer:
                 if not values:
                     raise RemoteControlError('body must map argument names to values')
                 return {'args': self._invoke(lambda: self.adapter.set_args(values))}
+            raise RemoteControlError('method not allowed', status=HTTPStatus.METHOD_NOT_ALLOWED)
+        if head == 'recording':
+            if method == 'GET' and len(parts) == 1:
+                return {'recording': self._invoke(self.adapter.recording)}
+            if method == 'POST' and len(parts) == 2:
+                action = parts[1]
+                event_names = {'start': 'started', 'pause': 'paused', 'resume': 'resumed', 'stop': 'stopped'}
+                if action not in event_names:
+                    raise NotFound(f'unknown recording action {action!r}')
+                result = self._invoke(lambda: self.adapter.recording_action(action))
+                if result.get('accepted'):
+                    if action == 'start':
+                        self._record_owned('recording', 'screen')
+                    elif action == 'stop':
+                        self._forget_owned('recording', 'screen')
+                    self.emit(f'recording_{event_names[action]}')
+                return result
             raise RemoteControlError('method not allowed', status=HTTPStatus.METHOD_NOT_ALLOWED)
         if head == 'tabs':
             if method == 'POST' and len(parts) == 3 and parts[2] == 'stop':
@@ -1571,6 +1592,12 @@ class GuiAdapter:
 
     def reload_configuration(self) -> dict:
         raise NotImplementedError
+
+    def recording(self) -> dict:
+        return {'active': False, 'paused': False, 'armed': False}
+
+    def recording_action(self, action: str) -> dict:
+        raise RemoteControlError('this GUI has no screen recording')
 
     def stop_owned(self, name: str, entries: list[dict]) -> list[str]:
         raise NotImplementedError

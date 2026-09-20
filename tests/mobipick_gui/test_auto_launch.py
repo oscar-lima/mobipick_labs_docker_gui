@@ -649,6 +649,7 @@ def test_recording_stop_requests_ffmpeg_clean_quit():
         harness,
     )
     harness._terminate_recording_if_running = lambda _proc: None
+    harness._update_recording_pause_button = lambda: None
 
     harness._stop_screen_recording(save_logs=True, reason='stop test')
 
@@ -1048,3 +1049,85 @@ def test_roscore_shutdown_finalizer_resets_config_buttons(monkeypatch):
         ('rqt', 'red', 'Start RQt Tables', True)
     )
     assert harness._roscore_stopping is False
+
+
+def test_recording_pause_resume_and_stop_keep_segments(tmp_path):
+    """Pause ends the ffmpeg segment, resume starts the next one, stop exports every segment."""
+    events = []
+
+    class FakeProcess:
+        def __init__(self):
+            self.running = True
+
+        def state(self):
+            return QProcess.Running if self.running else QProcess.NotRunning
+
+        def write(self, data):
+            events.append(('write', data))
+
+        def closeWriteChannel(self):
+            pass
+
+    procs = []
+    session = {
+        'base_dir': tmp_path,
+        'video_path': tmp_path / 'rec.mp4',
+        'video_speedup_path': tmp_path / 'rec_4x.mp4',
+        'ffmpeg_log': tmp_path / 'ffmpeg.log',
+        'segments': [],
+        'segment_seconds': [],
+        'segment_started': None,
+        'paused': False,
+        'stop_requested': False,
+        'started': 0.0,
+    }
+    harness = SimpleNamespace(
+        _recording_session=session,
+        _recording_proc=None,
+        _recording_start_timer=None,
+        _recording_export_procs=[],
+        _recording_speedup=4.0,
+        record_checkbox=None,
+        _cancel_recording_schedule=lambda: None,
+        _log_info=lambda message: events.append(('log', message)),
+        _append_gui_html=lambda key, text: events.append((key, text)),
+        _set_recording_indicator=lambda state: events.append(('indicator', state)),
+        _update_recording_pause_button=lambda: None,
+        _terminate_recording_if_running=lambda _proc: None,
+        _request_ffmpeg_stop=lambda proc: proc.write(b'q\n'),
+        _recording_window=None,
+    )
+
+    def start_segment():
+        proc = FakeProcess()
+        procs.append(proc)
+        harness._recording_proc = proc
+        path = tmp_path / f'segment_{len(session["segments"]) + 1:03d}.mp4'
+        path.write_bytes(b'x')
+        session['segments'].append(path)
+        session['segment_started'] = 1.0
+        session['paused'] = False
+        events.append(('indicator', 'active'))
+        return True
+
+    harness._start_recording_segment = start_segment
+    harness._export_recording = lambda sess, segments: events.append(('export', [p.name for p in segments]))
+    for name in ('pause_recording', 'resume_recording', 'recording_status', '_stop_screen_recording',
+                 '_on_recording_segment_finished', '_finalize_recording_session'):
+        setattr(harness, name, MethodType(getattr(MainWindow, name), harness))
+
+    start_segment()
+    assert harness.pause_recording() is True
+    assert session['paused'] is True and ('write', b'q\n') in events
+    # ffmpeg finishes the segment: the session survives the pause
+    procs[0].running = False
+    harness._on_recording_segment_finished(procs[0], 0, None)
+    assert harness._recording_session is session and harness.recording_status()['paused'] is True
+    assert harness.resume_recording() is True and len(session['segments']) == 2
+    assert harness.pause_recording() and harness.pause_recording() is False
+    harness._stop_screen_recording(save_logs=False, reason=None)
+    assert session['stop_requested'] is True
+    procs[1].running = False
+    harness._on_recording_segment_finished(procs[1], 0, None)
+    assert harness._recording_session is None
+    assert ('export', ['segment_001.mp4', 'segment_002.mp4']) in events

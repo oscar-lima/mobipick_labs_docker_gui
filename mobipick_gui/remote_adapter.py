@@ -57,6 +57,41 @@ class MainWindowRemoteAdapter(GuiAdapter):
             'dialog': self.active_dialog(),
         }
 
+    # -- screen recording ------------------------------------------------
+
+    def recording(self) -> dict:
+        return self.window.recording_status()
+
+    def recording_action(self, action: str) -> dict:
+        window = self.window
+        status_before = window.recording_status()
+        if action == 'start':
+            if status_before.get('active'):
+                return {'accepted': False, 'reason': 'recording already active', **window.recording_status()}
+            window._log_event('remote client started screen recording')
+            window._start_screen_recording()
+            status = window.recording_status()
+            return {
+                'accepted': bool(status.get('active')),
+                'reason': None if status.get('active') else 'ffmpeg did not start',
+                **status,
+            }
+        if not status_before.get('active'):
+            return {'accepted': False, 'reason': 'no recording active', **status_before}
+        if action == 'pause':
+            accepted = window.pause_recording()
+            reason = None if accepted else 'recording is already paused or stopping'
+        elif action == 'resume':
+            accepted = window.resume_recording()
+            reason = None if accepted else 'recording is not paused'
+        elif action == 'stop':
+            window._stop_screen_recording(save_logs=True, reason='remote client stopped screen recording')
+            accepted = True
+            reason = None
+        else:
+            raise NotFound(f'unknown recording action {action!r}')
+        return {'accepted': accepted, 'reason': reason, **window.recording_status()}
+
     # -- buttons -------------------------------------------------------
 
     def _button_widget(self, key: str) -> QPushButton | None:
@@ -203,6 +238,12 @@ class MainWindowRemoteAdapter(GuiAdapter):
                     result = self.stop_tab(str(key))
                     if result.get('stopped'):
                         notes.append(f'stopped tab {key}')
+                elif kind == 'recording':
+                    if window.recording_status().get('active'):
+                        window._stop_screen_recording(
+                            save_logs=True, reason=f'remote client {name} left; stopping recording'
+                        )
+                        notes.append('stopped screen recording')
                 elif kind == 'shell':
                     server = window.remote_control
                     if server is not None and any(s.id == key for s in server.sessions()):
