@@ -453,7 +453,7 @@ BUTTON_CONFIG_DEFAULTS = [
     },
 ]
 
-GENERIC_BUTTON_ARG_SLOTS = range(1, 4)
+GENERIC_BUTTON_ARG_SLOTS = range(1, 5)
 
 REQUIRED_BUTTON_KEYS = ('sim', 'rviz')
 
