@@ -174,3 +174,37 @@ def test_install_desktop_launcher_installs_before_pinning(monkeypatch, tmp_path)
 def test_parse_gsettings_rejects_non_string_arrays():
     with pytest.raises(OSError, match='unexpected GNOME dock favorites'):
         desktop_launcher._parse_gsettings_string_array("['valid', 3]")
+
+
+def test_module_invocation_records_a_launcher_that_actually_starts(tmp_path):
+    """``python -m mobipick_gui`` must not pin ``__main__.py`` itself.
+
+    Running that file as a script fails with "attempted relative import with
+    no known parent package", which leaves the dock icon doing nothing.
+    """
+    checkout = tmp_path / 'checkout'
+    package = checkout / 'mobipick_gui'
+    package.mkdir(parents=True)
+    (package / '__main__.py').touch()
+    shim = checkout / 'gui.py'
+    shim.touch()
+
+    command = desktop_launcher.desktop_launch_command(
+        str(package / '__main__.py')
+    )
+
+    assert command == f'"{desktop_launcher.sys.executable}" "{shim}"'
+
+
+def test_module_invocation_without_a_shim_falls_back_to_the_module(tmp_path):
+    package = tmp_path / 'site-packages' / 'mobipick_gui'
+    package.mkdir(parents=True)
+    (package / '__main__.py').touch()
+
+    command = desktop_launcher.desktop_launch_command(
+        str(package / '__main__.py')
+    )
+
+    assert command == (
+        f'"{desktop_launcher.sys.executable}" "-m" "mobipick_gui"'
+    )

@@ -77,6 +77,15 @@ At startup, the GUI refreshes its per-user desktop entry at
 application identity, allowing X11 window managers and Wayland compositors to
 associate console-launched windows with the bundled Mobipick icon.
 
+That refresh rewrites the entry's `Exec` from the running invocation
+(`desktop_launch_command`), so a pinned dock icon keeps following the way the
+GUI is actually started. `python -m mobipick_gui` is the exception: it leaves
+the package's `__main__.py` in `argv[0]`, and running that file as a script
+fails with `attempted relative import with no known parent package`. The
+launcher therefore records the `gui.py` shim next to the package, or
+`python -m mobipick_gui` when no shim exists, so a debugging run never leaves
+the dock icon pointing at a command that cannot start.
+
 The same refresh installs hidden `mobipick-rviz.desktop`, `mobipick-rqt.desktop`,
 and `mobipick-gazebo.desktop` entries next to it. GNOME Shell 45 and newer
 ignore the `_NET_WM_ICON` that RViz, rqt, and Gazebo set on their own windows,

@@ -94,7 +94,18 @@ def desktop_launch_command(argv0: str | None = None) -> str:
     """Return a launcher command matching the current GUI invocation."""
     raw_launcher = argv0 if argv0 is not None else sys.argv[0]
     launcher = Path(raw_launcher).expanduser()
-    if launcher.suffix == '.py':
+    if launcher.name == '__main__.py':
+        # ``python -m mobipick_gui`` leaves the package's ``__main__.py`` in
+        # argv[0].  Running that file as a script fails with "attempted
+        # relative import with no known parent package", so record the shim
+        # beside the package, or the module itself, instead.
+        package = launcher.resolve().parent
+        shim = package.parent / 'gui.py'
+        if shim.is_file():
+            arguments = (sys.executable, str(shim))
+        else:
+            arguments = (sys.executable, '-m', package.name)
+    elif launcher.suffix == '.py':
         arguments = (sys.executable, str(launcher.resolve()))
     else:
         arguments = (str(launcher.resolve()),)
