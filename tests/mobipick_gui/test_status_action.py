@@ -202,6 +202,70 @@ def test_ctrl_w_closes_active_secondary_window(tmp_path, monkeypatch):
     app.processEvents()
 
 
+def test_ctrl_w_closes_current_closable_log_tab(tmp_path, monkeypatch):
+    monkeypatch.setenv('MOBIPICK_WORKSPACE_CONFIG', str(tmp_path / 'workspaces.yaml'))
+    monkeypatch.setattr(
+        MainWindow,
+        '_discover_filtered_image_records',
+        lambda self: ([{'ref': CONFIG['images']['default']}], None),
+    )
+    monkeypatch.setattr(
+        MainWindow,
+        'update_sim_status_from_poll',
+        lambda self, force=False: None,
+    )
+
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow(verbosity=1)
+    window.poll_timer.stop()
+    window._sigint_timer.stop()
+    window.show()
+    tab = window._ensure_tab('terminal-test', 'Terminal Test', closable=True)
+    window.tabs.setCurrentWidget(tab.output)
+    window.activateWindow()
+    app.processEvents()
+
+    QTest.keyClick(tab.output, Qt.Key_W, Qt.ControlModifier)
+    app.processEvents()
+
+    assert 'terminal-test' not in window.tasks
+
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_ctrl_w_keeps_current_log_tab_without_close_button(tmp_path, monkeypatch):
+    monkeypatch.setenv('MOBIPICK_WORKSPACE_CONFIG', str(tmp_path / 'workspaces.yaml'))
+    monkeypatch.setattr(
+        MainWindow,
+        '_discover_filtered_image_records',
+        lambda self: ([{'ref': CONFIG['images']['default']}], None),
+    )
+    monkeypatch.setattr(
+        MainWindow,
+        'update_sim_status_from_poll',
+        lambda self, force=False: None,
+    )
+
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow(verbosity=1)
+    window.poll_timer.stop()
+    window._sigint_timer.stop()
+    window.show()
+    window._focus_tab('log')
+    window.activateWindow()
+    app.processEvents()
+
+    QTest.keyClick(window.tasks['log'].output, Qt.Key_W, Qt.ControlModifier)
+    app.processEvents()
+
+    assert 'log' in window.tasks
+    assert window.isVisible()
+
+    window.deleteLater()
+    app.processEvents()
+
+
 def test_top_menu_actions_have_tooltips(tmp_path, monkeypatch):
     monkeypatch.setenv('MOBIPICK_WORKSPACE_CONFIG', str(tmp_path / 'workspaces.yaml'))
     monkeypatch.setattr(

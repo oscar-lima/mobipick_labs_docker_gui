@@ -4107,7 +4107,7 @@ class MainWindow(QMainWindow):
         return super().eventFilter(watched, event)
 
     def _handle_active_window_close_shortcut(self, event) -> bool:
-        """Close the active tool window for Ctrl+W without exiting the GUI."""
+        """Close the active closable tab or tool window for Ctrl+W."""
         is_ctrl_w = (
             event.key() == Qt.Key_W
             and event.modifiers() == Qt.ControlModifier
@@ -4119,7 +4119,19 @@ class MainWindow(QMainWindow):
             return False
         app_instance = QApplication.instance()
         active_window = app_instance.activeWindow() if app_instance else None
-        if active_window is None or active_window is self:
+        if active_window is self:
+            index = self.tabs.currentIndex()
+            if index < 0:
+                return True
+            close_button = self.tabs.tabBar().tabButton(
+                index,
+                QTabBar.RightSide,
+            )
+            if close_button is None:
+                return True
+            self.on_tab_close_requested(index)
+            return True
+        if active_window is None:
             return False
         active_window.close()
         return True

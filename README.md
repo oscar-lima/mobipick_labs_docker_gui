@@ -974,7 +974,8 @@ for example `[WARN] [14:26:56] [/pose_selector]: Clearing planning scene`.
 
 GUI-originated messages and executed commands are written to the **Log** tab.
 Users can save the current tab, save all tabs, or load a saved HTML log into a
-closable tab. The bottom search row searches only the current log tab.
+closable tab. Ctrl+W closes the current tab when it has an X close button. The
+bottom search row searches only the current log tab.
 
 The bug report dialog collects selected diagnostic sections, including GUI
 version, selected workspace, selected image/workspace match, optional command

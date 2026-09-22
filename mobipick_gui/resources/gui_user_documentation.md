@@ -391,6 +391,7 @@ color codes.
 - **Loaded log** tabs show logs opened from saved HTML files.
 
 Only custom, terminal, build, and loaded log tabs can be closed.
+Press **Ctrl+W** to close the current tab when it has an **X** close button.
 
 ## Bottom log controls
 
