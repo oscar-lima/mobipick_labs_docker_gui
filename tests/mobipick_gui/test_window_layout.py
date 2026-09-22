@@ -207,11 +207,66 @@ def test_gnome_backend_apply_calls_extension_methods(monkeypatch, tmp_path):
         .rsplit('.', 1)[1]
         for cmd in calls
     ]
-    assert methods == ['Version', 'ListWindows', 'MoveResize', 'SetWorkspace', 'Activate']
+    assert methods == [
+        'Version',
+        'ListWindows',
+        'Unmaximize',
+        'MoveResize',
+        'SetWorkspace',
+        'Activate',
+    ]
     move = calls[methods.index('MoveResize')]
     assert move[-5:] == ["'777'", '50', '60', '640', '480']
     assert calls[methods.index('SetWorkspace')][-2:] == ["'777'", '2']
     assert manager._applied_ids == {'777'}
+
+
+def test_layout_unmaximizes_all_windows_before_resizing(tmp_path):
+    calls: list[tuple] = []
+
+    class FakeBackend:
+        available = True
+        name = 'fake'
+
+        def list_windows(self, **_kwargs):
+            return [
+                WindowInfo('1', 'First', 0, 1, 0, 0, 100, 100, ['first']),
+                WindowInfo('2', 'Second', 0, 2, 0, 0, 100, 100, ['second']),
+            ]
+
+        def unmaximize(self, wid):
+            calls.append(('unmaximize', wid))
+            return True
+
+        def move_resize(self, wid, x, y, width, height):
+            calls.append(('move_resize', wid, x, y, width, height))
+
+        def set_desktop(self, wid, desktop):
+            calls.append(('set_desktop', wid, desktop))
+
+        def restack(self, wids):
+            calls.append(('restack', tuple(wids)))
+
+    manager = WindowLayoutManager(tmp_path / 'layout.yaml', backend=FakeBackend())
+    manager._layout = {
+        'windows': [
+            {
+                'title': 'First',
+                'geometry': {'x': 10, 'y': 20, 'width': 300, 'height': 400},
+            },
+            {
+                'title': 'Second',
+                'geometry': {'x': 50, 'y': 60, 'width': 700, 'height': 800},
+            },
+        ]
+    }
+    manager._auto_apply_done = False
+
+    manager.maybe_apply_saved_layout()
+
+    assert calls[:2] == [('unmaximize', '1'), ('unmaximize', '2')]
+    assert calls[2][:2] == ('move_resize', '1')
+    assert calls[3][:2] == ('move_resize', '2')
 
 
 def test_install_gnome_extension_copies_files_and_enables(tmp_path, monkeypatch):
@@ -295,6 +350,23 @@ def test_gnome_backend_set_above_calls_extension(monkeypatch):
     assert calls[-1][-1] == 'false'
 
 
+def test_gnome_backend_unmaximize_calls_extension(monkeypatch):
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(list(cmd))
+        return subprocess.CompletedProcess(cmd, 0, stdout='(true,)\n', stderr='')
+
+    monkeypatch.setattr(window_control.shutil, 'which', lambda name: f'/usr/bin/{name}')
+    monkeypatch.setattr(subprocess, 'run', fake_run)
+
+    assert GnomeWaylandWindowBackend().unmaximize('42') is True
+    assert calls[-1][-2:] == [
+        'org.gnome.Shell.Extensions.MobipickWinCtl.Unmaximize',
+        "'42'",
+    ]
+
+
 def test_gnome_backend_clear_attention_calls_extension(monkeypatch):
     calls: list[list[str]] = []
 
@@ -324,6 +396,30 @@ def test_x11_backend_set_above_uses_wmctrl(monkeypatch):
     backend = X11WindowBackend()
     assert backend.set_above('0x1', True) is True
     assert calls[-1] == ['wmctrl', '-i', '-r', '0x1', '-b', 'add,above']
+
+
+def test_x11_backend_unmaximize_clears_fullscreen_and_maximized(monkeypatch):
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(list(cmd))
+        return subprocess.CompletedProcess(cmd, 0, stdout='', stderr='')
+
+    monkeypatch.setattr(window_control.shutil, 'which', lambda name: f'/usr/bin/{name}')
+    monkeypatch.setattr(subprocess, 'run', fake_run)
+
+    assert X11WindowBackend().unmaximize('0x1') is True
+    assert calls[-2:] == [
+        [
+            'wmctrl',
+            '-i',
+            '-r',
+            '0x1',
+            '-b',
+            'remove,maximized_vert,maximized_horz',
+        ],
+        ['wmctrl', '-i', '-r', '0x1', '-b', 'remove,fullscreen'],
+    ]
 
 
 def test_x11_backend_clear_attention_uses_wmctrl(monkeypatch):

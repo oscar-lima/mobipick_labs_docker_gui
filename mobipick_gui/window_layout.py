@@ -245,6 +245,12 @@ class WindowLayoutManager:
             return
 
         self._log_info(f'Applying saved window layout to {len(matches)} window(s).')
+        # State changes and geometry requests are asynchronous on X11.  Send
+        # every unmaximize request first so the window manager has processed
+        # them before the resize pass begins.  This also prevents applications
+        # which start maximized from ignoring their saved geometry.
+        for _, win in matches:
+            self._backend.unmaximize(win.wid)
         for entry, win in matches:
             self._apply_entry(entry, win)
         self._apply_stack(matches)

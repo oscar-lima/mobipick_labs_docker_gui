@@ -239,9 +239,22 @@ class X11WindowBackend:
         return windows
 
     def move_resize(self, wid: str, x: int, y: int, width: int, height: int) -> None:
-        # drop maximized flags before resizing/repositioning so wmctrl can move the window
-        self._run_wmctrl(['-i', '-r', wid, '-b', 'remove,maximized_vert,maximized_horz'])
         self._run_wmctrl(['-i', '-r', wid, '-e', f'0,{x},{y},{width},{height}'])
+
+    def unmaximize(self, wid: str) -> bool:
+        """Leave maximized or full-screen state before applying geometry."""
+        self._run_wmctrl(
+            [
+                '-i',
+                '-r',
+                wid,
+                '-b',
+                'remove,maximized_vert,maximized_horz',
+            ]
+        )
+        # wmctrl accepts at most two properties in one -b operation.
+        self._run_wmctrl(['-i', '-r', wid, '-b', 'remove,fullscreen'])
+        return self._wmctrl_available
 
     def set_desktop(self, wid: str, desktop: int) -> None:
         self._run_wmctrl(['-i', '-r', wid, '-t', str(desktop)])
@@ -405,6 +418,11 @@ class GnomeWaylandWindowBackend:
 
     def move_resize(self, wid: str, x: int, y: int, width: int, height: int) -> None:
         self._call('MoveResize', str(wid), int(x), int(y), int(width), int(height))
+
+    def unmaximize(self, wid: str) -> bool:
+        """Leave maximized state before applying saved geometry."""
+        result = self._call('Unmaximize', str(wid))
+        return bool(result and result[0])
 
     def set_desktop(self, wid: str, desktop: int) -> None:
         self._call('SetWorkspace', str(wid), int(desktop))
