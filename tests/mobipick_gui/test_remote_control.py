@@ -389,6 +389,44 @@ def test_shell_session_exit_marks_session_closed():
         session.run('echo nope')
 
 
+@pytestmark_bash
+def test_shell_session_close_does_not_block_the_caller():
+    # A shell still running a foreground command ignores the "exit" and has
+    # to be terminated after the timeout; the caller (the GUI thread when a
+    # client lapsed) must not wait for that.
+    session = _local_shell()
+    session.run('sleep 30')
+    started = time.monotonic()
+    thread = session.close(timeout=2.0, wait=False)
+    assert time.monotonic() - started < 1.0
+    thread.join(15)
+    assert not thread.is_alive() and session.closed
+    assert session.close(wait=False) is thread  # a second close reuses the teardown
+
+
+def test_close_all_sessions_runs_teardowns_in_parallel(monkeypatch, api_server):
+    server, _adapter, _api = api_server
+    teardowns = []
+
+    def slow_teardown(self, timeout):
+        teardowns.append(self.id)
+        time.sleep(0.5)
+        self._closed = True
+
+    monkeypatch.setattr(RemoteShellSession, '_teardown', slow_teardown)
+    for session_id in (1, 2, 3):
+        with server._sessions_lock:
+            server._sessions[session_id] = _local_shell(session_id=session_id)
+    started = time.monotonic()
+    server.close_all_sessions(wait=False)
+    assert time.monotonic() - started < 0.3 and server.sessions() == []
+    server.close_all_sessions(wait=True)  # nothing left: returns at once
+    deadline = time.monotonic() + 5
+    while sorted(teardowns) != [1, 2, 3] and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert sorted(teardowns) == [1, 2, 3]
+
+
 # ---------------------------------------------------------------------------
 # HTTP API
 # ---------------------------------------------------------------------------

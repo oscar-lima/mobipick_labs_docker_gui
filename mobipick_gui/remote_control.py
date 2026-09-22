@@ -341,6 +341,7 @@ class RemoteShellSession:
         self._command_counter = 0
         self._current: ShellCommand | None = None
         self._closed = False
+        self._close_thread: threading.Thread | None = None
         self._exit_code: int | None = None
         self._decoder = codecs.getincrementaldecoder('utf-8')(errors='replace')
         self.proc = subprocess.Popen(
@@ -627,7 +628,32 @@ class RemoteShellSession:
             'output': (cp.stdout or '').strip(),
         }
 
-    def close(self, timeout: float = 5.0) -> None:
+    def close(self, timeout: float = 5.0, *, wait: bool = True) -> threading.Thread:
+        """Exit the shell and remove its container.
+
+        The teardown waits for the shell to exit, then runs ``docker stop`` and
+        ``docker rm`` (up to a minute for a shell that is still running a
+        command), so it always happens on its own thread: the GUI thread
+        cleans up after a lapsed client and must never block on it.  With
+        ``wait`` the caller joins that thread; the returned thread lets a
+        caller that passed ``wait=False`` join later.
+        """
+        with self._cond:
+            thread = self._close_thread
+            if thread is None:
+                thread = threading.Thread(
+                    target=self._teardown,
+                    args=(timeout,),
+                    name=f'mobipick-remote-shell-close-{self.id}',
+                    daemon=True,
+                )
+                self._close_thread = thread
+                thread.start()
+        if wait:
+            thread.join()
+        return thread
+
+    def _teardown(self, timeout: float) -> None:
         if not self._closed:
             try:
                 assert self.proc.stdin is not None
@@ -647,6 +673,12 @@ class RemoteShellSession:
                         self.proc.kill()
                     except Exception:
                         pass
+            # The reader thread reports the exit code once it sees EOF; a
+            # process that had to be killed may leave it hanging, so the
+            # session counts as closed from here on either way.
+            with self._cond:
+                self._closed = True
+                self._cond.notify_all()
         if self.container_name:
             for docker_args in (['stop', '-t', '2'], ['rm', '-f']):
                 try:
@@ -960,8 +992,9 @@ class RemoteControlServer:
         self.events.emit('server_started', host=self.address[0], port=self.address[1])
         return self.address
 
-    def stop(self) -> None:
-        self.close_all_sessions()
+    def stop(self, *, wait: bool = True) -> None:
+        """Stop serving and tear down the shells (in the background when ``wait`` is false)."""
+        self.close_all_sessions(wait=wait)
         httpd = self._httpd
         self._httpd = None
         if httpd is not None:
@@ -1063,24 +1096,30 @@ class RemoteControlServer:
             self._forget_owned('button', key)
         return result
 
-    def close_session(self, session_id: Any) -> dict:
+    def close_session(self, session_id: Any, *, wait: bool = True) -> dict:
+        """Forget and tear down a shell; ``wait=False`` returns before the teardown ends."""
         session = self.session(session_id)
         self._forget_owned('shell', session.id)
         with self._sessions_lock:
             self._sessions.pop(session.id, None)
-        session.close()
+        session.close(wait=wait)
         self.events.emit('shell_closed', id=session.id, name=session.name)
         return {'session': session.describe()}
 
-    def close_all_sessions(self) -> None:
+    def close_all_sessions(self, *, wait: bool = True) -> None:
+        """Tear down every shell at once; with ``wait`` join all teardowns."""
         with self._sessions_lock:
             sessions = list(self._sessions.values())
             self._sessions.clear()
+        threads = []
         for session in sessions:
             try:
-                session.close()
+                threads.append(session.close(wait=False))
             except Exception:
                 pass
+        if wait:
+            for thread in threads:
+                thread.join()
 
     def _on_session_output(self, session: RemoteShellSession, lines: list[str]) -> None:
         text = ''.join(line + '\n' for line in lines)

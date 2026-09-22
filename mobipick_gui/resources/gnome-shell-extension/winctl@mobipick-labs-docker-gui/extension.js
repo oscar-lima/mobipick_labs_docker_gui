@@ -5,6 +5,7 @@
 // addressed by the stable Meta.Window id (a uint64 rendered as a string).
 import Gio from 'gi://Gio';
 import Meta from 'gi://Meta';
+import Shell from 'gi://Shell';
 import St from 'gi://St';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 
@@ -106,16 +107,35 @@ function glowStyle(level, color) {
 export default class MobipickWinCtl extends Extension {
     enable() {
         this._glowCache = new Map();
+        // The glow is state inside the shell, not inside the application
+        // that asked for it: a GUI that is killed (or hangs and gets
+        // force-quit) never sends the level-0 call, and the halo would
+        // stay on the dock until the shell restarts.  Drop it ourselves
+        // when the app's last window closes.
+        this._appStateId = Shell.AppSystem.get_default().connect(
+            'app-state-changed', (_system, app) => this._onAppStateChanged(app));
         this._dbus = Gio.DBusExportedObject.wrapJSObject(IFACE, this);
         this._dbus.export(Gio.DBus.session, OBJECT_PATH);
     }
 
     disable() {
+        if (this._appStateId) {
+            Shell.AppSystem.get_default().disconnect(this._appStateId);
+            this._appStateId = null;
+        }
         for (const appId of [...this._glowCache.keys()])
             this.SetAppGlow(appId, 0, '');
         this._glowCache = null;
         this._dbus?.unexport();
         this._dbus = null;
+    }
+
+    _onAppStateChanged(app) {
+        if (!this._glowCache || app.state !== Shell.AppState.STOPPED)
+            return;
+        const appId = app.get_id();
+        if (this._glowCache.has(appId))
+            this.SetAppGlow(appId, 0, '');
     }
 
     _appIcons(appId) {

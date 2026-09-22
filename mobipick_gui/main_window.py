@@ -3607,7 +3607,10 @@ class MainWindow(QMainWindow):
             return
         self.remote_control = None
         try:
-            server.stop()
+            # Shell containers are torn down in the background so toggling
+            # the API off never freezes the window; only the exit sequence
+            # waits, so no remote-shell container outlives the GUI.
+            server.stop(wait=self._exit_in_progress)
         finally:
             for key in list(self.tasks):
                 if key.startswith(REMOTE_SHELL_TAB_PREFIX):

@@ -247,7 +247,10 @@ class MainWindowRemoteAdapter(GuiAdapter):
                 elif kind == 'shell':
                     server = window.remote_control
                     if server is not None and any(s.id == key for s in server.sessions()):
-                        server.close_session(key)
+                        # Runs on the GUI thread: the container teardown
+                        # (docker stop/rm) happens in the background so the
+                        # window never freezes after a client lapses.
+                        server.close_session(key, wait=False)
                         notes.append(f'closed shell {key}')
             except Exception as exc:  # noqa: BLE001 - best effort cleanup
                 notes.append(f'could not stop {kind} {key}: {exc}')
