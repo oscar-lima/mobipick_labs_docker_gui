@@ -3,12 +3,64 @@ from __future__ import annotations
 
 from typing import Mapping
 
-from PyQt5.QtCore import QEvent, QTimer, Qt
+from PyQt5.QtCore import QEvent, QPoint, QRect, QTimer, Qt
+from PyQt5.QtGui import QGuiApplication
 from PyQt5.QtWidgets import QDialog as QtDialog
 from PyQt5.QtWidgets import QWidget
 
 from .config import CONFIG, save_user_config_update
 from .window_control import session_type
+
+
+def available_geometry(
+    window: QWidget,
+    position: QPoint | None = None,
+) -> QRect | None:
+    """Return the usable area of the screen a window should appear on."""
+    screen = None
+    if position is not None:
+        screen = QGuiApplication.screenAt(position)
+    if screen is None:
+        screen = window.screen() if hasattr(window, 'screen') else None
+    if screen is None:
+        screen = QGuiApplication.primaryScreen()
+    if screen is None:
+        return None
+    bounds = screen.availableGeometry()
+    return bounds if bounds.isValid() else None
+
+
+def fit_geometry_to_screen(
+    window: QWidget,
+    x: int,
+    y: int,
+    width: int,
+    height: int,
+) -> tuple[int, int, int, int]:
+    """Shrink and move a saved geometry until it fits the current screen.
+
+    Geometry saved on a large external monitor is usually both too big and
+    off-screen for a laptop panel, which leaves the window unreachable and
+    impossible to resize with the window manager.
+    """
+    bounds = available_geometry(window, QPoint(int(x), int(y)))
+    if bounds is None:
+        return x, y, width, height
+    frame = window.frameGeometry()
+    inner = window.geometry()
+    frame_width = max(0, frame.width() - inner.width())
+    frame_height = max(0, frame.height() - inner.height())
+    width = max(1, min(width, bounds.width() - frame_width))
+    height = max(1, min(height, bounds.height() - frame_height))
+    x = min(
+        max(x, bounds.x()),
+        bounds.x() + bounds.width() - frame_width - width,
+    )
+    y = min(
+        max(y, bounds.y()),
+        bounds.y() + bounds.height() - frame_height - height,
+    )
+    return x, y, width, height
 
 
 def restore_window_geometry(
@@ -31,6 +83,9 @@ def restore_window_geometry(
             pass
         else:
             if width > 0 and height > 0:
+                x, y, width, height = fit_geometry_to_screen(
+                    window, x, y, width, height
+                )
                 current_session = desktop_session or session_type()
                 if current_session == 'wayland':
                     window.resize(width, height)

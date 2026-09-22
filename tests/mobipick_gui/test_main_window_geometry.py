@@ -8,6 +8,7 @@ import pytest
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
     QApplication,
+    QComboBox,
     QMainWindow,
     QPushButton,
     QSizePolicy,
@@ -19,7 +20,9 @@ from mobipick_gui import window_control
 from mobipick_gui.main_window import (
     MainWindow,
     _configure_expanding_toolbar_button,
+    _configure_shrinkable_combo,
 )
+from mobipick_gui.flow_layout import FlowLayout
 from mobipick_gui.window_utils import (
     MaximizableDialog,
     restore_window_geometry,
@@ -136,6 +139,9 @@ def test_helper_windows_can_be_maximized(tmp_path):
         def _on_recording_stop_clicked(self):
             pass
 
+        def _on_recording_pause_clicked(self):
+            pass
+
     fake = FakeMainWindow()
 
     layout_dialog = MainWindow._ensure_window_layout_dialog(fake)
@@ -188,13 +194,13 @@ def test_restore_window_state_applies_geometry_and_defers_maximized():
 
     MainWindow._restore_window_state(
         window,
-        {'geometry': ['20', '40', '800', '600'], 'maximized': True},
+        {'geometry': ['20', '40', '700', '500'], 'maximized': True},
     )
 
     assert window.geometry().x() == 20
     assert window.geometry().y() == 40
-    assert window.geometry().width() == 800
-    assert window.geometry().height() == 600
+    assert window.geometry().width() == 700
+    assert window.geometry().height() == 500
     # Maximizing is deferred until the window is mapped; requesting it before
     # the map is ignored by Mutter on X11.
     assert not window.windowState() & Qt.WindowMaximized
@@ -244,7 +250,7 @@ def test_show_with_restored_state_keeps_saved_normal_geometry_when_maximized():
     window = QMainWindow()
     MainWindow._restore_window_state(
         window,
-        {'geometry': [20, 40, 800, 600], 'maximized': True},
+        {'geometry': [20, 40, 700, 500], 'maximized': True},
     )
 
     MainWindow.show_with_restored_state(window)
@@ -253,7 +259,7 @@ def test_show_with_restored_state_keeps_saved_normal_geometry_when_maximized():
     assert window.windowState() & Qt.WindowMaximized
     normal = window.normalGeometry()
     assert (normal.x(), normal.y(), normal.width(), normal.height()) == (
-        20, 40, 800, 600,
+        20, 40, 700, 500,
     )
     window.close()
     window.deleteLater()
@@ -372,4 +378,125 @@ def test_copy_full_reset_command_uses_warning_dialog(monkeypatch):
     )
 
     window.deleteLater()
+    app.processEvents()
+
+
+def test_geometry_saved_on_a_larger_monitor_is_fitted_to_the_screen():
+    app = QApplication.instance() or QApplication([])
+    window = QMainWindow()
+    bounds = app.primaryScreen().availableGeometry()
+
+    MainWindow._restore_window_state(
+        window,
+        {
+            'geometry': [
+                bounds.width() + 400,
+                bounds.height() + 300,
+                bounds.width() + 1200,
+                bounds.height() + 800,
+            ],
+            'maximized': False,
+        },
+    )
+
+    geometry = window.geometry()
+    assert geometry.width() == bounds.width()
+    assert geometry.height() == bounds.height()
+    assert geometry.x() == bounds.x()
+    assert geometry.y() == bounds.y()
+
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_oversized_geometry_is_shrunk_on_wayland_without_a_move_request():
+    app = QApplication.instance() or QApplication([])
+    bounds = app.primaryScreen().availableGeometry()
+
+    class RecordingWindow(QMainWindow):
+        def __init__(self):
+            super().__init__()
+            self.set_geometry_calls = []
+
+        def setGeometry(self, *args):  # noqa: N802 - Qt API
+            self.set_geometry_calls.append(args)
+            super().setGeometry(*args)
+
+    window = RecordingWindow()
+    window.set_geometry_calls.clear()
+
+    restore_window_geometry(
+        window,
+        {
+            'geometry': [0, 0, bounds.width() * 2, bounds.height() * 2],
+            'maximized': False,
+        },
+        desktop_session='wayland',
+    )
+
+    assert window.set_geometry_calls == []
+    assert window.width() == bounds.width()
+    assert window.height() == bounds.height()
+
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_toolbar_rows_wrap_so_the_window_fits_a_laptop_screen(
+    tmp_path,
+    monkeypatch,
+):
+    """The toolbar buttons must not pin the window to a huge minimum width."""
+    monkeypatch.setenv(
+        'MOBIPICK_WORKSPACE_CONFIG',
+        str(tmp_path / 'workspaces.yaml'),
+    )
+    monkeypatch.setattr(
+        MainWindow,
+        '_discover_filtered_image_records',
+        lambda self: ([{'ref': main_window_module.CONFIG['images']['default']}], None),
+    )
+    monkeypatch.setattr(
+        MainWindow,
+        'update_sim_status_from_poll',
+        lambda self, force=False: None,
+    )
+    monkeypatch.setitem(
+        main_window_module.CONFIG['remote_control'],
+        'enabled',
+        False,
+    )
+
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow(verbosity=0)
+    window.poll_timer.stop()
+    window._sigint_timer.stop()
+
+    assert isinstance(window._top_controls_layout, FlowLayout)
+    assert isinstance(window._generic_arg_controls_layout, FlowLayout)
+    # Every configured toolbar button plus the terminal controls live in the
+    # wrapping row, so the window stays narrower than a small laptop panel.
+    single_row = window._top_controls_layout.sizeHint().width()
+    minimum = window._top_controls_layout.minimumSize().width()
+    assert minimum < single_row
+    assert window.minimumSizeHint().width() <= 800
+
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_long_entries_do_not_pin_a_combo_to_a_huge_minimum_width():
+    app = QApplication.instance() or QApplication([])
+    combo = QComboBox()
+    combo.addItem(
+        'ozkrelo/x_mobipick_labs:local_gpt_from_oscar_user  [workspace match]'
+    )
+    natural = combo.sizeHint().width()
+
+    _configure_shrinkable_combo(combo, minimum_chars=16)
+
+    assert combo.minimumSizeHint().width() < natural
+    assert combo.sizePolicy().horizontalPolicy() == QSizePolicy.Expanding
+
+    combo.deleteLater()
     app.processEvents()

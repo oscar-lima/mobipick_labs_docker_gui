@@ -29,6 +29,7 @@ resource and is rendered in the application from **Help > Documentation**.
 |   |-- process_tab.py             # QProcess plus log widget wrapper
 |   |-- log_widget.py              # Buffered QTextEdit for high-volume logs
 |   |-- documentation_dialog.py    # Rendered user documentation and search
+|   |-- flow_layout.py             # Wrapping row layout used by the toolbar rows
 |   |-- bug_report.py              # Diagnostic report builder
 |   |-- setup_wizard.py            # Image setup and custom image choices
 |   |-- workspace_dialog.py        # Workspace manager dialog
@@ -616,6 +617,34 @@ process is ready.
 Profiles are saved to a writable per-user path when the source is a packaged
 resource. Auto Launch can also coordinate window layout replay and delayed
 recording startup.
+
+## Responsive main-window layout
+
+Every control row of the main window (workspace, ROS master, toolbar buttons,
+Auto Launch/argument row, scripts, custom command, bottom controls, and search)
+uses `FlowLayout` from `flow_layout.py` instead of `QHBoxLayout`. A
+`QHBoxLayout` makes a window at least as wide as the sum of its children, so a
+workspace with many button profiles pinned the main window to a minimum width
+wider than a laptop panel: the window could neither be shrunk nor usefully
+maximized. `FlowLayout` wraps its items onto additional lines, so the minimum
+width is only that of the widest single item; items whose size policy expands
+still share the slack of their own line, and a zero-width expanding spacer on a
+line keeps that slack instead of stretching the widgets next to it. Nested
+wrapping rows work because the layout clamps each item to the line width and
+asks it for `heightForWidth`.
+
+Two helpers in `main_window.py` support this: `_configure_shrinkable_combo`
+gives combo boxes a minimum contents length (image references, workspace paths,
+and script names are otherwise wider than the screen), and `_labeled_control`
+groups a label with its control so a wrap never separates them.
+
+`window_utils.fit_geometry_to_screen` clamps a restored geometry to the
+available area of the screen the window will appear on. Geometry saved on a
+large external monitor is both too big and off-screen on a laptop panel, which
+leaves the window unreachable. On Wayland only the size is applied, as before.
+
+When adding controls to the main window, add them to the existing wrapping
+rows and verify at a narrow width (for example 800 px) that nothing is clipped.
 
 ## Recording and window layout
 

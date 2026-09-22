@@ -20,6 +20,15 @@ The GUI changes button colors while a process is running or changing state:
 - Yellow means the process is starting or stopping.
 - Grey means the action is unavailable in the current mode.
 
+The control rows at the top and bottom of the main window wrap onto extra
+lines when the window is too narrow to show them side by side, so a workspace
+with many buttons still fits a laptop screen. You can shrink, maximize, and
+tile the window freely; the buttons, selectors, and search field rearrange
+themselves, and long image references or workspace paths are shortened
+instead of forcing the window to stay wide. Their full text stays visible in
+the drop-down list. A window position saved on a large external monitor is
+moved and resized to fit when the GUI is opened on a smaller screen.
+
 The GUI remembers the size and maximized state of the main window and every
 tool or configuration window. On Xorg it also restores each saved position;
 on Wayland, the desktop compositor chooses window positions. Closing and

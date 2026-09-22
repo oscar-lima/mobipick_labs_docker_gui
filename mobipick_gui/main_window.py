@@ -47,6 +47,7 @@ from PyQt5.QtWidgets import (
     QHeaderView,
     QInputDialog,
     QLabel,
+    QLayout,
     QLineEdit,
     QListWidget,
     QListWidgetItem,
@@ -117,6 +118,7 @@ from .display_runtime import (
     ogre_glx_environment,
 )
 from .external_links import open_external_url
+from .flow_layout import FlowLayout
 from .settings_transfer import export_settings, import_settings
 
 CONTAINER_SCRIPTS_DIR = str(
@@ -249,6 +251,34 @@ def dependency_launch_schedule(
 def _configure_expanding_toolbar_button(button: QPushButton) -> None:
     """Let toolbar buttons grow with the window while keeping text readable."""
     button.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+
+
+def _labeled_control(label_text: str, control: QWidget) -> tuple:
+    """Group a label with its control so a wrapping row keeps them together."""
+    container = QWidget()
+    row = QHBoxLayout(container)
+    row.setContentsMargins(0, 0, 0, 0)
+    label = QLabel(label_text)
+    row.addWidget(label)
+    row.addWidget(control)
+    container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+    return container, label
+
+
+def _configure_shrinkable_combo(
+    combo: QComboBox,
+    *,
+    minimum_chars: int = 12,
+) -> None:
+    """Keep a long entry from pinning the window to a huge minimum width.
+
+    Docker image references, workspace paths, and script names are far wider
+    than a laptop panel.  The combo still expands into the space its row has
+    to spare, but it no longer refuses to shrink below its longest entry.
+    """
+    combo.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+    combo.setMinimumContentsLength(minimum_chars)
+    combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
 
 
 def _about_details_html() -> str:
@@ -3186,13 +3216,10 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
         root = QVBoxLayout(central)
 
-        workspace_row = QHBoxLayout()
+        workspace_row = FlowLayout()
         workspace_row.addWidget(QLabel('ROS 1 workspace:'))
         self.workspace_combo = QComboBox()
-        self.workspace_combo.setSizePolicy(
-            QSizePolicy.Expanding,
-            QSizePolicy.Preferred,
-        )
+        _configure_shrinkable_combo(self.workspace_combo, minimum_chars=16)
         self.workspace_combo.currentIndexChanged.connect(
             self._on_workspace_changed
         )
@@ -3205,8 +3232,7 @@ class MainWindow(QMainWindow):
         root.addLayout(workspace_row)
 
         self.ros_master_controls = QWidget()
-        ros_master_row = QHBoxLayout(self.ros_master_controls)
-        ros_master_row.setContentsMargins(0, 0, 0, 0)
+        ros_master_row = FlowLayout(self.ros_master_controls)
         self.remote_master_checkbox = QCheckBox('Use remote ROS master')
         self.remote_master_checkbox.setChecked(
             self._remote_master_enabled_value
@@ -3240,7 +3266,7 @@ class MainWindow(QMainWindow):
         )
 
         # top controls
-        top = QHBoxLayout()
+        top = FlowLayout()
         self._top_controls_layout = top
         self.roscore_button = QPushButton()
         _configure_expanding_toolbar_button(self.roscore_button)
@@ -3319,7 +3345,7 @@ class MainWindow(QMainWindow):
         self.save_all_button.clicked.connect(self.save_all_logs)
 
         # actions row
-        actions = QHBoxLayout()
+        actions = FlowLayout()
 
         self.auto_launch_button = QPushButton()
         self.auto_launch_button.clicked.connect(self._on_auto_launch_toggle_clicked)
@@ -3331,8 +3357,7 @@ class MainWindow(QMainWindow):
         self._button_widgets['auto_launch'] = self.auto_launch_button
 
         self.recording_controls = QWidget()
-        recording_row = QHBoxLayout(self.recording_controls)
-        recording_row.setContentsMargins(0, 0, 0, 0)
+        recording_row = FlowLayout(self.recording_controls)
         self.record_checkbox = QCheckBox('Record Auto Launch')
         self.record_checkbox.setToolTip(
             'Record the Auto Launch run: screen video plus run logs. '
@@ -3368,37 +3393,39 @@ class MainWindow(QMainWindow):
             'armed' if self.record_checkbox.isChecked() else 'off'
         )
 
-        self.world_label = QLabel('world_config:')
-        actions.addWidget(self.world_label)
-
         self.world_combo = QComboBox()
-        actions.addWidget(self.world_combo)
+        _configure_shrinkable_combo(self.world_combo)
+        world_controls, self.world_label = _labeled_control(
+            'world_config:',
+            self.world_combo,
+        )
+        actions.addWidget(world_controls)
         self.world_combo.currentIndexChanged.connect(self._on_world_changed)
 
         self.generic_arg_controls = QWidget()
-        self._generic_arg_controls_layout = QHBoxLayout(
+        self._generic_arg_controls_layout = FlowLayout(
             self.generic_arg_controls
         )
-        self._generic_arg_controls_layout.setContentsMargins(0, 0, 0, 0)
         self._generic_arg_inputs: dict[int, QComboBox] = {}
         actions.addWidget(self.generic_arg_controls)
         self._refresh_generic_arg_controls()
 
-        self.image_label = QLabel('image:')
-        actions.addWidget(self.image_label)
-
         self.image_combo = QComboBox()
-        actions.addWidget(self.image_combo)
+        _configure_shrinkable_combo(self.image_combo, minimum_chars=16)
+        image_controls, self.image_label = _labeled_control(
+            'image:',
+            self.image_combo,
+        )
+        actions.addWidget(image_controls)
         self.image_combo.currentIndexChanged.connect(self._on_image_changed)
 
         root.addLayout(actions)
 
         self.script_controls = QWidget()
-        scripts_row = QHBoxLayout(self.script_controls)
-        scripts_row.setContentsMargins(0, 0, 0, 0)
+        scripts_row = FlowLayout(self.script_controls)
         scripts_row.addWidget(QLabel('Scripts:'))
         self.script_combo = QComboBox()
-        self.script_combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        _configure_shrinkable_combo(self.script_combo, minimum_chars=16)
         scripts_row.addWidget(self.script_combo)
         self.refresh_scripts_button = QPushButton('Refresh Scripts')
         self.refresh_scripts_button.clicked.connect(self._on_refresh_scripts_clicked)
@@ -3418,8 +3445,7 @@ class MainWindow(QMainWindow):
 
         # custom command row
         self.command_controls = QWidget()
-        cmdrow = QHBoxLayout(self.command_controls)
-        cmdrow.setContentsMargins(0, 0, 0, 0)
+        cmdrow = FlowLayout(self.command_controls)
         self.command_input = QLineEdit()
         self.command_input.setPlaceholderText('Enter custom command, press Enter to run')
         self.command_input.returnPressed.connect(self._on_command_input_return)
@@ -3446,7 +3472,7 @@ class MainWindow(QMainWindow):
         self.tabs.tabCloseRequested.connect(self.on_tab_close_requested)
         root.addWidget(self.tabs)
 
-        controls_row = QHBoxLayout()
+        controls_row = FlowLayout()
         controls_row.addWidget(self.clear_button)
         controls_row.addWidget(self.clear_all_button)
 
@@ -3457,7 +3483,7 @@ class MainWindow(QMainWindow):
         root.addLayout(controls_row)
 
         # search row (bottom)
-        search = QHBoxLayout()
+        search = FlowLayout()
         search.addWidget(QLabel('Search:'))
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText('Find text in current tab')
@@ -7599,7 +7625,6 @@ CMD ["bash"]
             name = names[slot]
             if not name:
                 continue
-            layout.addWidget(QLabel(f'{name}:'))
             previous_value = (
                 previous.get(slot, '')
                 if previous_names.get(slot) == name
@@ -7609,12 +7634,12 @@ CMD ["bash"]
             value_input.addItems(options[slot])
             if previous_value in options[slot]:
                 value_input.setCurrentIndex(options[slot].index(previous_value))
-            value_input.setMinimumWidth(140)
-            value_input.setSizePolicy(
-                QSizePolicy.Expanding,
-                QSizePolicy.Preferred,
+            _configure_shrinkable_combo(value_input)
+            slot_controls, _slot_label = _labeled_control(
+                f'{name}:',
+                value_input,
             )
-            layout.addWidget(value_input)
+            layout.addWidget(slot_controls)
             inputs[slot] = value_input
         self._generic_arg_inputs = inputs
         self._generic_arg_names_by_slot = {
@@ -7658,7 +7683,7 @@ CMD ["bash"]
 
     def _build_configurable_buttons(
         self,
-        layout: QHBoxLayout,
+        layout: QLayout,
         *,
         insert_at: int | None = None,
         entries: list[dict] | None = None,
