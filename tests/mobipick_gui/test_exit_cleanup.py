@@ -63,6 +63,7 @@ def test_exit_cleanup_runs_active_button_stop_commands_in_reverse_order():
         _collect_container_commands=lambda *args, **kwargs: [['stop-sim']],
         _stop_all_related=lambda tab, **kwargs: [['stop-related']],
         _ros_shutdown_grace_exit_s=5.0,
+        _shutdown_grace=lambda **kwargs: 0.0,
         _cleanup_done=False,
         _cleanup_script_available=lambda: True,
     )
@@ -105,6 +106,7 @@ def test_exit_cleanup_skips_stop_commands_when_no_buttons_were_started():
         _collect_container_commands=lambda *args, **kwargs: [],
         _stop_all_related=lambda tab, **kwargs: [],
         _ros_shutdown_grace_exit_s=5.0,
+        _shutdown_grace=lambda **kwargs: 0.0,
         _cleanup_done=False,
         _cleanup_script_available=lambda: True,
     )

@@ -1016,6 +1016,13 @@ Closing the GUI starts a controlled shutdown:
 8. revoke temporary X11 access;
 9. quit the Qt application.
 
+Interactive container stops use the configured ROS shutdown grace by default.
+The **Fast stop** checkbox selects a zero-second grace for the session. Local
+roscore shutdown always uses zero grace because the master and its registration
+database are going away together. When a remote master survives a fast stop,
+the GUI enables **Clean stale ROS nodes**, which runs `rosnode cleanup` from the
+remote ROS tool service after an explicit confirmation.
+
 Avoid adding early returns in shutdown paths unless they still leave the GUI in
 a recoverable state.
 

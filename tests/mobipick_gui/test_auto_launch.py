@@ -1014,8 +1014,12 @@ def test_roscore_shutdown_finalizer_resets_config_buttons(monkeypatch):
         stop_terminal=lambda: events.append('stop_terminal'),
         _ensure_tab=lambda key, label, closable=False: roscore_tab,
         _append_gui_html=lambda *args: events.append(('html', *args)),
-        _docker_stop_if_exists=lambda *args, **kwargs: [],
-        _stop_all_related=lambda *args, **kwargs: [],
+        _docker_stop_if_exists=lambda *args, **kwargs: (
+            events.append(('docker_stop', kwargs)) or []
+        ),
+        _stop_all_related=lambda *args, **kwargs: (
+            events.append(('stop_related', kwargs)) or []
+        ),
         _cleanup_script_available=lambda: False,
         _run_command_sequence=lambda commands, on_finished, log_key: on_finished(),
         _revoke_x=lambda: events.append('revoke_x'),
@@ -1049,6 +1053,11 @@ def test_roscore_shutdown_finalizer_resets_config_buttons(monkeypatch):
         ('rqt', 'red', 'Start RQt Tables', True)
     )
     assert harness._roscore_stopping is False
+    assert ('docker_stop', {'exec_id': 'exec-id', 'grace_s': 0.0}) in events
+    assert (
+        'stop_related',
+        {'exclude': {'mobipick-roscore'}, 'grace_s': 0.0},
+    ) in events
 
 
 def test_recording_pause_resume_and_stop_keep_segments(tmp_path):

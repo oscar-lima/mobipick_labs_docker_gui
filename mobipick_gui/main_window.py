@@ -3144,6 +3144,7 @@ class MainWindow(QMainWindow):
         self._ros_shutdown_grace_exit_s = self._normalize_grace(
             CONFIG['exit'].get('ros_shutdown_grace_exit_s'), 5.0
         )
+        self._remote_ros_cleanup_pending = False
         self._button_layout = load_button_layout(
             self._workspace_button_config_path()
         )
@@ -3276,6 +3277,18 @@ class MainWindow(QMainWindow):
             'commands while remote mode is enabled.'
         )
         ros_master_row.addWidget(self.remote_master_input)
+        self.clean_stale_ros_nodes_button = QPushButton(
+            'Clean stale ROS nodes'
+        )
+        self.clean_stale_ros_nodes_button.setToolTip(
+            'Remove unreachable node registrations from the remote ROS '
+            'master after a fast stop.'
+        )
+        self.clean_stale_ros_nodes_button.setEnabled(False)
+        self.clean_stale_ros_nodes_button.clicked.connect(
+            self._run_remote_ros_cleanup
+        )
+        ros_master_row.addWidget(self.clean_stale_ros_nodes_button)
         root.addWidget(self.ros_master_controls)
         self.remote_master_checkbox.toggled.connect(
             self._on_remote_master_toggled
@@ -3311,6 +3324,15 @@ class MainWindow(QMainWindow):
         self.terminal_root_checkbox.setToolTip('When checked, new terminals run as root inside the container.')
         self.terminal_root_checkbox.setChecked(not self._terminal_drop_to_host_user_default)
         top.addWidget(self.terminal_root_checkbox)
+
+        self.fast_stop_checkbox = QCheckBox('Fast stop')
+        self.fast_stop_checkbox.setChecked(False)
+        self.fast_stop_checkbox.setToolTip(
+            'Skip the ROS node-unregistration grace period when stopping '
+            'containers. Slow stop is the default. Stopping the local '
+            'roscore always uses fast stop.'
+        )
+        top.addWidget(self.fast_stop_checkbox)
 
         spacer = QWidget()
         spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
@@ -8330,6 +8352,7 @@ CMD ["bash"]
             self.remote_master_input.setText(normalized)
         self._remote_master_enabled_value = checked
         self.remote_master_input.setEnabled(checked)
+        self._clear_remote_ros_cleanup_offer()
         self._apply_env_to_all_tabs()
         self._update_buttons()
         if checked:
@@ -8370,6 +8393,7 @@ CMD ["bash"]
             return
         self._remote_master_uri_value = normalized
         self.remote_master_input.setText(normalized)
+        self._clear_remote_ros_cleanup_offer()
         self._apply_env_to_all_tabs()
         if self._remote_master_enabled():
             self._log_info(f'remote ROS master set to {normalized}')
@@ -8473,6 +8497,96 @@ CMD ["bash"]
         except (TypeError, ValueError):
             return float(default)
         return max(0.0, grace)
+
+    def _fast_stop_enabled(self) -> bool:
+        """Return whether the user selected immediate container stopping."""
+        checkbox = getattr(self, 'fast_stop_checkbox', None)
+        return bool(checkbox and checkbox.isChecked())
+
+    def _shutdown_grace(
+        self,
+        *,
+        stopping_local_roscore: bool = False,
+        exiting: bool = False,
+    ) -> float:
+        """Select the wait for the current master and shutdown policy."""
+        if stopping_local_roscore or self._fast_stop_enabled():
+            return 0.0
+        if exiting:
+            return self._ros_shutdown_grace_exit_s
+        return self._ros_shutdown_grace_s
+
+    def _clear_remote_ros_cleanup_offer(self) -> None:
+        self._remote_ros_cleanup_pending = False
+        button = getattr(self, 'clean_stale_ros_nodes_button', None)
+        if button is not None:
+            button.setEnabled(False)
+
+    def _offer_remote_ros_cleanup(self, *, log_key: str = 'log') -> None:
+        """Offer manual stale-registration cleanup after a remote fast stop."""
+        if not self._remote_master_enabled() or not self._fast_stop_enabled():
+            return
+        if self._remote_ros_cleanup_pending:
+            return
+        self._remote_ros_cleanup_pending = True
+        button = getattr(self, 'clean_stale_ros_nodes_button', None)
+        if button is not None:
+            button.setEnabled(True)
+        self._append_gui_html(
+            log_key,
+            '<i>Fast stop may leave registrations at the remote ROS master. '
+            'Use "Clean stale ROS nodes" if needed.</i>',
+        )
+
+    def _run_remote_ros_cleanup(self) -> None:
+        """Run rosnode cleanup against the configured remote ROS master."""
+        if not self._remote_master_enabled():
+            self._clear_remote_ros_cleanup_offer()
+            QMessageBox.information(
+                self,
+                'Clean stale ROS nodes',
+                'This cleanup is only needed while using a remote ROS master.',
+            )
+            return
+        answer = QMessageBox.warning(
+            self,
+            'Clean stale ROS nodes',
+            'This checks the remote ROS master and unregisters nodes that '
+            'cannot be reached. Temporarily unavailable nodes may also be '
+            'removed. Continue?',
+            QMessageBox.Yes | QMessageBox.Cancel,
+            QMessageBox.Cancel,
+        )
+        if answer != QMessageBox.Yes:
+            return
+
+        self._ensure_network(log_key='log')
+        exec_id = uuid.uuid4().hex
+        container_name = f'mpcmd-cleanup-{exec_id[:10]}'
+        command = [
+            'docker', 'compose', 'run', '--rm', '--name', container_name,
+            '--label', f'mobipick.exec={exec_id}',
+            '--label', 'mobipick.tab=log',
+            *self._compose_env_args(container_name=container_name),
+            self._ros_tool_service(), 'bash', '-lc',
+            self._wrap_line_buffered("printf 'y\\n' | rosnode cleanup"),
+        ]
+        self.clean_stale_ros_nodes_button.setEnabled(False)
+        self._append_gui_html(
+            'log',
+            '<i>Cleaning unreachable registrations from the remote ROS '
+            'master...</i>',
+        )
+
+        def _finished():
+            self._clear_remote_ros_cleanup_offer()
+            self._append_gui_html('log', '<i>ROS node cleanup finished.</i>')
+
+        self._run_command_sequence(
+            [command],
+            on_finished=_finished,
+            log_key='log',
+        )
 
     def _wait_for_container_exit_cmd(
         self,
@@ -12168,8 +12282,20 @@ CMD ["bash"]
 
         def _cleanup():
             commands: list[list[str]] = []
-            commands += self._docker_stop_if_exists(self._roscore_container_name, tab, exec_id=tab.exec_id)
-            commands += self._stop_all_related(tab, exclude={self._roscore_container_name})
+            # Once the local master is stopped there is no ROS registry left
+            # to protect, so waiting for every dependent container to
+            # unregister only makes this whole-stack shutdown slower.
+            commands += self._docker_stop_if_exists(
+                self._roscore_container_name,
+                tab,
+                exec_id=tab.exec_id,
+                grace_s=0.0,
+            )
+            commands += self._stop_all_related(
+                tab,
+                exclude={self._roscore_container_name},
+                grace_s=0.0,
+            )
 
             clean_exists = self._cleanup_script_available()
             if not self._cleanup_done and clean_exists:
@@ -12272,10 +12398,15 @@ CMD ["bash"]
         exec_id: str | None = None,
         on_finished: Callable[[], None] | None = None,
     ):
+        grace = self._shutdown_grace()
+        fast_remote_stop = bool(
+            self._fast_stop_enabled() and self._remote_master_enabled()
+        )
         commands = self._collect_container_commands(
             name,
             exec_id=exec_id,
             log_key=(tab.key if tab else 'log'),
+            grace_s=grace,
         )
         if not commands:
             if tab:
@@ -12287,19 +12418,28 @@ CMD ["bash"]
         if tab:
             label = name or (exec_id or 'container')
             self._append_gui_html(tab.key, f'<i>docker kill -s INT {html.escape(label)}</i>')
-            if self._ros_shutdown_grace_s > 0:
+            if grace > 0:
                 self._append_gui_html(
                     tab.key,
                     '<i>waiting up to '
-                    f'{self._ros_shutdown_grace_s:g} s for the ROS nodes to '
+                    f'{grace:g} s for the ROS nodes to '
                     'unregister from the master...</i>',
                 )
             stop_cmd = self._docker_stop_display(label)
             self._append_gui_html(tab.key, f'<i>{html.escape(stop_cmd)}</i>')
+
+        def _finished():
+            if on_finished:
+                on_finished()
+            if fast_remote_stop:
+                self._offer_remote_ros_cleanup(
+                    log_key=(tab.key if tab else 'log')
+                )
+
         self._run_command_sequence(
             commands,
             log_key=(tab.key if tab else 'log'),
-            on_finished=on_finished,
+            on_finished=_finished,
         )
 
     # event driven shutdown
@@ -12323,7 +12463,12 @@ CMD ["bash"]
             commands: list[list[str]] = []
 
             # stop sim container if present
-            commands += self._docker_stop_if_exists(self._sim_container_name, tab, exec_id=tab.exec_id)
+            commands += self._docker_stop_if_exists(
+                self._sim_container_name,
+                tab,
+                exec_id=tab.exec_id,
+                grace_s=self._shutdown_grace(),
+            )
 
             def _finalize():
                 self._release_xhost(tab, log_key=tab.key)
@@ -12399,9 +12544,18 @@ CMD ["bash"]
             stop_command = self._prepared_config_stop_command(config)
             if stop_command:
                 commands.append(['bash', '-lc', stop_command])
-        # quitting the GUI should stay quick, so it waits far less for a
-        # clean ROS shutdown than a single button stop does
-        exit_grace = self._ros_shutdown_grace_exit_s
+        # A local-master exit tears down the registry too, so there is no
+        # reason to wait for unregister calls. A surviving remote master gets
+        # the shorter exit grace unless the user selected fast stop.
+        remote_master_enabled = getattr(
+            self,
+            '_remote_master_enabled',
+            lambda: False,
+        )()
+        exit_grace = self._shutdown_grace(
+            stopping_local_roscore=not remote_master_enabled,
+            exiting=True,
+        )
         commands += self._collect_container_commands(
             self._sim_container_name,
             log_key='log',

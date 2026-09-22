@@ -697,5 +697,13 @@ temporary X11 access, runs cleanup, and then exits. Buttons that were not
 started during the session do not have their stop commands run. Wait for the
 shutdown dialog to finish before starting a new GUI session.
 
+Container stops are slow by default: after sending SIGINT, the GUI waits for
+ROS nodes to unregister cleanly from a surviving master. Select **Fast stop**
+to skip that grace period. Stopping the local roscore always uses fast stop
+because its registration database is being removed too. With a remote ROS
+master, a fast stop enables **Clean stale ROS nodes** beside the master URI;
+use it when unreachable registrations remain. The cleanup can unregister a
+temporarily unavailable node, so review the warning before continuing.
+
 The main window remembers its last normal size, position, and maximized state
 and restores them the next time the GUI opens.
