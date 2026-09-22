@@ -286,6 +286,12 @@ CONFIG_DEFAULTS: Dict[str, Dict] = {
         'log_start_message': 'Shutting down containers before exit...',
         'log_done_message': 'Shutdown complete. Exiting...',
         'docker_stop_timeout': 3,
+        # seconds to wait for a signalled container to exit on its own before
+        # docker stop takes over: a clean roslaunch shutdown unregisters its
+        # nodes at the master first, and killing it earlier leaves stale
+        # registrations behind. Quitting the GUI uses the shorter one.
+        'ros_shutdown_grace_s': 20,
+        'ros_shutdown_grace_exit_s': 5,
     },
     'images': {
         'default': 'ozkrelo/x_mobipick_labs:noetic-v2.0',

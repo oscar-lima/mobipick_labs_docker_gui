@@ -3126,6 +3126,12 @@ class MainWindow(QMainWindow):
         self._exit_in_progress = False
         self._exit_dialog: Optional[QMessageBox] = None
         self._docker_stop_timeout = self._normalize_stop_timeout(CONFIG['exit'].get('docker_stop_timeout'))
+        self._ros_shutdown_grace_s = self._normalize_grace(
+            CONFIG['exit'].get('ros_shutdown_grace_s'), 20.0
+        )
+        self._ros_shutdown_grace_exit_s = self._normalize_grace(
+            CONFIG['exit'].get('ros_shutdown_grace_exit_s'), 5.0
+        )
         self._button_layout = load_button_layout(
             self._workspace_button_config_path()
         )
@@ -8414,6 +8420,37 @@ CMD ["bash"]
             return None
         return timeout
 
+    @staticmethod
+    def _normalize_grace(value, default: float) -> float:
+        """Return a non-negative shutdown grace period in seconds."""
+        try:
+            grace = float(default if value is None else value)
+        except (TypeError, ValueError):
+            return float(default)
+        return max(0.0, grace)
+
+    def _wait_for_container_exit_cmd(
+        self,
+        container_id: str,
+        grace_s: float,
+    ) -> list[str]:
+        """Wait for a signalled container to exit before it is stopped.
+
+        A clean roslaunch shutdown unregisters every node at the master, one
+        XML-RPC round trip each, which takes seconds when that master is the
+        robot's. Stopping the container before that finishes leaves the
+        registrations behind, and everything that later tries to reach those
+        dead nodes waits out a TCP timeout ("XmlRpcClient::writeRequest: write
+        error"). ``docker wait`` returns immediately once the container is
+        gone, so this only costs time when the shutdown really needs it.
+        """
+        shell_cmd = (
+            f'timeout {grace_s:g} '
+            + shlex.join(['docker', 'wait', container_id])
+            + ' >/dev/null 2>&1 || true'
+        )
+        return ['bash', '-lc', shell_cmd]
+
     def _docker_stop_args(self, container_id: str) -> list[str]:
         if self._docker_stop_timeout is None:
             return ['stop', container_id]
@@ -12195,6 +12232,13 @@ CMD ["bash"]
         if tab:
             label = name or (exec_id or 'container')
             self._append_gui_html(tab.key, f'<i>docker kill -s INT {html.escape(label)}</i>')
+            if self._ros_shutdown_grace_s > 0:
+                self._append_gui_html(
+                    tab.key,
+                    '<i>waiting up to '
+                    f'{self._ros_shutdown_grace_s:g} s for the ROS nodes to '
+                    'unregister from the master...</i>',
+                )
             stop_cmd = self._docker_stop_display(label)
             self._append_gui_html(tab.key, f'<i>{html.escape(stop_cmd)}</i>')
         self._run_command_sequence(
@@ -12247,21 +12291,38 @@ CMD ["bash"]
         exec_id: str | None = None,
         log_key: str | None = None,
         include_int: bool = True,
+        grace_s: float | None = None,
     ) -> list[list[str]]:
         commands: list[list[str]] = []
         ids = self._resolve_container_ids(name=name, exec_id=exec_id)
         if not ids:
             return commands
+        grace = self._ros_shutdown_grace_s if grace_s is None else grace_s
         for cid in ids:
             if include_int:
                 commands.append(self._safe_docker_cmd('kill', '-s', 'INT', cid))
+                if grace > 0:
+                    commands.append(
+                        self._wait_for_container_exit_cmd(cid, grace)
+                    )
             commands.append(self._safe_docker_cmd(*self._docker_stop_args(cid)))
         return commands
 
-    def _docker_stop_if_exists(self, name: str | None, tab: ProcessTab | None = None, exec_id: str | None = None) -> list[list[str]]:
+    def _docker_stop_if_exists(
+        self,
+        name: str | None,
+        tab: ProcessTab | None = None,
+        exec_id: str | None = None,
+        *,
+        grace_s: float | None = None,
+    ) -> list[list[str]]:
         commands: list[list[str]] = []
         ids = self._resolve_container_ids(name=name, exec_id=exec_id)
+        grace = self._ros_shutdown_grace_s if grace_s is None else grace_s
         for cid in ids:
+            # the caller has already interrupted the compose client
+            if grace > 0:
+                commands.append(self._wait_for_container_exit_cmd(cid, grace))
             commands.append(self._safe_docker_cmd(*self._docker_stop_args(cid)))
             if tab:
                 stop_cmd = self._docker_stop_display(cid)
@@ -12283,16 +12344,30 @@ CMD ["bash"]
             stop_command = self._prepared_config_stop_command(config)
             if stop_command:
                 commands.append(['bash', '-lc', stop_command])
-        commands += self._collect_container_commands(self._sim_container_name, log_key='log')
-        commands += self._stop_all_related(None)
+        # quitting the GUI should stay quick, so it waits far less for a
+        # clean ROS shutdown than a single button stop does
+        exit_grace = self._ros_shutdown_grace_exit_s
+        commands += self._collect_container_commands(
+            self._sim_container_name,
+            log_key='log',
+            grace_s=exit_grace,
+        )
+        commands += self._stop_all_related(None, grace_s=exit_grace)
         if not self._cleanup_done and self._cleanup_script_available():
             commands.append([SCRIPT_CLEAN])
         return commands
 
     # Stop all related containers, robust name/image/label pattern matching.
     # Sends INT first for a graceful shutdown of GUIs, then docker stop.
-    def _stop_all_related(self, tab: ProcessTab | None = None, *, exclude: set[str] | None = None) -> list[list[str]]:
+    def _stop_all_related(
+        self,
+        tab: ProcessTab | None = None,
+        *,
+        exclude: set[str] | None = None,
+        grace_s: float | None = None,
+    ) -> list[list[str]]:
         patterns = list(self._related_patterns or [])
+        grace = self._ros_shutdown_grace_s if grace_s is None else grace_s
         commands: list[list[str]] = []
         try:
             cp = self._sp_run(
@@ -12345,6 +12420,10 @@ CMD ["bash"]
                         f'<i>Stopping related containers: {html.escape(" ".join(running_ids))}</i>'
                     )
                 for cid in running_ids:
+                    if grace > 0:
+                        commands.append(
+                            self._wait_for_container_exit_cmd(cid, grace)
+                        )
                     commands.append(self._safe_docker_cmd(*self._docker_stop_args(cid)))
 
             if skipped and tab:

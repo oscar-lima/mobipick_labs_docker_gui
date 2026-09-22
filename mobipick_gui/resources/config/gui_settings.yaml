@@ -156,3 +156,5 @@ exit:
   log_start_message: "Shutting down containers before exit..."                # console message when exit sequence begins
   log_done_message: "Shutdown complete. Exiting..."                          # console message once cleanup finishes
   docker_stop_timeout: 3                               # seconds docker stop waits before force killing containers (lower = faster exit)
+  ros_shutdown_grace_s: 20                             # seconds a signalled container may take to exit by itself before docker stop follows; a clean roslaunch shutdown unregisters its nodes at the master first, and killing it earlier leaves stale registrations behind (0 disables the wait)
+  ros_shutdown_grace_exit_s: 5                         # the same wait when the GUI itself is quitting, where a fast exit matters more
