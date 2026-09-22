@@ -139,6 +139,7 @@ from .window_utils import (
     MaximizableDialog as QDialog,
     PersistentWindowStateMixin,
     configure_maximizable_window,
+    maximize_after_window_is_exposed,
     restore_window_geometry,
     saved_window_state,
 )
@@ -14186,15 +14187,15 @@ CMD ["bash"]
         """Show the window using the saved window-manager state.
 
         The window is first mapped at its saved normal geometry and only then
-        maximized from the event loop.  Mutter (GNOME on X11) ignores a
-        maximized request sent together with an explicit geometry before the
-        window is mapped, so ``showMaximized()`` alone leaves the window at its
-        normal size.  Maximizing after the map keeps the saved geometry as the
-        window's normal geometry, so un-maximizing returns to it.
+        maximized after Qt reports its native surface exposed. Mutter (GNOME
+        on X11) ignores a maximized request sent before the window is mapped,
+        and a zero-delay event-loop callback can still be too early. Waiting
+        for exposure also keeps the saved geometry as the normal geometry, so
+        un-maximizing returns to it.
         """
         self.show()
         if self._restore_maximized:
-            QTimer.singleShot(0, self.showMaximized)
+            maximize_after_window_is_exposed(self)
 
     def _save_window_state(self) -> None:
         updates = {

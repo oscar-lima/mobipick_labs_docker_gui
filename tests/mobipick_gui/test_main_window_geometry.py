@@ -25,6 +25,7 @@ from mobipick_gui.main_window import (
 from mobipick_gui.flow_layout import FlowLayout
 from mobipick_gui.window_utils import (
     MaximizableDialog,
+    maximize_after_window_is_exposed,
     restore_window_geometry,
     saved_window_state,
 )
@@ -227,9 +228,11 @@ def test_show_with_restored_state_maximizes_after_the_window_is_mapped(
 
         def show(self):
             self.calls.append('show')
+            super().show()
 
         def showMaximized(self):  # noqa: N802 - Qt API
             self.calls.append('showMaximized')
+            super().showMaximized()
 
     window = RecordingWindow()
     window._restore_maximized = maximized
@@ -239,6 +242,7 @@ def test_show_with_restored_state_maximizes_after_the_window_is_mapped(
     # The maximize request must not be issued synchronously with show(): the
     # window manager only honours it once the window has been mapped.
     assert window.calls == ['show']
+    app.processEvents()
     app.processEvents()
     assert window.calls == expected_calls
     window.deleteLater()
@@ -255,12 +259,48 @@ def test_show_with_restored_state_keeps_saved_normal_geometry_when_maximized():
 
     MainWindow.show_with_restored_state(window)
     app.processEvents()
+    app.processEvents()
 
     assert window.windowState() & Qt.WindowMaximized
     normal = window.normalGeometry()
     assert (normal.x(), normal.y(), normal.width(), normal.height()) == (
         20, 40, 700, 500,
     )
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+
+
+@pytest.mark.parametrize('desktop_session', ['x11', 'wayland'])
+def test_maximize_restore_waits_for_native_window_exposure(desktop_session):
+    app = QApplication.instance() or QApplication([])
+
+    class RecordingWindow(QMainWindow):
+        def __init__(self):
+            super().__init__()
+            self.maximize_calls = 0
+
+        def showMaximized(self):  # noqa: N802 - Qt API
+            self.maximize_calls += 1
+            super().showMaximized()
+
+    window = RecordingWindow()
+    restore_window_geometry(
+        window,
+        {'geometry': [20, 40, 700, 500], 'maximized': True},
+        desktop_session=desktop_session,
+    )
+    window.show()
+    maximize_after_window_is_exposed(window)
+
+    # show() only requests mapping; no maximize request should race ahead of
+    # the native expose event from X11 or Wayland.
+    assert window.maximize_calls == 0
+    app.processEvents()
+    app.processEvents()
+
+    assert window.maximize_calls == 1
+    assert window.isMaximized()
     window.close()
     window.deleteLater()
     app.processEvents()

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Mapping
 
-from PyQt5.QtCore import QEvent, QPoint, QRect, QTimer, Qt
+from PyQt5.QtCore import QEvent, QObject, QPoint, QRect, QTimer, Qt
 from PyQt5.QtGui import QGuiApplication
 from PyQt5.QtWidgets import QDialog as QtDialog
 from PyQt5.QtWidgets import QWidget
@@ -123,6 +123,55 @@ def saved_window_state(
     }
 
 
+class _MaximizeOnExpose(QObject):
+    """Apply a maximize request once the native window has been exposed."""
+
+    def __init__(self, window: QWidget):
+        super().__init__(window)
+        self._window = window
+        self._handle = window.windowHandle()
+        if self._handle is not None:
+            self._handle.installEventFilter(self)
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:  # noqa: N802
+        if watched is self._handle and event.type() == QEvent.Expose:
+            self._queue_maximize()
+        return False
+
+    def start(self) -> None:
+        """Handle a window exposed before the filter was installed."""
+        if self._handle is not None and self._handle.isExposed():
+            self._queue_maximize()
+
+    def _queue_maximize(self) -> None:
+        if self._handle is not None:
+            self._handle.removeEventFilter(self)
+            self._handle = None
+        QTimer.singleShot(0, self._maximize)
+
+    def _maximize(self) -> None:
+        if self._window.isVisible():
+            self._window.showMaximized()
+        if getattr(self._window, '_maximize_on_expose', None) is self:
+            self._window._maximize_on_expose = None
+        self.deleteLater()
+
+
+def maximize_after_window_is_exposed(window: QWidget) -> None:
+    """Maximize ``window`` after its native surface is ready for the request.
+
+    A zero-delay callback after ``show()`` can still run before an X11 window
+    manager has mapped the native window. Waiting for Qt's expose event makes
+    the restore reliable without imposing an arbitrary machine-dependent
+    delay, and uses the same path on Wayland.
+    """
+    pending = _MaximizeOnExpose(window)
+    # Keep the filter alive until it has handled the expose event. Parenting
+    # alone owns the C++ object, but this Python reference is also required.
+    window._maximize_on_expose = pending
+    pending.start()
+
+
 class PersistentWindowStateMixin:
     """Remember geometry and maximized state for a reusable top-level window."""
 
@@ -170,7 +219,7 @@ class PersistentWindowStateMixin:
         super().showEvent(event)
         if getattr(self, '_persistent_restore_maximized', False):
             self._persistent_restore_maximized = False
-            QTimer.singleShot(0, self.showMaximized)
+            maximize_after_window_is_exposed(self)
 
     def hideEvent(self, event: QEvent) -> None:  # noqa: N802 - Qt API
         self._save_persistent_window_state()
