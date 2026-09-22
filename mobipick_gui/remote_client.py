@@ -241,9 +241,9 @@ def _build_parser() -> argparse.ArgumentParser:
     root.add_argument('--user', dest='root', action='store_false')
     where = p.add_mutually_exclusive_group()
     where.add_argument('--robot', dest='robot', action='store_true', default=None,
-                       help='ssh onto the robot (the default in remote ROS master mode)')
+                       help='ssh onto the robot PC instead (remote ROS master mode only); for debugging that machine, not for ROS work')
     where.add_argument('--container', dest='robot', action='store_false',
-                       help='open the shell in the local ROS tool container instead')
+                       help='force the ROS tool container, which is the default')
     p.add_argument('--timeout', type=float, default=None)
     p = shell_sub.add_parser('info', help='Session details')
     p.add_argument('id', type=int)

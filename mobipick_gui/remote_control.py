@@ -757,7 +757,7 @@ CLIENT_HEADER = 'X-Client-Name'
 
 API_INDEX = [
     ('GET', '/', 'This endpoint list.'),
-    ('GET', '/status', 'GUI summary: workspace, image, running state, buttons, tabs, shells.'),
+    ('GET', '/status', 'GUI summary: workspace, image, running state, buttons, tabs, shells; "shell" says where POST /shell opens (container vs robot) and the robot target.'),
     ('GET', '/buttons', 'Toolbar buttons with their color state, text, args, full_command and readiness (startup_seconds, ready_in_s, ready).'),
     ('POST', '/buttons/{key}/click', 'Press a button. Body: {"args": {"name": "value"}, "wait_for": [events], "timeout": s}. Events with a key only match this button; "button_ready" returns at once when it is already ready.'),
     ('POST', '/buttons/{key}/start', 'Press only when the button is not running.'),
@@ -779,7 +779,7 @@ API_INDEX = [
     ('POST', '/dialogs/dismiss', 'Close the active modal dialog. Body: {"button": "text|accept|reject"}.'),
     ('POST', '/command', 'Run text through the GUI custom command box. Body: {"command": "..."}.'),
     ('GET', '/shell', 'Open remote shell sessions.'),
-    ('POST', '/shell', 'Open a shell. Body: {"name": "", "stream": true, "root": null, "robot": null}. "robot" defaults to true in remote ROS master mode (ssh onto the robot); false opens a ROS container shell.'),
+    ('POST', '/shell', 'Open a shell. Body: {"name": "", "stream": true, "root": null, "robot": null}. Default: the ROS tool container, which is where ROS work belongs. "robot": true ssh-es onto the robot PC instead (remote ROS master mode only) for debugging that machine; see /status "shell".'),
     ('GET', '/shell/{id}', 'Session details and its current command.'),
     ('POST', '/shell/{id}/exec', 'Run a command. Body: {"command", "stream", "tail", "grep", "timeout", "wait"}.'),
     ('GET', '/shell/{id}/output?since=N&tail=N&grep=RE&command=ID&follow=1&timeout=s', 'Fetch or stream buffered output.'),

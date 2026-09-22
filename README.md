@@ -750,7 +750,7 @@ click with a wait without missing events.
 | `GET /tabs`, `GET /tabs/{key}?tail=N&grep=RE` | Log tab list and plain-text tab contents. |
 | `GET /dialogs`, `POST /dialogs/dismiss` | Inspect or close the active modal dialog (`{"button": "Continue"}`, `accept`, `reject`). |
 | `POST /command` | Run text through the GUI custom command box. |
-| `POST /shell` | Open a shell session (`{"name", "stream", "root", "robot"}`); blocks until ready. In remote ROS master mode it opens on the robot over ssh unless `"robot": false` asks for the ROS tool container. |
+| `POST /shell` | Open a shell session (`{"name", "stream", "root", "robot"}`); blocks until ready. The ROS tool container is the default; `"robot": true` ssh-es onto the robot PC instead (remote ROS master mode only) to debug that machine. `GET /status` reports the choice under `shell`. |
 | `POST /shell/{id}/exec` | Run a command: `{"command", "stream", "tail", "grep", "max_lines", "timeout", "wait"}`. |
 | `GET /shell/{id}/output?since=N&command=ID&tail=N&grep=RE` | Buffered output; `follow=1` streams NDJSON until the command finishes. |
 | `POST /shell/{id}/interrupt` | Send `INT` (default), `TERM`, `KILL`, or `HUP` to the foreground command. |
@@ -783,19 +783,26 @@ A session is `docker compose run --rm -T ... <tool service> python3
 enter_host_shell.py bash --noprofile --norc` with `terminal.bashrc` sourced on
 start, so it has the same ROS environment and user as **Open Terminal**.
 
-In remote ROS master mode that container is the wrong machine: the master, the
-drivers and MoveIt run on the robot, so a session opens there instead, as `ssh
--o BatchMode=yes -o ConnectTimeout=10 <user>@<host> bash --noprofile --norc`
-(`ros.robot_ssh_user`, `ros.robot_ssh_host` - empty means the host of
-`ROS_MASTER_URI` -, `ros.robot_ssh_options`, and `ros.robot_shell_by_default`
-to turn the default off). `{"robot": false}` still opens a container shell and
-`{"robot": true}` outside remote master mode is refused. The ssh key must be in
-place: `BatchMode=yes` turns a missing one into a clear startup error instead
-of a password prompt. The session's startup output names the host, user,
-`ROS_DISTRO` and `ROS_MASTER_URI` it found; the robot's own environment comes
-from `/etc/profile` and `~/.bashrc`, and `ROS_MASTER_URI` is only filled in
-when the robot leaves it unset. `describe()` reports `runs_on`
-(`robot`/`container`) and the `target`. The
+`{"robot": true}` opens the session on the robot PC instead, as `ssh -o
+BatchMode=yes -o ConnectTimeout=10 <user>@<host> bash --noprofile --norc`. That
+shell is for debugging the robot machine itself - its processes, drivers, logs,
+services, disks - which a container cannot see. **ROS work belongs in the
+container shell**, which carries the workspace chain and reaches the same
+master over the network, so the container stays the default even in remote ROS
+master mode; `ros.robot_shell_by_default: true` reverses that, and
+`{"robot": false}` always forces the container. `{"robot": true}` outside
+remote master mode is refused: there is no robot to reach.
+
+Settings: `ros.robot_ssh_user`, `ros.robot_ssh_host` (empty means the host of
+`ROS_MASTER_URI`), `ros.robot_ssh_options`, `ros.robot_shell_by_default`. The
+ssh key must be in place: `BatchMode=yes` turns a missing one into a clear
+startup error instead of a password prompt. The session's startup output names
+the host, user, `ROS_DISTRO` and `ROS_MASTER_URI` it found; the robot's own
+environment comes from `/etc/profile` and `~/.bashrc`, and `ROS_MASTER_URI` is
+only filled in when the robot leaves it unset. `describe()` and `GET /shell`
+report `runs_on` (`robot`/`container`) and the `target`, and `GET /status`
+carries a `shell` block (`default`, `container_service`, `robot_available`,
+`robot_target`, `hint`) so a client can see where a new shell would land. The
 shell is stateful (`cd`, `source`, exported variables persist) and its output
 is mirrored into a closable **Remote Shell N** tab. Each command is wrapped
 with a base64 `eval` and a completion marker, so quoting and multi-line

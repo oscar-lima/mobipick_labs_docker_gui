@@ -17,7 +17,7 @@ pytestmark_bash = pytest.mark.skipif(BASH is None, reason='bash is required')
 DEFAULT_ROS_CFG = {
     'robot_ssh_user': 'robot',
     'robot_ssh_host': '',
-    'robot_shell_by_default': True,
+    'robot_shell_by_default': False,
     'robot_ssh_options': ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10'],
 }
 
@@ -83,7 +83,9 @@ def test_robot_ssh_options_accept_a_string_and_fall_back():
 
     window, _, _ = _window(ros_cfg={'robot_ssh_user': 'robot'})
     assert window._robot_ssh_options() == ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10']
-    assert window._robot_shell_by_default() is True
+    # ROS work belongs in the container, so the robot is never the default
+    # unless the configuration asks for it
+    assert window._robot_shell_by_default() is False
 
 
 # -- the shell spec ---------------------------------------------------------
@@ -94,10 +96,10 @@ def _spec(window, **kwargs):
     return adapter.shell_spec(3, 'Remote Shell 3', root=None, **kwargs)
 
 
-def test_remote_master_mode_opens_the_shell_on_the_robot():
+def test_a_robot_shell_is_an_ssh_session_on_the_robot():
     window, logs, html = _window()
 
-    spec = _spec(window)
+    spec = _spec(window, robot=True)
 
     assert spec['argv'] == [
         'ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10',
@@ -117,10 +119,10 @@ def test_remote_master_mode_opens_the_shell_on_the_robot():
     assert html and 'robot@mobipick-os-sensor' in html[0][1]
 
 
-def test_robot_false_still_opens_a_container_shell():
+def test_the_container_is_the_default_even_with_a_remote_master():
     window, logs, _ = _window()
 
-    spec = _spec(window, robot=False)
+    spec = _spec(window)
 
     assert spec['argv'][:3] == ['docker', 'compose', 'run']
     assert spec['runs_on'] == 'container'
@@ -129,19 +131,42 @@ def test_robot_false_still_opens_a_container_shell():
     assert 'network' in logs and 'xhost' in logs
 
 
-def test_local_master_keeps_the_container_shell_default():
-    window, _, _ = _window(remote=False)
+def test_explicit_robot_request_opens_the_shell_on_the_robot():
+    window, _, _ = _window()
 
-    assert _spec(window)['runs_on'] == 'container'
+    assert _spec(window, robot=True)['runs_on'] == 'robot'
+    assert _spec(window, robot=False)['runs_on'] == 'container'
 
 
-def test_robot_shell_can_be_switched_off_by_configuration():
+def test_configuration_can_make_the_robot_the_default():
     window, _, _ = _window(
-        ros_cfg={**DEFAULT_ROS_CFG, 'robot_shell_by_default': False}
+        ros_cfg={**DEFAULT_ROS_CFG, 'robot_shell_by_default': True}
     )
 
-    assert _spec(window)['runs_on'] == 'container'
-    assert _spec(window, robot=True)['runs_on'] == 'robot'
+    assert _spec(window)['runs_on'] == 'robot'
+    assert _spec(window, robot=False)['runs_on'] == 'container'
+
+
+def test_status_names_the_default_and_the_robot_target():
+    window, _, _ = _window()
+    adapter = MainWindowRemoteAdapter(window)
+
+    targets = adapter.shell_targets()
+
+    assert targets['default'] == 'container'
+    assert targets['robot_available'] is True
+    assert targets['robot_target'] == 'robot@mobipick-os-sensor'
+    assert 'debug the robot PC' in targets['hint']
+
+    window, _, _ = _window(remote=False)
+    targets = MainWindowRemoteAdapter(window).shell_targets()
+    assert targets == {
+        'default': 'container',
+        'container_service': 'mobipick_remote_cmd',
+        'robot_available': False,
+        'robot_target': '',
+        'hint': 'robot shells need remote ROS master mode',
+    }
 
 
 def test_robot_shell_refused_without_a_remote_master():

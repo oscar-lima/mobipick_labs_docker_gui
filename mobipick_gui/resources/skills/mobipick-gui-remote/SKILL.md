@@ -1,6 +1,6 @@
 ---
 name: mobipick-gui-remote
-description: Drive the Mobipick Labs Docker GUI over its HTTP remote-control API with curl - check what is already running, press toolbar buttons, wait for launches to settle, read process logs, and run ROS 1 commands in a container shell. Use when asked to start/stop the sim, roscore, RViz, RQt, tables demo or any toolbar button, to test ROS behaviour, or to inspect output of processes the user launched from the GUI.
+description: Drive the Mobipick Labs Docker GUI over its HTTP remote-control API with curl - check what is already running, press toolbar buttons, wait for launches to settle, read process logs, run ROS 1 commands in a container shell, and open a shell on the real robot PC over ssh when that machine itself has to be debugged. Use when asked to start/stop the sim, roscore, RViz, RQt, tables demo or any toolbar button, to test ROS behaviour, to inspect output of processes the user launched from the GUI, or to look at the real robot's own processes, drivers or logs.
 ---
 
 # Mobipick Labs GUI remote control
@@ -243,28 +243,36 @@ curl -s -X POST $GUI/shell/$ID/exec -H 'Content-Type: application/json' \
      -d '{"command":"rostopic list | head -20"}'
 ```
 
-**Where the shell runs** is in the reply (`runs_on`, `target`) and in the
-startup output:
+**You choose the machine** with `"robot"`, and the reply says which you got
+(`runs_on`, `target`), as does the startup output and the tab header:
 
-- normally the ROS tool container, with the workspace chain sourced;
-- **while the GUI uses a remote ROS master (the real robot), a new shell
-  opens on the robot itself over ssh** - `"robot": true` is the default
-  there, so `{"name":"claude"}` lands on the robot. That is the way to see
-  the robot's own nodes, `move_group`, drivers, logs (`~/.ros/log`) and
-  workspace; the container only sees them over the network.
+| | `"robot": false` (the default) | `"robot": true` |
+| --- | --- | --- |
+| where | the ROS tool container | the robot PC, over `ssh` |
+| for | **everything ROS**: `rostopic`, `rosnode`, `rosservice`, `rosparam`, `roslaunch`, `rosrun`, bags, the workspace's packages and scripts | **debugging the robot machine**: its processes (`ps`, `systemctl`, `journalctl`), disks, network, drivers, `~/.ros/log`, the robot's own workspace and launch files |
+| has | this workspace chain sourced, the GUI's `ROS_MASTER_URI` | the robot user's login environment, the robot's files |
 
 ```bash
-curl -s -X POST $GUI/shell -H 'Content-Type: application/json' -d '{"name":"claude","robot":false}'   # container shell instead
-curl -s $GUI/status | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["remote_master"], d["master_uri"])'
+curl -s -X POST $GUI/shell -H 'Content-Type: application/json' -d '{"name":"claude"}'                # container: ROS work
+curl -s -X POST $GUI/shell -H 'Content-Type: application/json' -d '{"name":"claude","robot":true}'    # robot PC: debug that machine
+curl -s $GUI/status | python3 -c 'import json,sys; print(json.load(sys.stdin)["shell"])'              # default, robot_available, robot_target
 ```
 
-`{"robot": true}` without remote master mode is refused (HTTP 400): there is
-no robot to reach. A robot shell needs password-less ssh
+**Default to the container.** A container shell reaches the same ROS master
+as the robot, so a node that runs on the robot answers `rosnode`/`rostopic`
+there just as well; reach for the robot shell only when the question is
+about the robot machine itself (a node that will not start, a driver, a log
+file, disk space, a service), or when the user asks for it.
+
+`{"robot": true}` needs remote ROS master mode - the robot is the master -
+and is refused with HTTP 400 otherwise (`/status` `shell.robot_available`
+says so in advance). It also needs password-less ssh
 (`ssh robot@mobipick-os-sensor`); without a key the session fails to start
-with an ssh error instead of hanging on a password prompt. Everything else
-below (exec, output, interrupt, close) is the same for both kinds, and the
-robot shell is a plain login environment: `roslaunch`, `rosnode`, `rostopic`
-and the robot's workspace work, the GUI's buttons and containers do not.
+with an ssh error instead of hanging on a password prompt. Everything below
+(exec, output, interrupt, close) works the same for both kinds. A robot
+shell runs as the robot user on the real machine: read and diagnose freely,
+but do not restart the robot's services, kill its nodes or edit its files
+unless the user asked for exactly that.
 
 Controlling how much comes back (this is what saves tokens):
 
@@ -296,6 +304,8 @@ for tests, `rostopic`/`rosservice`/`rosparam` queries, and scripts.
 Close when finished: `curl -s -X DELETE $GUI/shell/$ID`. Closing a robot
 shell ends the ssh connection and kills what it still ran there, so stop
 long-running robot commands yourself rather than leaving them to the bye.
+`GET /shell` lists every session with its `runs_on` and `target`, so a
+hand-over check sees at a glance whether one of them is on the robot.
 
 The shell's startup output names the sourced workspace, its underlay chain,
 `ROS_MASTER_URI`, and `ROS_IP`; `/status` reports the same active workspace.
@@ -444,7 +454,8 @@ send every snapshot; four to six tell the story.
    `button_ready` (plus `process_finished` to catch a crash); after an
    Auto Launch wait for `window_layout_applied`. For an experiment: mockups
    + `deepseek-v4.1-flash`, Auto Launch (section 7).
-4. Open shells (one per background process: a `wait:false` command keeps
+4. Open shells (section 5; the container unless the robot machine itself is
+   the question, one per background process: a `wait:false` command keeps
    its shell busy, HTTP 409 for anything else), run checks with
    `stream:false`/`tail`/`grep`, follow long commands with `wait:false` plus
    `follow=1`. Start the recorders (section 8) before the goal, send the goal

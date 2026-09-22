@@ -45,6 +45,7 @@ class MainWindowRemoteAdapter(GuiAdapter):
             'world': window._current_world() if hasattr(window, '_current_world') else None,
             'remote_master': bool(window._remote_master_enabled()),
             'master_uri': window._current_master_uri(),
+            'shell': self.shell_targets(),
             'roscore_running': bool(getattr(window, '_roscore_running_cached', False)),
             'sim_running': bool(getattr(window, '_sim_running_cached', False)),
             'terminal_running': bool(getattr(window, '_terminal_running_cached', False)),
@@ -55,6 +56,26 @@ class MainWindowRemoteAdapter(GuiAdapter):
             'buttons': self.buttons(),
             'tabs': self.tabs(),
             'dialog': self.active_dialog(),
+        }
+
+    def shell_targets(self) -> dict:
+        """Describe where ``POST /shell`` can open a session, and where by default."""
+        window = self.window
+        target = window._robot_ssh_target()
+        return {
+            'default': 'robot' if (
+                target and window._robot_shell_by_default()
+            ) else 'container',
+            'container_service': window._ros_tool_service(),
+            'robot_available': bool(target),
+            'robot_target': target,
+            'hint': (
+                'ROS work (rostopic, roslaunch, the workspace) belongs in the '
+                'container shell; open a robot shell ({"robot": true}) only to '
+                'debug the robot PC itself'
+                if target else
+                'robot shells need remote ROS master mode'
+            ),
         }
 
     # -- screen recording ------------------------------------------------
@@ -346,9 +367,10 @@ class MainWindowRemoteAdapter(GuiAdapter):
     def robot_shell_spec(self, session_id: int, label: str) -> dict:
         """Return the spec of a shell that ssh's onto the robot itself.
 
-        In remote ROS master mode the ROS master, the drivers and MoveIt run on
-        the robot, so the useful shell is one on the robot rather than in a
-        local ROS tool container. The ssh key is expected to be in place
+        This is the shell for debugging the robot PC - its own nodes, drivers,
+        logs, disks, services - which a container cannot see. ROS work stays in
+        the container shell, which carries the workspace chain and talks to the
+        same master over the network. The ssh key is expected to be in place
         (``BatchMode=yes``: no password prompt, a clear error instead).
         """
         window = self.window
@@ -415,6 +437,8 @@ class MainWindowRemoteAdapter(GuiAdapter):
         if window._exit_in_progress:
             raise Conflict('the GUI is shutting down')
         if robot is None:
+            # the container is the default: ROS work belongs there, and only
+            # debugging of the robot PC itself asks for a shell on the robot
             robot = (
                 window._remote_master_enabled()
                 and window._robot_shell_by_default()

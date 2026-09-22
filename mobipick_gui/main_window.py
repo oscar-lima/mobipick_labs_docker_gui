@@ -8149,8 +8149,12 @@ CMD ["bash"]
         return ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10']
 
     def _robot_shell_by_default(self) -> bool:
-        """Report whether a remote shell opens on the robot when one is used."""
-        raw = self._ros_cfg.get('robot_shell_by_default', True)
+        """Report whether a remote shell goes to the robot without being asked.
+
+        Off by default: ROS work belongs in the tool container, and only
+        debugging of the robot PC itself needs a shell on the robot.
+        """
+        raw = self._ros_cfg.get('robot_shell_by_default', False)
         if isinstance(raw, str):
             return raw.strip().lower() in {'1', 'true', 'yes', 'on'}
         return bool(raw)
