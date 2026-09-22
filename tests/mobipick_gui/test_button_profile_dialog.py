@@ -567,6 +567,11 @@ def test_generic_arg_controls_are_hidden_without_config_and_append_values():
         harness.generic_arg_controls
     )
     harness._generic_arg_inputs = {}
+    harness._saved_selections = {
+        'generic_args': {
+            '1': {'name': 'robot', 'value': 'mobipick 1'},
+        },
+    }
     harness._button_layout = []
     harness._refresh_generic_arg_controls = (
         main_window_module.MainWindow._refresh_generic_arg_controls.__get__(
@@ -584,7 +589,7 @@ def test_generic_arg_controls_are_hidden_without_config_and_append_values():
         'arg_1_applies': True,
     }]
     harness._refresh_generic_arg_controls()
-    harness._generic_arg_inputs[1].setCurrentText('mobipick 1')
+    assert harness._generic_arg_inputs[1].currentText() == 'mobipick 1'
     harness._sh_quote = main_window_module.MainWindow._sh_quote
     command = main_window_module.MainWindow._command_with_generic_args(
         harness,

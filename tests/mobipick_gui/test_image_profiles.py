@@ -96,6 +96,34 @@ def _button_texts(window):
     return {button.text() for button in window.findChildren(QPushButton)}
 
 
+def test_main_combo_selections_are_restored(tmp_path, monkeypatch):
+    workspace_image = 'example/mobipick:workspace'
+    remembered_image = 'example/mobipick:remembered'
+    registry_path, _ = _write_registry(tmp_path, workspace_image)
+    monkeypatch.setitem(
+        CONFIG,
+        'selections',
+        {
+            'image': remembered_image,
+            'world': 'cic_tables',
+            'recording_resolution': '1920x1080',
+        },
+    )
+
+    app, window = _create_window(
+        monkeypatch,
+        registry_path,
+        [workspace_image, remembered_image],
+    )
+
+    assert window._selected_image == remembered_image
+    assert window.world_combo.currentText() == 'cic_tables'
+    assert window.record_resolution_combo.currentText() == '1920x1080'
+
+    window.deleteLater()
+    app.processEvents()
+
+
 def test_graphics_group_ids_reach_all_compose_launch_environments(
     tmp_path,
     monkeypatch,

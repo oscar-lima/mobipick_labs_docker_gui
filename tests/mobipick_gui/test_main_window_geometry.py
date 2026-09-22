@@ -189,6 +189,51 @@ def test_save_window_state_persists_geometry(monkeypatch):
     app.processEvents()
 
 
+def test_save_window_state_persists_combo_selections(monkeypatch):
+    saved_updates = []
+    monkeypatch.setattr(
+        main_window_module,
+        'save_user_config_update',
+        lambda updates: saved_updates.append(updates),
+    )
+
+    app = QApplication.instance() or QApplication([])
+    window = QMainWindow()
+    window._console_log = MethodType(lambda self, *_args: None, window)
+    window._selected_image = 'example/mobipick:dev'
+    window._selected_world = 'lab'
+    window.script_combo = QComboBox(window)
+    window.script_combo.addItems(['first.py', 'chosen.py'])
+    window.script_combo.setCurrentText('chosen.py')
+    window.record_resolution_combo = QComboBox(window)
+    window.record_resolution_combo.addItems(['1920x1080', '2560x1440'])
+    window.record_resolution_combo.setCurrentText('2560x1440')
+    argument = QComboBox(window)
+    argument.addItems(['thor', 'mobipick'])
+    argument.setCurrentText('mobipick')
+    window._generic_arg_inputs = {1: argument}
+    window._generic_arg_names_by_slot = {1: 'robot'}
+
+    window._ui_selection_state = MethodType(
+        MainWindow._ui_selection_state,
+        window,
+    )
+    MainWindow._save_window_state(window)
+
+    assert saved_updates[0]['selections'] == {
+        'image': 'example/mobipick:dev',
+        'world': 'lab',
+        'script': 'chosen.py',
+        'recording_resolution': '2560x1440',
+        'generic_args': {
+            '1': {'name': 'robot', 'value': 'mobipick'},
+        },
+    }
+
+    window.deleteLater()
+    app.processEvents()
+
+
 def test_restore_window_state_applies_geometry_and_defers_maximized():
     app = QApplication.instance() or QApplication([])
     window = QMainWindow()

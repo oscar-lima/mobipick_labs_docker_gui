@@ -2998,6 +2998,10 @@ class MainWindow(QMainWindow):
         self._custom_counter = 0
         self._timers_cfg = CONFIG['timers']
         self._images_cfg = CONFIG['images']
+        saved_selections = CONFIG.get('selections', {})
+        self._saved_selections = (
+            saved_selections if isinstance(saved_selections, dict) else {}
+        )
         self._image_profiles = self._normalize_image_profiles(
             self._images_cfg.get('profiles', [])
         )
@@ -3010,12 +3014,19 @@ class MainWindow(QMainWindow):
                 self._workspace_warning_cfg.get('silenced_exceptions', [])
             )
         )
-        self._selected_image = self._images_cfg.get('default', '')
+        self._remembered_image = str(
+            self._saved_selections.get('image', '') or ''
+        ).strip()
+        self._selected_image = (
+            self._remembered_image or self._images_cfg.get('default', '')
+        )
         self._image_choices: list[str] = []
         self._related_patterns: list[str] = []
         self._worlds_cfg = CONFIG['worlds']
         self._default_world = self._worlds_cfg.get('default', 'moelk_tables')
-        self._selected_world = self._default_world
+        self._selected_world = str(
+            self._saved_selections.get('world', '') or self._default_world
+        ).strip()
         self._scripts_dir = PROJECT_ROOT / 'scripts'
         self._script_choices: list[str] = []
         self._script_active_tab_key: str | None = None
@@ -3387,9 +3398,17 @@ class MainWindow(QMainWindow):
         self.record_resolution_combo = QComboBox()
         self.record_resolution_combo.setInsertPolicy(QComboBox.NoInsert)
         self.record_resolution_combo.addItems(self._recording_resolutions)
-        if self._recording_default_resolution in self._recording_resolutions:
+        remembered_resolution = str(
+            self._saved_selections.get('recording_resolution', '') or ''
+        ).strip()
+        selected_resolution = (
+            remembered_resolution
+            if remembered_resolution in self._recording_resolutions
+            else self._recording_default_resolution
+        )
+        if selected_resolution in self._recording_resolutions:
             self.record_resolution_combo.setCurrentIndex(
-                self._recording_resolutions.index(self._recording_default_resolution)
+                self._recording_resolutions.index(selected_resolution)
             )
         else:
             self.record_resolution_combo.setCurrentIndex(0)
@@ -7598,6 +7617,12 @@ CMD ["bash"]
             ).items()
         }
         previous_names = getattr(self, '_generic_arg_names_by_slot', {})
+        saved_values = getattr(self, '_saved_selections', {}).get(
+            'generic_args',
+            {},
+        )
+        if not isinstance(saved_values, dict):
+            saved_values = {}
         names = {
             slot: next(
                 (
@@ -7638,6 +7663,13 @@ CMD ["bash"]
                 if previous_names.get(slot) == name
                 else ''
             )
+            if not previous_value:
+                saved_entry = saved_values.get(str(slot), {})
+                if (
+                    isinstance(saved_entry, dict)
+                    and saved_entry.get('name') == name
+                ):
+                    previous_value = str(saved_entry.get('value') or '')
             value_input = QComboBox()
             value_input.addItems(options[slot])
             if previous_value in options[slot]:
@@ -9002,6 +9034,11 @@ CMD ["bash"]
 
     def _preferred_available_image(self, choices: list[str]) -> str:
         """Choose an installed image without changing the saved default."""
+        remembered_image = str(
+            getattr(self, '_remembered_image', '') or ''
+        ).strip()
+        if remembered_image in choices:
+            return remembered_image
         active_workspace = self._workspace_registry.active_workspace()
         workspace_image = (
             str(active_workspace.image or '').strip()
@@ -9120,6 +9157,7 @@ CMD ["bash"]
             return False
         changed = image_ref != self._selected_image
         self._selected_image = image_ref
+        self._remembered_image = image_ref
         self.image_combo.blockSignals(True)
         self.image_combo.setCurrentIndex(self._image_choices.index(image_ref))
         self.image_combo.blockSignals(False)
@@ -11391,6 +11429,10 @@ CMD ["bash"]
     def _refresh_script_options(self) -> int:
         scripts = self._collect_scripts()
         previous = self.script_combo.currentText().strip() if hasattr(self, 'script_combo') else ''
+        if not previous:
+            previous = str(
+                getattr(self, '_saved_selections', {}).get('script', '') or ''
+            ).strip()
         self._script_choices = scripts
         if hasattr(self, 'script_combo'):
             self.script_combo.blockSignals(True)
@@ -14209,10 +14251,49 @@ CMD ["bash"]
                 ),
             ),
         }
+        selections = MainWindow._ui_selection_state(self)
+        if selections:
+            updates['selections'] = selections
         try:
             save_user_config_update(updates)
         except Exception as exc:
             self._console_log(1, f'Warning: failed to save window state: {exc}')
+
+    def _ui_selection_state(self) -> dict:
+        """Return restorable values from the main window's combo boxes."""
+        selections: dict[str, object] = {}
+
+        image = str(getattr(self, '_selected_image', '') or '').strip()
+        if image:
+            selections['image'] = image
+
+        world = str(getattr(self, '_selected_world', '') or '').strip()
+        if world:
+            selections['world'] = world
+
+        script_combo = getattr(self, 'script_combo', None)
+        if script_combo is not None and script_combo.isEnabled():
+            script = script_combo.currentText().strip()
+            if script:
+                selections['script'] = script
+
+        resolution_combo = getattr(self, 'record_resolution_combo', None)
+        if resolution_combo is not None:
+            resolution = resolution_combo.currentText().strip()
+            if resolution:
+                selections['recording_resolution'] = resolution
+
+        generic_args = {}
+        names = getattr(self, '_generic_arg_names_by_slot', {})
+        for slot, combo in getattr(self, '_generic_arg_inputs', {}).items():
+            name = str(names.get(slot, '') or '').strip()
+            value = combo.currentText().strip()
+            if name and value:
+                generic_args[str(slot)] = {'name': name, 'value': value}
+        if generic_args:
+            selections['generic_args'] = generic_args
+
+        return selections
 
     def closeEvent(self, event):
         if self._exit_in_progress:

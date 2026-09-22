@@ -172,6 +172,7 @@ HOST_HOME = _detect_host_home()
 
 CONFIG_DEFAULTS: Dict[str, Dict] = {
     'window_states': {},
+    'selections': {},
     'log': {
         'max_block_count': 20000,
         'flush_interval_ms': 30,

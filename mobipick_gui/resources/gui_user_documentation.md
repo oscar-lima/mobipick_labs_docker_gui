@@ -303,6 +303,12 @@ stop.
 
 ## World and Image selectors
 
+The GUI remembers the selected world, image, script, recording resolution,
+and additional toolbar argument values when it closes normally. On the next
+launch it restores each value when that option is still available; otherwise
+it uses the applicable configured default or first available option. The ROS
+workspace selection is likewise retained in the workspace registry.
+
 The **world_config** selector chooses the Gazebo world setting passed to the
 simulation and RQt tables launch.
 
