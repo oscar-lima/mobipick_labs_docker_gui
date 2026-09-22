@@ -173,6 +173,9 @@ def _config_command_harness(events: list) -> SimpleNamespace:
         _neutralize_compose_ignore=MainWindow._neutralize_compose_ignore,
         _config_runs_on_host=MainWindow._config_runs_on_host,
         _claim_xhost=lambda *_args, **_kwargs: None,
+        _ensure_network=lambda log_key='log': events.append(
+            ('network', log_key)
+        ),
         _configured_command_service=lambda _config: 'mobipick_cmd',
         _wrap_line_buffered=lambda command: command,
         _compose_env_args=lambda **kwargs: events.append(

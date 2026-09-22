@@ -1,6 +1,6 @@
 import os
 from pathlib import Path
-from types import SimpleNamespace
+from types import MethodType, SimpleNamespace
 
 import yaml
 
@@ -485,6 +485,42 @@ def test_configured_command_service_uses_profile_service(
 
     window.deleteLater()
     app.processEvents()
+
+
+def test_pinned_mobipick_cmd_becomes_the_remote_service(tmp_path, monkeypatch):
+    app, window = _create_window(monkeypatch, tmp_path)
+    window._remote_master_enabled_value = True
+    config = {'service': 'mobipick_cmd', 'label': 'GPT Robot Demo'}
+
+    # the bridge network the robot cannot reach back is replaced by the same
+    # tool on host networking; an explicitly different service is kept
+    assert window._configured_command_service(config) == 'mobipick_remote_cmd'
+    assert window._configured_command_service({'service': 'mobipick'}) == 'mobipick'
+
+    window._remote_master_enabled_value = False
+    assert window._configured_command_service(config) == 'mobipick_cmd'
+
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_container_commands_create_the_network_without_a_local_roscore():
+    created = []
+    harness = SimpleNamespace(
+        _remote_master_enabled=lambda: True,
+        _ensure_network=lambda log_key='log': created.append(log_key),
+    )
+    harness._ensure_roscore_ready = MethodType(
+        MainWindow._ensure_roscore_ready,
+        harness,
+    )
+    calls = []
+
+    harness._ensure_roscore_ready(lambda: calls.append('ran'))
+
+    # without it docker compose refuses: "network mobipick declared as
+    # external, but could not be found"
+    assert created == ['log'] and calls == ['ran']
 
 
 def test_remote_compose_service_uses_host_networking():

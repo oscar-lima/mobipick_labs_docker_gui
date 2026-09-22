@@ -7959,6 +7959,9 @@ CMD ["bash"]
                 else:
                     tab.start_program('bash', ['-lc', full_command])
             else:
+                # a button that does not wait for roscore reaches compose
+                # without anyone having created the external network yet
+                self._ensure_network(log_key=tab.key)
                 exec_id = uuid.uuid4().hex
                 tab.exec_id = exec_id
                 tab.container_name = f'mpcmd-{exec_id[:10]}'
@@ -8101,6 +8104,17 @@ CMD ["bash"]
         service = str(config.get('service') or '').strip()
         allowed = {'mobipick', 'mobipick_cmd', self._remote_ros_service}
         if service in allowed:
+            if service == 'mobipick_cmd' and self._remote_master_enabled():
+                # mobipick_cmd sits on the "mobipick" Docker bridge, whose
+                # addresses the robot cannot reach back, so its nodes would
+                # register with the remote master and then be unreachable.
+                # The remote service is the same tool on host networking.
+                label = self._config_label(config)
+                self._log_info(
+                    f'{label}: remote ROS master mode runs mobipick_cmd as '
+                    f'{self._remote_ros_service} (host networking)'
+                )
+                return self._remote_ros_service
             return service
         if service:
             label = self._config_label(config)
@@ -11874,6 +11888,11 @@ CMD ["bash"]
         allow_autostart: bool = True,
     ):
         if self._remote_master_enabled():
+            # No local roscore runs in this mode, and starting it is what
+            # normally creates the external "mobipick" Docker network, without
+            # which docker compose refuses to run any container ("network
+            # mobipick declared as external, but could not be found").
+            self._ensure_network(log_key='log')
             callback()
             return
 

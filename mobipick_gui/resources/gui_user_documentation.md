@@ -101,6 +101,9 @@ Remote ROS Master**.
 - **ROS_MASTER_URI** selects the external ROS 1 master, for example
   `http://mobipick-os-sensor:11311`.
 - Local Roscore and the local simulation are disabled while remote mode is on.
+  Buttons that run in a container still work: the GUI creates the Docker
+  network they need on its own and runs them with host networking, so their
+  ROS nodes and the robot can reach each other.
   Auto Launch leaves them out of its sequence and its progress window, assumes
   they already run on the robot, and starts everything that depends on them
   right away.

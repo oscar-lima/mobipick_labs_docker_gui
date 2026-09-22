@@ -394,6 +394,14 @@ The GUI injects these important values into Docker commands:
 - Workspace mount and ROS environment values from `WorkspaceRegistry`.
 - `ROS_MASTER_URI` from local Roscore or remote ROS master mode.
 
+In remote ROS master mode no local Roscore runs, so the GUI creates the
+external `mobipick` network itself before starting any container (compose
+otherwise fails with `network mobipick declared as external, but could not be
+found`), and a button that pins `service: mobipick_cmd` is run as
+`mobipick_remote_cmd` instead: the bridge addresses of `mobipick_cmd` are
+unreachable from the robot, while the remote service is the same tool on host
+networking.
+
 The GUI creates or reuses the external Docker network named `mobipick` and
 labels one-off containers with `mobipick.exec` and `mobipick.tab` so they can be
 found and stopped reliably.
