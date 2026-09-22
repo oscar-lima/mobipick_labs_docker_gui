@@ -549,7 +549,9 @@ Docker stack but leaves running host commands alive. Host commands also start
 directly without checking or automatically starting Roscore. When the GUI's
 local Roscore is already running, a newly started host command receives
 `ROS_MASTER_URI` pointing to that container and `ROS_IP` set to the host side
-of the `mobipick` Docker bridge. These overrides apply only to host commands.
+of the `mobipick` Docker bridge. In remote ROS master mode a host command
+instead receives the configured remote `ROS_MASTER_URI` and the host address
+that routes to it. These overrides apply only to host commands.
 
 Command entries can declare:
 
@@ -616,6 +618,11 @@ percentage. Processes already running at the start are ready immediately.
 Each Advanced row also has an interactive readiness measurement: **Measure**
 launches the process at time zero, and **Ready** records the user's confirmation
 into `duration_seconds`, rounded upward to one decimal place.
+In remote ROS master mode the local Roscore and simulation entries are dropped
+from the sequence and from the progress window, since that master already
+provides them; advanced dependents of the simulation start at time zero, and a
+shortened legacy timeline is shifted so its first remaining entry starts right
+away.
 Starting Auto Launch displays an always-on-top readiness progress window. Its
 duration is the latest legacy timeline offset or the effective advanced
 dependency schedule (including already-running process shortcuts). It reports

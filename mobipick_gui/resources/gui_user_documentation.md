@@ -96,10 +96,14 @@ Remote ROS master controls are hidden by default. Enable them from **View >
 Remote ROS Master**.
 
 - **Use remote ROS master** makes RViz, RQt, scripts, terminals, configured ROS
-  commands, and custom commands connect to an external ROS master.
+  commands, custom commands, and Host commands connect to an external ROS
+  master.
 - **ROS_MASTER_URI** selects the external ROS 1 master, for example
   `http://mobipick-os-sensor:11311`.
 - Local Roscore and the local simulation are disabled while remote mode is on.
+  Auto Launch leaves them out of its sequence and its progress window, assumes
+  they already run on the robot, and starts everything that depends on them
+  right away.
 
 Stop running containers before changing remote mode or the ROS master URI.
 
@@ -434,7 +438,9 @@ The tab search is separate from the documentation window search.
   Host commands do not check or automatically start Roscore. If the GUI's
   local Roscore is already running, the GUI gives each newly started Host
   command a matching `ROS_MASTER_URI` and a host-reachable `ROS_IP` so ROS
-  nodes on the host and in Mobipick Labs can communicate.
+  nodes on the host and in Mobipick Labs can communicate. In remote ROS master
+  mode the Host command gets the remote `ROS_MASTER_URI` and the host address
+  that routes to that master instead.
   **Stop Roscore** leaves running Host commands alive; stop them with their own
   toolbar buttons when needed.
   **Sim** and **RViz** cannot be removed, but their commands can be changed.

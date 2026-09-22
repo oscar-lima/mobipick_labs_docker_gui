@@ -9,6 +9,7 @@ import re
 import shlex
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import time
@@ -8121,9 +8122,36 @@ CMD ["bash"]
             return f'http://{self._roscore_container_name}:11311'
         return 'http://mobipick:11311'
 
+    def _remote_host_ros_environment(self) -> dict[str, str]:
+        """Return ROS addresses for a host process using the remote master."""
+        master = self._current_master_uri()
+        hostname = urlsplit(master).hostname if master else ''
+        if not hostname:
+            return {}
+        try:
+            probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            try:
+                # No packet is sent; connect() only picks the route the host
+                # would use to reach the master, and with it our own address.
+                probe.connect((hostname, urlsplit(master).port or 11311))
+                host_ip = probe.getsockname()[0]
+            finally:
+                probe.close()
+            if ip_address(host_ip).version != 4:
+                return {}
+        except (OSError, ValueError):
+            self._log_info(
+                f'could not determine a host address reachable from {master}; '
+                'starting the host command without ROS network overrides'
+            )
+            return {}
+        return {'ROS_MASTER_URI': master, 'ROS_IP': host_ip}
+
     def _host_ros_environment(self) -> dict[str, str]:
-        """Return ROS addresses for a host process using the local roscore."""
-        if self._remote_master_enabled() or not self.is_roscore_running():
+        """Return ROS addresses for a host process using the active master."""
+        if self._remote_master_enabled():
+            return self._remote_host_ros_environment()
+        if not self.is_roscore_running():
             return {}
         try:
             cp = self._sp_run(
@@ -10602,6 +10630,25 @@ CMD ["bash"]
             self.set_auto_launch_visual('red', self._auto_launch_start_text(), True)
             return
 
+        processes = self._launch_entries_for_master(processes)
+        remaining_timeline = self._launch_entries_for_master(timeline)
+        if len(remaining_timeline) != len(timeline):
+            remaining_timeline = self._rebased_timeline(remaining_timeline)
+        timeline = remaining_timeline
+        launch_entries = processes if advanced else timeline
+        if not launch_entries:
+            self._log_info(
+                'auto launch: the sequence only starts what the remote ROS '
+                'master already provides; nothing to do'
+            )
+            self._auto_launch_running = False
+            self.set_auto_launch_visual(
+                'red',
+                self._auto_launch_start_text(),
+                True,
+            )
+            return
+
         if self._auto_launch_run_count > 0:
             self.clear_all_tabs()
             self._append_gui_html('log', '<i>Cleared tabs before starting a new auto launch run.</i>')
@@ -10831,6 +10878,71 @@ CMD ["bash"]
         self._auto_launch_progress.start_countdown(total_seconds, processes)
         self.bring_window_to_front(self._auto_launch_progress)
         self.keep_window_above(self._auto_launch_progress)
+
+    def _button_is_simulation(self, key: str) -> bool:
+        """Report whether a toolbar button starts the Gazebo simulation."""
+        if key == 'sim':
+            return True
+        config = self._config_buttons.get(key, {})
+        if str(config.get('kind') or '').strip().lower() != 'builtin':
+            return False
+        action = str(config.get('action') or config.get('key') or '')
+        return action.strip().lower() in {'sim', 'toggle_sim', 'sim_toggle'}
+
+    def _launch_entries_for_master(self, entries: list) -> list:
+        """Drop the entries the active ROS master already provides.
+
+        In remote ROS master mode the simulation and the local roscore run on
+        the real robot, and their buttons refuse to start, so auto launch
+        neither launches them nor shows and waits for their progress; whatever
+        depends on them starts right away.
+        """
+        if not self._remote_master_enabled():
+            return list(entries)
+        kept: list = []
+        dropped: list[str] = []
+        for entry in entries:
+            key = (
+                str(entry.get('button') or '')
+                if isinstance(entry, dict) else ''
+            )
+            if key == 'roscore' or self._button_is_simulation(key):
+                dropped.append(key)
+                continue
+            kept.append(entry)
+        if dropped:
+            self._log_info(
+                'auto launch: remote ROS master mode assumes '
+                f'{", ".join(dict.fromkeys(dropped))} already running on the '
+                'robot; skipping'
+            )
+        return kept
+
+    @staticmethod
+    def _rebased_timeline(entries: list) -> list:
+        """Start a shortened timeline right away instead of idling first."""
+        offsets: list[Optional[float]] = []
+        for entry in entries:
+            if not isinstance(entry, dict):
+                offsets.append(None)
+                continue
+            try:
+                offsets.append(max(0.0, float(entry.get('at_seconds', 0) or 0)))
+            except (TypeError, ValueError):
+                offsets.append(0.0)
+        known = [offset for offset in offsets if offset is not None]
+        shift = min(known) if known else 0.0
+        if shift <= 0.0:
+            return entries
+        rebased = []
+        for entry, offset in zip(entries, offsets):
+            if offset is None:
+                rebased.append(entry)
+                continue
+            shifted = dict(entry)
+            shifted['at_seconds'] = offset - shift
+            rebased.append(shifted)
+        return rebased
 
     def _auto_launch_wizard_buttons(self) -> list[tuple[str, str]]:
         buttons: list[tuple[str, str]] = [('roscore', 'Roscore')]

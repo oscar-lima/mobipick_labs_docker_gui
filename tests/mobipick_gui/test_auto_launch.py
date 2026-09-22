@@ -1131,3 +1131,74 @@ def test_recording_pause_resume_and_stop_keep_segments(tmp_path):
     harness._on_recording_segment_finished(procs[1], 0, None)
     assert harness._recording_session is None
     assert ('export', ['segment_001.mp4', 'segment_002.mp4']) in events
+
+
+def _master_harness(*, remote):
+    logs = []
+    harness = SimpleNamespace(
+        _remote_master_enabled=lambda: remote,
+        _config_buttons={
+            'sim': {'kind': 'builtin', 'action': 'sim'},
+            'gazebo': {'kind': 'builtin', 'action': 'toggle_sim'},
+            'anygrasp': {'kind': 'command'},
+        },
+        _log_info=logs.append,
+    )
+    for name in ('_button_is_simulation', '_launch_entries_for_master'):
+        setattr(harness, name, MethodType(getattr(MainWindow, name), harness))
+    return harness, logs
+
+
+def test_launch_entries_keep_everything_with_a_local_master():
+    harness, logs = _master_harness(remote=False)
+    entries = [{'button': 'roscore'}, {'button': 'sim'}, {'button': 'rviz'}]
+
+    assert harness._launch_entries_for_master(entries) == entries
+    assert logs == []
+
+
+def test_launch_entries_drop_sim_and_roscore_for_a_remote_master():
+    harness, logs = _master_harness(remote=True)
+    entries = [
+        {'button': 'roscore'},
+        {'button': 'gazebo'},
+        {'button': 'anygrasp'},
+    ]
+
+    assert harness._launch_entries_for_master(entries) == [
+        {'button': 'anygrasp'}
+    ]
+    assert 'roscore, gazebo' in logs[-1]
+
+
+def test_rebased_timeline_starts_the_remaining_entries_immediately():
+    entries = [{'button': 'rqt', 'at_seconds': 12.0}, {'button': 'rviz'}]
+
+    assert MainWindow._rebased_timeline(entries) == entries
+
+    entries = [
+        {'button': 'rqt', 'at_seconds': 12.0},
+        {'button': 'rviz', 'at_seconds': 14.0},
+    ]
+
+    assert MainWindow._rebased_timeline(entries) == [
+        {'button': 'rqt', 'at_seconds': 0.0},
+        {'button': 'rviz', 'at_seconds': 2.0},
+    ]
+
+
+def test_dependency_schedule_does_not_wait_for_a_dropped_dependency():
+    schedule = dependency_launch_schedule(
+        [
+            {
+                'button': 'anygrasp',
+                'duration_seconds': 10.0,
+                'depends_on': 'sim',
+                'dependency_type': 'soft',
+                'ready_percentage': 70.0,
+            }
+        ],
+        set(),
+    )
+
+    assert schedule['anygrasp'] == (0.0, 10.0, False)
