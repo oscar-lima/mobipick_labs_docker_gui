@@ -191,6 +191,13 @@ CONFIG_DEFAULTS: Dict[str, Dict] = {
         'remote_master_uri': 'http://mobipick-os-sensor:11311',
         'remote_service': 'mobipick_remote_cmd',
         'remote_enabled_by_default': False,
+        # remote shells in remote ROS master mode: ssh onto the robot itself
+        # instead of a ROS tool container. The host defaults to the host of
+        # ROS_MASTER_URI; ssh must work without a password (key in place).
+        'robot_ssh_user': 'robot',
+        'robot_ssh_host': '',
+        'robot_shell_by_default': True,
+        'robot_ssh_options': ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10'],
     },
     'window_layout': {
         'state_file': str(

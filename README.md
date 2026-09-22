@@ -750,11 +750,11 @@ click with a wait without missing events.
 | `GET /tabs`, `GET /tabs/{key}?tail=N&grep=RE` | Log tab list and plain-text tab contents. |
 | `GET /dialogs`, `POST /dialogs/dismiss` | Inspect or close the active modal dialog (`{"button": "Continue"}`, `accept`, `reject`). |
 | `POST /command` | Run text through the GUI custom command box. |
-| `POST /shell` | Open a shell session in the ROS tool container (`{"name", "stream", "root"}`); blocks until ready. |
+| `POST /shell` | Open a shell session (`{"name", "stream", "root", "robot"}`); blocks until ready. In remote ROS master mode it opens on the robot over ssh unless `"robot": false` asks for the ROS tool container. |
 | `POST /shell/{id}/exec` | Run a command: `{"command", "stream", "tail", "grep", "max_lines", "timeout", "wait"}`. |
 | `GET /shell/{id}/output?since=N&command=ID&tail=N&grep=RE` | Buffered output; `follow=1` streams NDJSON until the command finishes. |
 | `POST /shell/{id}/interrupt` | Send `INT` (default), `TERM`, `KILL`, or `HUP` to the foreground command. |
-| `POST /shell/{id}/settings`, `DELETE /shell/{id}` | Change the session `stream` default; close the session and its container. |
+| `POST /shell/{id}/settings`, `DELETE /shell/{id}` | Change the session `stream` default; close the session and its container (a robot shell: end the ssh connection and kill what it left running). |
 | `POST /quit` | Close the GUI with its normal container cleanup. |
 
 Events: `button_state`, `button_ready` (the button has been running for its
@@ -781,7 +781,21 @@ the dock icon is styled through the bundled shell extension
 
 A session is `docker compose run --rm -T ... <tool service> python3
 enter_host_shell.py bash --noprofile --norc` with `terminal.bashrc` sourced on
-start, so it has the same ROS environment and user as **Open Terminal**. The
+start, so it has the same ROS environment and user as **Open Terminal**.
+
+In remote ROS master mode that container is the wrong machine: the master, the
+drivers and MoveIt run on the robot, so a session opens there instead, as `ssh
+-o BatchMode=yes -o ConnectTimeout=10 <user>@<host> bash --noprofile --norc`
+(`ros.robot_ssh_user`, `ros.robot_ssh_host` - empty means the host of
+`ROS_MASTER_URI` -, `ros.robot_ssh_options`, and `ros.robot_shell_by_default`
+to turn the default off). `{"robot": false}` still opens a container shell and
+`{"robot": true}` outside remote master mode is refused. The ssh key must be in
+place: `BatchMode=yes` turns a missing one into a clear startup error instead
+of a password prompt. The session's startup output names the host, user,
+`ROS_DISTRO` and `ROS_MASTER_URI` it found; the robot's own environment comes
+from `/etc/profile` and `~/.bashrc`, and `ROS_MASTER_URI` is only filled in
+when the robot leaves it unset. `describe()` reports `runs_on`
+(`robot`/`container`) and the `target`. The
 shell is stateful (`cd`, `source`, exported variables persist) and its output
 is mirrored into a closable **Remote Shell N** tab. Each command is wrapped
 with a base64 `eval` and a completion marker, so quoting and multi-line
@@ -794,7 +808,9 @@ returns only the exit code and line count, and the output stays retrievable
 through `/output` with `tail`, `grep`, `since`, or `command`. The per-session
 default can be changed with `/settings`. Long-running commands use
 `wait: false` and are polled or followed; `interrupt` sends SIGINT to the
-foreground process group child of the session shell through `docker exec`.
+foreground process group child of the session shell through `docker exec`, or
+through the same `ssh` target for a robot shell (ssh joins its remote arguments
+with spaces, so that command is passed as one already-quoted word).
 
 ### Client and agent workflow
 

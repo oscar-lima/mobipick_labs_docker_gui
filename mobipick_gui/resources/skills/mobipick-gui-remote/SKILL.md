@@ -230,10 +230,9 @@ curl -s -X POST $GUI/dialogs/dismiss -H 'Content-Type: application/json' -d '{"b
 Use the exact button text from `buttons`, or `accept` / `reject`. Ask the
 user before answering anything destructive.
 
-## 5. ROS shell inside the container
+## 5. ROS shell: in the container, or on the real robot
 
-Open one session and reuse its id; it is a stateful bash in the ROS tool
-container with the ROS environment and workspace sourced, connected to the
+Open one session and reuse its id; it is a stateful bash connected to the
 current ROS master. It appears in the GUI as a **Remote Shell N** tab so
 the user can watch you.
 
@@ -243,6 +242,29 @@ ID=1
 curl -s -X POST $GUI/shell/$ID/exec -H 'Content-Type: application/json' \
      -d '{"command":"rostopic list | head -20"}'
 ```
+
+**Where the shell runs** is in the reply (`runs_on`, `target`) and in the
+startup output:
+
+- normally the ROS tool container, with the workspace chain sourced;
+- **while the GUI uses a remote ROS master (the real robot), a new shell
+  opens on the robot itself over ssh** - `"robot": true` is the default
+  there, so `{"name":"claude"}` lands on the robot. That is the way to see
+  the robot's own nodes, `move_group`, drivers, logs (`~/.ros/log`) and
+  workspace; the container only sees them over the network.
+
+```bash
+curl -s -X POST $GUI/shell -H 'Content-Type: application/json' -d '{"name":"claude","robot":false}'   # container shell instead
+curl -s $GUI/status | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["remote_master"], d["master_uri"])'
+```
+
+`{"robot": true}` without remote master mode is refused (HTTP 400): there is
+no robot to reach. A robot shell needs password-less ssh
+(`ssh robot@mobipick-os-sensor`); without a key the session fails to start
+with an ssh error instead of hanging on a password prompt. Everything else
+below (exec, output, interrupt, close) is the same for both kinds, and the
+robot shell is a plain login environment: `roslaunch`, `rosnode`, `rostopic`
+and the robot's workspace work, the GUI's buttons and containers do not.
 
 Controlling how much comes back (this is what saves tokens):
 
@@ -271,7 +293,9 @@ fast instead of hanging. `cd`, `source`, and exported variables persist.
 Prefer the GUI buttons for things the user has buttons for, and the shell
 for tests, `rostopic`/`rosservice`/`rosparam` queries, and scripts.
 
-Close when finished: `curl -s -X DELETE $GUI/shell/$ID`.
+Close when finished: `curl -s -X DELETE $GUI/shell/$ID`. Closing a robot
+shell ends the ssh connection and kills what it still ran there, so stop
+long-running robot commands yourself rather than leaving them to the bye.
 
 The shell's startup output names the sourced workspace, its underlay chain,
 `ROS_MASTER_URI`, and `ROS_IP`; `/status` reports the same active workspace.

@@ -606,6 +606,13 @@ the **Install Source** tab.
   output. Closing the tab closes the shell and its container. Anyone who can
   reach the port can run commands in the containers, so use a token on
   shared networks.
+- While **Use remote ROS master** is on, a remote shell opens **on the robot**
+  over `ssh` instead of in a ROS container, so a client can look at the robot's
+  own nodes, logs and MoveIt. The user and host come from the `ros` section of
+  `gui_settings.yaml` (`robot_ssh_user`, `robot_ssh_host`; an empty host means
+  the host of the remote `ROS_MASTER_URI`), password-less ssh has to work, and
+  `robot_shell_by_default: false` keeps the container shell as the default. The
+  tab header and the GUI log name the machine each shell runs on.
 - Remote clients can select the toolbar argument dropdowns (for example
   `anygrasp_mode`) and the world exactly as you would in the toolbar
   (`POST /args`, `mobipick-labs-docker-gui-remote set-args anygrasp_mode=real`,

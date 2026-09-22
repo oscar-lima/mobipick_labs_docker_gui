@@ -318,6 +318,10 @@ class RemoteShellSession:
         cwd: str | None = None,
         container_name: str | None = None,
         tab_key: str | None = None,
+        target: str | None = None,
+        runs_on: str = 'container',
+        signal_prefix: list[str] | None = None,
+        signal_quote: bool = False,
         stream_default: bool = True,
         max_lines: int = 20000,
         on_output: Callable[['RemoteShellSession', list[str]], None] | None = None,
@@ -328,6 +332,17 @@ class RemoteShellSession:
         self.argv = list(argv)
         self.container_name = container_name
         self.tab_key = tab_key
+        self.target = target or container_name
+        self.runs_on = str(runs_on or 'container')
+        # command prefix that reaches the shell's own machine, e.g. ['docker',
+        # 'exec', container] or ['ssh', ..., 'robot@host']; empty runs locally
+        self.signal_prefix = (
+            list(signal_prefix) if signal_prefix is not None
+            else (['docker', 'exec', container_name] if container_name else [])
+        )
+        # ssh joins its remote arguments with spaces, so the remote command has
+        # to reach it as one already-quoted word
+        self.signal_quote = bool(signal_quote)
         self.stream_default = bool(stream_default)
         self.created = time.time()
         self.shell_pid: int | None = None
@@ -385,6 +400,8 @@ class RemoteShellSession:
             'id': self.id,
             'name': self.name,
             'container': self.container_name,
+            'target': self.target,
+            'runs_on': self.runs_on,
             'tab': self.tab_key,
             'shell_pid': self.shell_pid,
             'closed': self._closed,
@@ -609,13 +626,17 @@ class RemoteShellSession:
             current = self._current
             if current is not None:
                 current.interrupted = True
-        prefix = ['docker', 'exec', self.container_name] if self.container_name else []
+        prefix = list(self.signal_prefix)
         script = (
             f'if command -v pkill >/dev/null 2>&1; then pkill -{signal_name} -P {self.shell_pid}; '
             f'else for p in $(pgrep -P {self.shell_pid}); do kill -{signal_name} "$p"; done; fi'
         )
+        argv = (
+            [*prefix, f'sh -c {shlex.quote(script)}'] if self.signal_quote
+            else [*prefix, 'sh', '-c', script]
+        )
         cp = subprocess.run(
-            [*prefix, 'sh', '-c', script],
+            argv,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
@@ -691,6 +712,28 @@ class RemoteShellSession:
                     )
                 except Exception:
                     pass
+        elif self.signal_prefix and self.shell_pid:
+            # a shell on another machine (ssh): closing the pipe ends the
+            # transport, so whatever it still ran has to be killed there
+            script = (
+                f'pkill -KILL -P {self.shell_pid} 2>/dev/null; '
+                f'kill -KILL {self.shell_pid} 2>/dev/null'
+            )
+            argv = (
+                [*self.signal_prefix, f'sh -c {shlex.quote(script)}']
+                if self.signal_quote
+                else [*self.signal_prefix, 'sh', '-c', script]
+            )
+            try:
+                subprocess.run(
+                    argv,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                    timeout=30,
+                )
+            except Exception:
+                pass
 
 
 # ---------------------------------------------------------------------------
@@ -736,7 +779,7 @@ API_INDEX = [
     ('POST', '/dialogs/dismiss', 'Close the active modal dialog. Body: {"button": "text|accept|reject"}.'),
     ('POST', '/command', 'Run text through the GUI custom command box. Body: {"command": "..."}.'),
     ('GET', '/shell', 'Open remote shell sessions.'),
-    ('POST', '/shell', 'Open a shell in a ROS container. Body: {"name": "", "stream": true, "root": null}.'),
+    ('POST', '/shell', 'Open a shell. Body: {"name": "", "stream": true, "root": null, "robot": null}. "robot" defaults to true in remote ROS master mode (ssh onto the robot); false opens a ROS container shell.'),
     ('GET', '/shell/{id}', 'Session details and its current command.'),
     ('POST', '/shell/{id}/exec', 'Run a command. Body: {"command", "stream", "tail", "grep", "timeout", "wait"}.'),
     ('GET', '/shell/{id}/output?since=N&tail=N&grep=RE&command=ID&follow=1&timeout=s', 'Fetch or stream buffered output.'),
@@ -1040,13 +1083,18 @@ class RemoteControlServer:
         name: str = '',
         stream: bool | None = None,
         root: bool | None = None,
+        robot: bool | None = None,
         timeout: float | None = None,
     ) -> dict:
         with self._sessions_lock:
             self._session_counter += 1
             session_id = self._session_counter
         label = str(name or '').strip() or f'Remote Shell {session_id}'
-        spec = self._invoke(lambda: self.adapter.shell_spec(session_id, label, root=root))
+        spec = self._invoke(
+            lambda: self.adapter.shell_spec(
+                session_id, label, root=root, robot=robot
+            )
+        )
         session = RemoteShellSession(
             session_id,
             label,
@@ -1055,6 +1103,10 @@ class RemoteControlServer:
             cwd=spec.get('cwd'),
             container_name=spec.get('container_name'),
             tab_key=spec.get('tab_key'),
+            target=spec.get('target'),
+            runs_on=str(spec.get('runs_on') or 'container'),
+            signal_prefix=spec.get('signal_prefix'),
+            signal_quote=bool(spec.get('signal_quote')),
             stream_default=True if stream is None else bool(stream),
             max_lines=self.shell_max_lines,
             on_output=self._on_session_output,
@@ -1062,7 +1114,14 @@ class RemoteControlServer:
         )
         with self._sessions_lock:
             self._sessions[session_id] = session
-        self.events.emit('shell_opened', id=session_id, name=label, container=spec.get('container_name'))
+        self.events.emit(
+            'shell_opened',
+            id=session_id,
+            name=label,
+            container=spec.get('container_name'),
+            target=spec.get('target'),
+            runs_on=str(spec.get('runs_on') or 'container'),
+        )
         self._record_owned('shell', session_id)
         init_command = str(spec.get('init_command') or '').strip()
         ready_timeout = self.shell_start_timeout if timeout is None else float(timeout)
@@ -1377,6 +1436,7 @@ class RemoteControlServer:
                     name=str(body.get('name') or ''),
                     stream=_bool_param(body.get('stream'), None),
                     root=_bool_param(body.get('root'), None),
+                    robot=_bool_param(body.get('robot'), None),
                     timeout=_float_param(body.get('timeout'), None),
                 )
             raise RemoteControlError('method not allowed', status=HTTPStatus.METHOD_NOT_ALLOWED)
@@ -1728,8 +1788,20 @@ class GuiAdapter:
     def run_gui_command(self, command: str) -> dict:
         raise NotImplementedError
 
-    def shell_spec(self, session_id: int, label: str, *, root: bool | None) -> dict:
-        """Return ``{'argv', 'env', 'cwd', 'container_name', 'tab_key', 'init_command'}``."""
+    def shell_spec(
+        self,
+        session_id: int,
+        label: str,
+        *,
+        root: bool | None,
+        robot: bool | None = None,
+    ) -> dict:
+        """Return the session spec.
+
+        Keys: ``argv``, ``env``, ``cwd``, ``container_name``, ``tab_key``,
+        ``init_command`` and, for a shell that is not a local container,
+        ``target``, ``runs_on`` and ``signal_prefix``.
+        """
         raise NotImplementedError
 
     def mirror_shell_output(self, session: RemoteShellSession, text: str) -> None:

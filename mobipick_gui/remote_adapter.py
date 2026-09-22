@@ -343,12 +343,84 @@ class MainWindowRemoteAdapter(GuiAdapter):
 
     # -- remote shells -------------------------------------------------
 
-    def shell_spec(self, session_id: int, label: str, *, root: bool | None) -> dict:
+    def robot_shell_spec(self, session_id: int, label: str) -> dict:
+        """Return the spec of a shell that ssh's onto the robot itself.
+
+        In remote ROS master mode the ROS master, the drivers and MoveIt run on
+        the robot, so the useful shell is one on the robot rather than in a
+        local ROS tool container. The ssh key is expected to be in place
+        (``BatchMode=yes``: no password prompt, a clear error instead).
+        """
+        window = self.window
+        target = window._robot_ssh_target()
+        if not target:
+            raise RemoteControlError(
+                'no robot to open a shell on: remote ROS master mode is off, '
+                'or its ROS_MASTER_URI names no host. Enable it, or ask for a '
+                'container shell with {"robot": false}.'
+            )
+        options = window._robot_ssh_options()
+        tab_key = f'{REMOTE_SHELL_TAB_PREFIX}{session_id}'
+        argv = ['ssh', *options, target, 'bash', '--noprofile', '--norc']
+        master = window._current_master_uri()
+        tab = window._ensure_tab(tab_key, label, closable=True)
+        tab.container_name = None
+        tab.exec_id = None
+        window._append_gui_html(
+            tab_key,
+            f'<i>Remote shell {session_id} starting on the robot '
+            f'{html.escape(target)}: {html.escape(" ".join(argv))}</i>',
+        )
+        window._focus_tab(tab_key)
+        window._log_info(
+            f'remote control: opening shell {session_id} on {target} over ssh'
+        )
+        return {
+            'argv': argv,
+            # ssh inherits the GUI environment (ssh agent, known hosts)
+            'env': None,
+            'cwd': None,
+            'container_name': None,
+            'tab_key': tab_key,
+            'target': target,
+            'runs_on': 'robot',
+            # signals go to the command on the robot, not to the local ssh
+            'signal_prefix': ['ssh', *options, target],
+            'signal_quote': True,
+            'init_command': (
+                '[ -r /etc/profile ] && . /etc/profile >/dev/null 2>&1; '
+                '[ -r "$HOME/.bashrc" ] && . "$HOME/.bashrc" >/dev/null 2>&1; '
+                'if [ -z "${ROS_DISTRO:-}" ]; then '
+                'for s in /opt/ros/*/setup.bash; do [ -r "$s" ] && '
+                '. "$s" >/dev/null 2>&1 && break; done; fi; '
+                f'export ROS_MASTER_URI="${{ROS_MASTER_URI:-{master}}}"; '
+                'echo "remote shell host: $(whoami)@$(hostname) '
+                '(ROS_DISTRO=${ROS_DISTRO:-unset})"; '
+                'echo "remote shell ROS_MASTER_URI=${ROS_MASTER_URI:-unset} '
+                'ROS_IP=${ROS_IP:-unset}"'
+            ),
+        }
+
+    def shell_spec(
+        self,
+        session_id: int,
+        label: str,
+        *,
+        root: bool | None,
+        robot: bool | None = None,
+    ) -> dict:
         from .main_window import CONTAINER_SCRIPTS_DIR
 
         window = self.window
         if window._exit_in_progress:
             raise Conflict('the GUI is shutting down')
+        if robot is None:
+            robot = (
+                window._remote_master_enabled()
+                and window._robot_shell_by_default()
+            )
+        if robot:
+            return self.robot_shell_spec(session_id, label)
         window._ensure_network(log_key='log')
         exec_id = uuid.uuid4().hex
         container_name = f'mobipick-remote-shell-{exec_id[:10]}'
@@ -395,6 +467,8 @@ class MainWindowRemoteAdapter(GuiAdapter):
             'cwd': str(window._project_root),
             'container_name': container_name,
             'tab_key': tab_key,
+            'target': container_name,
+            'runs_on': 'container',
             'init_command': (
                 f'source {CONTAINER_SCRIPTS_DIR}/terminal.bashrc; '
                 'echo "remote shell workspace: ${MOBIPICK_WORKSPACE_NAME:-Docker image default}'

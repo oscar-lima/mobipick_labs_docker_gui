@@ -53,6 +53,7 @@ class FakeAdapter(GuiAdapter):
 
     def __init__(self):
         self.clicks = []
+        self.shell_specs = []
         self.mirrored = []
         self.exited = []
         self.states = {'roscore': 'red', 'sim': 'red', 'busy': 'yellow'}
@@ -190,7 +191,8 @@ class FakeAdapter(GuiAdapter):
     def run_gui_command(self, command):
         return {'accepted': True, 'tab': 'custom1', 'command': command}
 
-    def shell_spec(self, session_id, label, *, root):
+    def shell_spec(self, session_id, label, *, root, robot=None):
+        self.shell_specs.append({'id': session_id, 'root': root, 'robot': robot})
         return {
             'argv': [BASH, '--noprofile', '--norc'],
             'env': dict(os.environ),

@@ -230,15 +230,20 @@ def _build_parser() -> argparse.ArgumentParser:
                    help='copy the skill into this skills directory, e.g. ~/.claude/skills or <repo>/.claude/skills')
     p.add_argument('--path', action='store_true', help='print only the path of the bundled skill file')
 
-    shell = sub.add_parser('shell', help='Persistent shell sessions inside the ROS container')
+    shell = sub.add_parser('shell', help='Persistent shell sessions on the robot or in the ROS container')
     shell_sub = shell.add_subparsers(dest='shell_command', required=True)
     shell_sub.add_parser('list', help='List sessions')
-    p = shell_sub.add_parser('open', help='Open a session (blocks until the container shell is ready)')
+    p = shell_sub.add_parser('open', help='Open a session (blocks until the shell is ready)')
     p.add_argument('--name', default='')
     p.add_argument('--no-stream', dest='stream', action='store_false', default=True, help='default exec responses omit output')
     root = p.add_mutually_exclusive_group()
     root.add_argument('--root', dest='root', action='store_true', default=None)
     root.add_argument('--user', dest='root', action='store_false')
+    where = p.add_mutually_exclusive_group()
+    where.add_argument('--robot', dest='robot', action='store_true', default=None,
+                       help='ssh onto the robot (the default in remote ROS master mode)')
+    where.add_argument('--container', dest='robot', action='store_false',
+                       help='open the shell in the local ROS tool container instead')
     p.add_argument('--timeout', type=float, default=None)
     p = shell_sub.add_parser('info', help='Session details')
     p.add_argument('id', type=int)
@@ -374,6 +379,8 @@ def _shell_command(client: RemoteClient, args: argparse.Namespace, text: bool) -
         body: dict = {'name': args.name, 'stream': args.stream}
         if args.root is not None:
             body['root'] = args.root
+        if args.robot is not None:
+            body['robot'] = args.robot
         if args.timeout is not None:
             body['timeout'] = args.timeout
         return client.call('POST', '/shell', body=body, timeout=(args.timeout or 180.0) + 15.0)

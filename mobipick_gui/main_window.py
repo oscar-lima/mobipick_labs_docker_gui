@@ -8122,6 +8122,39 @@ CMD ["bash"]
             return f'http://{self._roscore_container_name}:11311'
         return 'http://mobipick:11311'
 
+    def _robot_ssh_target(self) -> str:
+        """Return ``user@host`` of the robot behind the remote ROS master.
+
+        Empty when no remote master is in use or its URI names no host. The
+        host defaults to the master's host, which is the robot itself
+        (``http://mobipick-os-sensor:11311`` -> ``robot@mobipick-os-sensor``).
+        """
+        if not self._remote_master_enabled():
+            return ''
+        host = str(self._ros_cfg.get('robot_ssh_host', '') or '').strip()
+        if not host:
+            host = urlsplit(self._current_master_uri()).hostname or ''
+        if not host:
+            return ''
+        user = str(self._ros_cfg.get('robot_ssh_user', '') or '').strip()
+        return f'{user}@{host}' if user else host
+
+    def _robot_ssh_options(self) -> list[str]:
+        """Return the ssh options for a robot shell (no password prompts)."""
+        raw = self._ros_cfg.get('robot_ssh_options')
+        if isinstance(raw, str):
+            return shlex.split(raw)
+        if isinstance(raw, (list, tuple)):
+            return [str(option) for option in raw]
+        return ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10']
+
+    def _robot_shell_by_default(self) -> bool:
+        """Report whether a remote shell opens on the robot when one is used."""
+        raw = self._ros_cfg.get('robot_shell_by_default', True)
+        if isinstance(raw, str):
+            return raw.strip().lower() in {'1', 'true', 'yes', 'on'}
+        return bool(raw)
+
     def _remote_host_ros_environment(self) -> dict[str, str]:
         """Return ROS addresses for a host process using the remote master."""
         master = self._current_master_uri()
