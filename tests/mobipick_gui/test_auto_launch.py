@@ -283,6 +283,25 @@ def test_auto_launch_adds_saved_window_layout_to_progress():
     ]
 
 
+def test_managed_window_launch_rearms_layout_retry():
+    calls: list[str] = []
+    manager = SimpleNamespace(
+        rearm_auto_apply=lambda: calls.append('rearm'),
+    )
+    timer = SimpleNamespace(isActive=lambda: True)
+    harness = SimpleNamespace(
+        _window_layout_manager=manager,
+        _window_layout_auto_apply=True,
+        _window_attention_timer=timer,
+        _window_attention_suppression_deadline=0.0,
+    )
+
+    MainWindow._arm_managed_window_attention_suppression(harness)
+
+    assert calls == ['rearm']
+    assert harness._window_attention_suppression_deadline > 0
+
+
 def test_auto_launch_progress_centers_on_parent():
     app = QApplication.instance() or QApplication([])
     if app.platformName() in {'offscreen', 'minimal'}:

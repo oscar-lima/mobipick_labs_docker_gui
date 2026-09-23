@@ -292,7 +292,9 @@ completion the window shows **Demo ready** and disappears automatically after
 one second. When automatic window layout replay is enabled and a saved layout
 exists, an **Arrange windows** bar shows the remaining wait; the default
 `apply_delay_ms: auto` rearranges the windows one second after all processes
-are ready.
+are ready. If a saved window is missing, layout matching stops after 30 seconds
+instead of continuing in the background indefinitely. Launching another
+managed window starts a fresh retry window.
 Stopping Auto Launch dismisses the progress window immediately.
 It stops when you uncheck **Record Auto Launch**, press **Stop Recording**, stop
 Auto Launch, stop Roscore, or exit the GUI.

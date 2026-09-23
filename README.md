@@ -637,7 +637,9 @@ dependency schedule (including already-running process shortcuts). It reports
 per-process progress, includes saved window-layout replay as a final milestone,
 reports completion for one second, and then hides automatically. With
 `window_layout.apply_delay_ms: auto`, layout replay runs one second after every
-process is ready.
+process is ready. Unmatched saved entries are retried for 30 seconds rather
+than polled indefinitely; launching another managed window starts a fresh
+retry window.
 Profiles are saved to a writable per-user path when the source is a packaged
 resource. Auto Launch can also coordinate window layout replay and delayed
 recording startup.

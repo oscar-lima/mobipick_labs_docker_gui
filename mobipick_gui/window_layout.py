@@ -22,6 +22,8 @@ class WindowLayoutManager:
     the bundled GNOME Shell extension on Wayland sessions.
     """
 
+    AUTO_APPLY_RETRY_SECONDS = 30.0
+
     def __init__(
         self,
         state_file: str | Path,
@@ -52,6 +54,8 @@ class WindowLayoutManager:
         self._layout: dict = {}
         self._applied_ids: set[str] = set()
         self._auto_apply_done = False
+        self._auto_apply_deadline: float | None = None
+        self._auto_apply_expired = False
         self._warned_missing = False
         self._last_capture_ids: set[str] = set()
         self._baseline_ids: set[str] = set()
@@ -88,6 +92,8 @@ class WindowLayoutManager:
             data = {}
         self._layout = data if isinstance(data, dict) else {}
         self._applied_ids.clear()
+        self._auto_apply_deadline = None
+        self._auto_apply_expired = False
         windows = self._layout.get('windows') if isinstance(self._layout, dict) else []
         self._auto_apply_done = not bool(windows)
         return self._layout
@@ -96,8 +102,19 @@ class WindowLayoutManager:
         """Allow a saved layout to be applied again (e.g., after relaunching windows)."""
         windows = self._layout.get('windows') if isinstance(self._layout, dict) else []
         self._applied_ids.clear()
+        self._auto_apply_deadline = None
+        self._auto_apply_expired = False
         self._auto_apply_done = not bool(windows)
         self._start_ts = time.monotonic()
+
+    def rearm_auto_apply(self) -> None:
+        """Retry a saved layout when another managed window is launched."""
+        windows = self._layout.get('windows') if isinstance(self._layout, dict) else []
+        if not windows or not self._auto_apply_expired:
+            return
+        self._auto_apply_deadline = None
+        self._auto_apply_expired = False
+        self._auto_apply_done = False
 
     def set_apply_delay_ms(self, delay_ms: int) -> None:
         """Update the wait time used before auto-applying saved layouts."""
@@ -199,6 +216,8 @@ class WindowLayoutManager:
                 yaml.safe_dump(layout, handle, sort_keys=False)
             self._layout = layout
             self._applied_ids = set(self._last_capture_ids)
+            self._auto_apply_deadline = None
+            self._auto_apply_expired = False
             self._auto_apply_done = False
             self._log_info(f'Saved window layout to {self.state_file}')
             return True
@@ -216,10 +235,23 @@ class WindowLayoutManager:
         if not self._backend.available:
             self._warn_missing_tools()
             return
+        now = time.monotonic()
         if self._apply_delay_ms:
-            elapsed = int((time.monotonic() - self._start_ts) * 1000)
+            elapsed = int((now - self._start_ts) * 1000)
             if elapsed < self._apply_delay_ms:
                 return
+
+        if self._auto_apply_deadline is None:
+            self._auto_apply_deadline = now + self.AUTO_APPLY_RETRY_SECONDS
+        elif now >= self._auto_apply_deadline:
+            self._auto_apply_done = True
+            self._auto_apply_expired = True
+            self._log_debug(
+                'Stopped retrying the saved window layout after '
+                f'{self.AUTO_APPLY_RETRY_SECONDS:g} seconds; it will retry '
+                'when another managed window is launched.'
+            )
+            return
 
         active_windows = self._enumerate_windows(include_classes=True, include_stack=False)
         if not active_windows:
@@ -259,6 +291,7 @@ class WindowLayoutManager:
             self._applied_ids.add(win.wid)
         if len(self._applied_ids) >= len(windows_cfg):
             self._auto_apply_done = True
+            self._auto_apply_expired = False
         if self._on_applied is not None:
             try:
                 self._on_applied(len(matches))

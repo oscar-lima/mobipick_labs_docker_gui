@@ -272,6 +272,82 @@ def test_layout_unmaximizes_all_windows_before_resizing(tmp_path):
     assert calls[3][:2] == ('move_resize', '2')
 
 
+def test_layout_stops_enumerating_after_retry_deadline(tmp_path, monkeypatch):
+    class FakeBackend:
+        available = True
+        name = 'fake'
+
+        def __init__(self):
+            self.list_calls = 0
+
+        def list_windows(self, **_kwargs):
+            self.list_calls += 1
+            return []
+
+    now = 100.0
+    monkeypatch.setattr('mobipick_gui.window_layout.time.monotonic', lambda: now)
+    backend = FakeBackend()
+    messages: list[str] = []
+    manager = WindowLayoutManager(
+        tmp_path / 'layout.yaml',
+        backend=backend,
+        log_debug=messages.append,
+    )
+    manager._layout = {'windows': [{'title': 'Window that never appears'}]}
+
+    manager.maybe_apply_saved_layout()
+    assert backend.list_calls == 1
+
+    now += manager.AUTO_APPLY_RETRY_SECONDS
+    manager.maybe_apply_saved_layout()
+    manager.maybe_apply_saved_layout()
+
+    assert manager._auto_apply_done is True
+    assert backend.list_calls == 1
+    assert messages == [
+        'Stopped retrying the saved window layout after 30 seconds; it will '
+        'retry when another managed window is launched.'
+    ]
+
+
+def test_managed_window_launch_rearms_expired_layout_retry(tmp_path, monkeypatch):
+    class FakeBackend:
+        available = True
+        name = 'fake'
+
+        def __init__(self):
+            self.list_calls = 0
+
+        def list_windows(self, **_kwargs):
+            self.list_calls += 1
+            return []
+
+    now = 100.0
+    monkeypatch.setattr('mobipick_gui.window_layout.time.monotonic', lambda: now)
+    backend = FakeBackend()
+    manager = WindowLayoutManager(tmp_path / 'layout.yaml', backend=backend)
+    manager._layout = {'windows': [{'title': 'Late window'}]}
+
+    manager.maybe_apply_saved_layout()
+    now += manager.AUTO_APPLY_RETRY_SECONDS
+    manager.maybe_apply_saved_layout()
+    manager.rearm_auto_apply()
+    manager.maybe_apply_saved_layout()
+
+    assert manager._auto_apply_done is False
+    assert backend.list_calls == 2
+
+
+def test_managed_window_launch_does_not_rearm_completed_layout(tmp_path):
+    manager = WindowLayoutManager(tmp_path / 'layout.yaml', backend=object())
+    manager._layout = {'windows': [{'title': 'Already applied'}]}
+    manager._auto_apply_done = True
+
+    manager.rearm_auto_apply()
+
+    assert manager._auto_apply_done is True
+
+
 def test_install_gnome_extension_copies_files_and_enables(tmp_path, monkeypatch):
     calls: list[list[str]] = []
 

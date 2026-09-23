@@ -12518,6 +12518,8 @@ CMD ["bash"]
         timer = getattr(self, '_window_attention_timer', None)
         if manager is None or timer is None:
             return
+        if self._window_layout_auto_apply:
+            manager.rearm_auto_apply()
         if timer.isActive():
             self._window_attention_suppression_deadline = max(
                 self._window_attention_suppression_deadline,
