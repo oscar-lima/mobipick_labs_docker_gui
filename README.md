@@ -615,6 +615,11 @@ rules:
   block_start: all               # or a list of button keys
   except: [tables_demo_bringup]
   reason: on the real robot start tables_demo_bringup first
+- when:
+    remote_master: true
+  remind_start: [tables_demo_bringup]   # or all
+  notice: launch rgbd_snapshot_server.py on the real robot
+  clipboard: rgbd_snapshot_server       # optional
 ```
 
 `when` conditions and the `invalid` / `only` lists name `world` or any generic
@@ -630,6 +635,9 @@ the same run passes), and refuses the whole run with a popup when any step
 stays blocked. A step still blocked when its turn comes is logged and never
 marked ready. `POST /args` rejects invalid values and a button press returns
 `accepted: false` with the rule's reason instead of opening a popup.
+`remind_start` does not refuse anything: when a named toolbar button starts
+(by click, remote control or Auto Launch) the GUI logs the `notice`, shows it
+in an information popup and copies `clipboard`, if set, to the clipboard.
 `running.*` conditions are read when a start or dropdown change is evaluated,
 not polled. Malformed rules are skipped and reported in the GUI log. The
 profile editor does not rewrite the rules file.

@@ -334,7 +334,12 @@ first: with the real robot, for example, every other button refuses to start
 with a popup until **tables_demo_bringup** is running. **Auto Launch**
 checks the whole sequence before starting: if a step would be refused and
 the sequence does not start the required button itself, nothing starts and
-a popup lists the blocked steps. Stopping is never refused.
+a popup lists the blocked steps. Stopping is never refused. Rules can also
+remind you of a manual step when a button starts, for example that
+`rgbd_snapshot_server.py` must be launched on the real robot; the button
+still starts, and when the reminder names a command (here the alias
+`rgbd_snapshot_server`) it is copied to the clipboard for pasting into the
+robot terminal.
 
 A loaded toolbar-button profile can expose up to three additional argument
 combo boxes beside **world_config**. Their labels and selectable options come

@@ -33,12 +33,22 @@ BRINGUP_FIRST = {
 }
 
 
+SNAPSHOT_REMINDER = {
+    'when': {'remote_master': True},
+    'remind_start': ['tables_demo_bringup'],
+    'notice': 'launch rgbd_snapshot_server.py on the real robot',
+    'clipboard': 'rgbd_snapshot_server',
+}
+
+
 def _record_popups(monkeypatch) -> list:
     popups = []
     monkeypatch.setattr(
         MainWindow,
         '_show_rule_popup',
-        lambda self, title, message: popups.append((title, message)),
+        lambda self, title, message, *_icon: popups.append(
+            (title, message)
+        ),
     )
     return popups
 
@@ -243,5 +253,69 @@ def test_blocked_auto_launch_step_is_never_marked_ready(monkeypatch, tmp_path):
         assert 'rviz' not in window._auto_launch_ready_keys
     finally:
         window._auto_launch_running = False
+        window.close()
+        app.processEvents()
+
+
+def test_remind_start_needs_a_notice():
+    rules = parse_option_rules(
+        {'rules': [{'remind_start': 'all'}, SNAPSHOT_REMINDER]}
+    )
+
+    assert len(rules.rules) == 1
+    assert 'notice' in rules.errors[0]
+    assert rules.start_reminders({'remote_master': True}, 'rviz') == []
+    assert rules.start_reminders(
+        {'remote_master': True}, 'tables_demo_bringup'
+    ) == [(SNAPSHOT_REMINDER['notice'], 'rgbd_snapshot_server')]
+    assert rules.start_reminders(
+        {'remote_master': False}, 'tables_demo_bringup'
+    ) == []
+
+
+def test_bringup_start_reminds_and_copies_to_clipboard(
+    monkeypatch, tmp_path
+):
+    popups = _record_popups(monkeypatch)
+    app, window = _create_window(monkeypatch, tmp_path)
+    try:
+        window._option_rules = parse_option_rules(
+            {'rules': [BRINGUP_FIRST, SNAPSHOT_REMINDER]}
+        )
+        window._config_buttons['tables_demo_bringup'] = {
+            'key': 'tables_demo_bringup',
+            'label': 'Tables Demo Bringup',
+            'kind': 'command',
+        }
+        running = {'tables_demo_bringup': False}
+        monkeypatch.setattr(
+            window, '_is_button_running', lambda key: running.get(key, False)
+        )
+        started = []
+        monkeypatch.setattr(
+            window, '_run_config_command', lambda config: started.append(1)
+        )
+        app.clipboard().setText('before')
+
+        window._on_config_button_clicked('tables_demo_bringup')
+        assert started == [1]
+        assert popups == []
+        assert app.clipboard().text() == 'before'
+
+        window.remote_master_checkbox.setChecked(True)
+        popups.clear()
+        window._on_config_button_clicked('tables_demo_bringup')
+        assert started == [1, 1]
+        assert popups[-1][0] == 'Starting Tables Demo Bringup'
+        assert 'rgbd_snapshot_server.py' in popups[-1][1]
+        assert 'copied to the clipboard' in popups[-1][1]
+        assert app.clipboard().text() == 'rgbd_snapshot_server'
+
+        # Stopping a running bringup shows no reminder.
+        running['tables_demo_bringup'] = True
+        popups.clear()
+        window._on_config_button_clicked('tables_demo_bringup')
+        assert popups == []
+    finally:
         window.close()
         app.processEvents()

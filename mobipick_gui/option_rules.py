@@ -23,6 +23,17 @@ never blocked::
       except: [tables_demo_bringup]
       reason: start tables_demo_bringup first
 
+A rule can remind the user when a button starts. ``remind_start`` names the
+button keys (or ``all``) whose start shows the ``notice`` popup; the start
+goes ahead. An optional ``clipboard`` text is copied to the clipboard, and
+the popup says so::
+
+    - when:
+        remote_master: true
+      remind_start: [tables_demo_bringup]
+      notice: launch rgbd_snapshot_server.py on the real robot
+      clipboard: rgbd_snapshot_server
+
 State names are ``remote_master`` (true when the GUI uses a remote ROS
 master), ``world`` (the world_config dropdown), the name of every generic
 toolbar argument such as ``model_profile``, and ``running.<button key>``
@@ -54,11 +65,20 @@ class OptionRule:
     block_start: tuple[str, ...] = ()
     block_start_except: tuple[str, ...] = ()
     reason: str = ''
+    remind_start: tuple[str, ...] = ()
+    notice: str = ''
+    clipboard: str = ''
 
-    def blocks_start(self, key: str) -> bool:
+    def _names(self, keys: tuple[str, ...], key: str) -> bool:
         if key in self.block_start_except:
             return False
-        return 'all' in self.block_start or key in self.block_start
+        return 'all' in keys or key in keys
+
+    def blocks_start(self, key: str) -> bool:
+        return self._names(self.block_start, key)
+
+    def reminds_start(self, key: str) -> bool:
+        return self._names(self.remind_start, key)
 
     def matches(self, state: dict[str, str]) -> bool:
         return all(
@@ -99,6 +119,17 @@ class OptionRules:
             if rule.blocks_start(key) and rule.matches(normalized):
                 return rule.describe()
         return None
+
+    def start_reminders(
+        self, state: dict, key: str
+    ) -> list[tuple[str, str]]:
+        """Return ``(notice, clipboard text)`` shown when ``key`` starts."""
+        normalized = {name: _text(value) for name, value in state.items()}
+        return [
+            (rule.notice, rule.clipboard)
+            for rule in self.rules
+            if rule.reminds_start(key) and rule.matches(normalized)
+        ]
 
     def invalid_options(
         self,
@@ -169,11 +200,17 @@ def parse_option_rules(data, path: Path | None = None) -> OptionRules:
         block_except = (
             _values(item['except']) if item.get('except') is not None else ()
         )
+        raw_remind = item.get('remind_start')
+        remind_start = _values(raw_remind) if raw_remind is not None else ()
+        notice = str(item.get('notice') or '').strip()
+        if remind_start and not notice:
+            loaded.errors.append(f'rule {index}: remind_start needs "notice"')
         if len(loaded.errors) > errors_before:
             continue
-        if not invalid and not only and not block_start:
+        if not invalid and not only and not block_start and not remind_start:
             loaded.errors.append(
-                f'rule {index}: needs "invalid", "only" or "block_start"'
+                f'rule {index}: needs "invalid", "only", "block_start" '
+                'or "remind_start"'
             )
             continue
         loaded.rules.append(
@@ -184,6 +221,9 @@ def parse_option_rules(data, path: Path | None = None) -> OptionRules:
                 block_start=block_start,
                 block_start_except=block_except,
                 reason=str(item.get('reason') or '').strip(),
+                remind_start=remind_start,
+                notice=notice,
+                clipboard=str(item.get('clipboard') or '').strip(),
             )
         )
     return loaded

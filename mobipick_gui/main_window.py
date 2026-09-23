@@ -8194,6 +8194,8 @@ CMD ["bash"]
             return
         if not self._guard_rule_start(key, popup=popup):
             return
+        if not self._is_button_running(key):
+            MainWindow._show_start_reminders(self, key)
         kind = str(config.get('kind') or 'builtin').lower()
         if kind == 'command':
             self._run_config_command(config)
@@ -13832,11 +13834,37 @@ CMD ["bash"]
             )
         return False
 
-    def _show_rule_popup(self, title: str, message: str) -> None:
-        """Show a rule notice without blocking the event loop."""
-        box = QMessageBox(
-            QMessageBox.Warning, title, message, QMessageBox.Ok, self
+    def _show_start_reminders(self, key: str) -> None:
+        """Pop up the rules' reminders for starting ``key``.
+
+        The start goes ahead; a reminder's clipboard text is copied so the
+        user can paste it where the notice says.
+        """
+        rules = getattr(self, '_option_rules', None)
+        if rules is None or not rules.rules:
+            return
+        state = MainWindow._option_rule_state(
+            self, rules, MainWindow._option_rule_combos(self)
         )
+        label = self._config_buttons.get(key, {}).get('label') or key
+        for notice, clipboard in rules.start_reminders(state, key):
+            message = notice
+            if clipboard:
+                QApplication.clipboard().setText(clipboard)
+                message += f'\n\n"{clipboard}" was copied to the clipboard.'
+            self._log_info(f'{label} reminder: {notice}')
+            MainWindow._show_rule_popup(
+                self, f'Starting {label}', message, QMessageBox.Information
+            )
+
+    def _show_rule_popup(
+        self,
+        title: str,
+        message: str,
+        icon: QMessageBox.Icon = QMessageBox.Warning,
+    ) -> None:
+        """Show a rule notice without blocking the event loop."""
+        box = QMessageBox(icon, title, message, QMessageBox.Ok, self)
         box.setAttribute(Qt.WA_DeleteOnClose)
         box.open()
 
