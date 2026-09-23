@@ -609,14 +609,27 @@ rules:
     model_profile: [o3, o3-jev]  # a list matches any entry
   invalid:
     disc_mode: [cpu]
+- when:
+    remote_master: true
+    running.tables_demo_bringup: false
+  block_start: all               # or a list of button keys
+  except: [tables_demo_bringup]
+  reason: on the real robot start tables_demo_bringup first
 ```
 
-`when` conditions and the `invalid` / `only` lists name `world`, any generic
-argument name, or (in `when` only) `remote_master`; every condition of a rule
-must hold. Invalid options are greyed out with the reason as tooltip, a
-selection that becomes invalid switches to the first valid option (logged),
-and `POST /args` rejects invalid values. Malformed rules are skipped and
-reported in the GUI log. The profile editor does not rewrite the rules file.
+`when` conditions and the `invalid` / `only` lists name `world` or any generic
+argument name; `when` can also read `remote_master` and
+`running.<button key>`. Every condition of a rule must hold. Invalid options
+are greyed out with the reason as tooltip. A selection that becomes invalid
+switches to the first valid option; when the user's own change (a dropdown or
+the remote master checkbox) caused it, a non-modal popup explains it.
+`block_start` refuses starting toolbar buttons, Roscore and Terminal (never
+stopping them) with a popup. Auto Launch steps are refused with a log line
+only. `POST /args` rejects invalid values and a button press returns
+`accepted: false` with the rule's reason instead of opening a popup.
+`running.*` conditions are read when a start or dropdown change is evaluated,
+not polled. Malformed rules are skipped and reported in the GUI log. The
+profile editor does not rewrite the rules file.
 
 The GUI normalizes all entries and creates matching process tabs and
 start/stop visual state.

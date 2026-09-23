@@ -1,4 +1,4 @@
-"""Declarative rules that make toolbar dropdown options invalid.
+"""Declarative rules that make toolbar options invalid or block buttons.
 
 A workspace can keep a rules file beside its button profile, named after the
 profile (``<profile stem>_rules.yaml``), or ``option_rules.yaml`` in the same
@@ -12,11 +12,23 @@ options it forbids (``invalid``) or the only options it allows (``only``)::
         world: [cic_tables]
       reason: The real robot only runs the cic_tables environment.
 
+A rule can also stop buttons from starting. ``block_start`` is ``all`` or a
+list of button keys, and ``except`` lists keys it leaves alone; stopping is
+never blocked::
+
+    - when:
+        remote_master: true
+        running.tables_demo_bringup: false
+      block_start: all
+      except: [tables_demo_bringup]
+      reason: start tables_demo_bringup first
+
 State names are ``remote_master`` (true when the GUI uses a remote ROS
-master), ``world`` (the world_config dropdown), and the name of every
-generic toolbar argument such as ``model_profile``. A condition value may be
-a list, which matches any of its entries; every condition of a rule must
-match. Rules only name dropdowns and states, so the GUI stays free of
+master), ``world`` (the world_config dropdown), the name of every generic
+toolbar argument such as ``model_profile``, and ``running.<button key>``
+(true while that button's process runs). A condition value may be a list,
+which matches any of its entries; every condition of a rule must match.
+Rules only name dropdowns, buttons and states, so the GUI stays free of
 workspace-specific logic.
 """
 
@@ -28,6 +40,7 @@ from pathlib import Path
 import yaml
 
 RULES_FILE_SUFFIX = '_rules.yaml'
+RUNNING_PREFIX = 'running.'
 SHARED_RULES_FILE = 'option_rules.yaml'
 
 
@@ -38,7 +51,14 @@ class OptionRule:
     when: dict[str, tuple[str, ...]]
     invalid: dict[str, tuple[str, ...]] = field(default_factory=dict)
     only: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    block_start: tuple[str, ...] = ()
+    block_start_except: tuple[str, ...] = ()
     reason: str = ''
+
+    def blocks_start(self, key: str) -> bool:
+        if key in self.block_start_except:
+            return False
+        return 'all' in self.block_start or key in self.block_start
 
     def matches(self, state: dict[str, str]) -> bool:
         return all(
@@ -62,6 +82,23 @@ class OptionRules:
     rules: list[OptionRule] = field(default_factory=list)
     path: Path | None = None
     errors: list[str] = field(default_factory=list)
+
+    def running_keys(self) -> set[str]:
+        """Button keys whose running state some condition reads."""
+        return {
+            name[len(RUNNING_PREFIX):]
+            for rule in self.rules
+            for name in rule.when
+            if name.startswith(RUNNING_PREFIX)
+        }
+
+    def start_blocked(self, state: dict, key: str) -> str | None:
+        """Return why button ``key`` may not start, or None when it may."""
+        normalized = {name: _text(value) for name, value in state.items()}
+        for rule in self.rules:
+            if rule.blocks_start(key) and rule.matches(normalized):
+                return rule.describe()
+        return None
 
     def invalid_options(
         self,
@@ -127,11 +164,16 @@ def parse_option_rules(data, path: Path | None = None) -> OptionRules:
             item.get('invalid'), 'invalid', loaded.errors, index
         )
         only = _choice_map(item.get('only'), 'only', loaded.errors, index)
+        raw_block = item.get('block_start')
+        block_start = _values(raw_block) if raw_block is not None else ()
+        block_except = (
+            _values(item['except']) if item.get('except') is not None else ()
+        )
         if len(loaded.errors) > errors_before:
             continue
-        if not invalid and not only:
+        if not invalid and not only and not block_start:
             loaded.errors.append(
-                f'rule {index}: needs "invalid" or "only" options'
+                f'rule {index}: needs "invalid", "only" or "block_start"'
             )
             continue
         loaded.rules.append(
@@ -139,6 +181,8 @@ def parse_option_rules(data, path: Path | None = None) -> OptionRules:
                 when=when,
                 invalid=invalid,
                 only=only,
+                block_start=block_start,
+                block_start_except=block_except,
                 reason=str(item.get('reason') or '').strip(),
             )
         )

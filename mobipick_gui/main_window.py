@@ -3692,6 +3692,9 @@ class MainWindow(QMainWindow):
         )
         actions.addWidget(world_controls)
         self.world_combo.currentIndexChanged.connect(self._on_world_changed)
+        self.world_combo.activated.connect(
+            lambda _index: self._apply_option_rules(notify=True)
+        )
 
         self.generic_arg_controls = QWidget()
         self._generic_arg_controls_layout = FlowLayout(
@@ -8072,8 +8075,8 @@ CMD ["bash"]
             if previous_value in options[slot]:
                 value_input.setCurrentIndex(options[slot].index(previous_value))
             _configure_shrinkable_combo(value_input)
-            value_input.currentIndexChanged.connect(
-                lambda _index: MainWindow._apply_option_rules(self)
+            value_input.activated.connect(
+                lambda _index: MainWindow._apply_option_rules(self, True)
             )
             slot_controls, _slot_label = _labeled_control(
                 f'{name}:',
@@ -8182,11 +8185,13 @@ CMD ["bash"]
                 insert_at += 1
             self._button_widgets[key] = button
 
-    def _on_config_button_clicked(self, key: str):
+    def _on_config_button_clicked(self, key: str, *, popup: bool = True):
         button = self._get_button_widget(key)
         config = self._config_buttons.get(key, {})
         self._log_button_click(button, config.get('label') or key)
         if not config:
+            return
+        if not self._guard_rule_start(key, popup=popup):
             return
         kind = str(config.get('kind') or 'builtin').lower()
         if kind == 'command':
@@ -8790,7 +8795,7 @@ CMD ["bash"]
         self._remote_master_enabled_value = checked
         self.remote_master_input.setEnabled(checked)
         self._clear_remote_ros_cleanup_offer()
-        self._apply_option_rules()
+        self._apply_option_rules(notify=True)
         self._apply_env_to_all_tabs()
         self._update_buttons()
         if checked:
@@ -9856,7 +9861,6 @@ CMD ["bash"]
         self._selected_world = new_world
         self._console_log(2, f'Selected world: {new_world}')
         self._apply_env_to_all_tabs()
-        self._apply_option_rules()
 
     def _cleanup_script_available(self) -> bool:
         return Path(SCRIPT_CLEAN).is_file() and os.access(SCRIPT_CLEAN, os.X_OK)
@@ -10183,11 +10187,15 @@ CMD ["bash"]
         self._log_button_click(self.terminal_button, 'Terminal')
         if not self._guard_toggle_action('terminal', self.terminal_button):
             return
+        if not self._guard_rule_start('terminal'):
+            return
         self.toggle_terminal()
 
     def _on_roscore_toggle_clicked(self):
         self._log_button_click(self.roscore_button, 'Roscore')
         if not self._guard_toggle_action('roscore', self.roscore_button):
+            return
+        if not self._guard_rule_start('roscore'):
             return
         self.toggle_roscore()
 
@@ -11962,14 +11970,16 @@ CMD ["bash"]
         self._dispatch_auto_launch_toggle(key)
 
     def _dispatch_auto_launch_toggle(self, key: str) -> bool:
+        if key in self._config_buttons:
+            self._on_config_button_clicked(key, popup=False)
+            return True
+        if not self._guard_rule_start(key, popup=False):
+            return False
         if key == 'roscore':
             self.toggle_roscore()
             return True
         if key == 'terminal':
             self.toggle_terminal()
-            return True
-        if key in self._config_buttons:
-            self._on_config_button_clicked(key)
             return True
         self._log_info(f'auto launch: no action found for "{key}"')
         return False
@@ -13721,25 +13731,67 @@ CMD ["bash"]
                 combos.setdefault(name, widget)
         return combos
 
+    def _option_rule_state(self, rules, combos: dict[str, QComboBox]) -> dict:
+        """GUI state the rule conditions can read."""
+        state: dict = {
+            name: combo.currentText().strip()
+            for name, combo in combos.items()
+        }
+        state['remote_master'] = self._remote_master_enabled()
+        for key in rules.running_keys():
+            state[f'running.{key}'] = self._is_button_running(key)
+        return state
+
+    def _start_blocked_reason(self, key: str) -> str | None:
+        """Return why the rules forbid starting ``key``; None when allowed."""
+        rules = getattr(self, '_option_rules', None)
+        if rules is None or not rules.rules or self._is_button_running(key):
+            return None
+        state = MainWindow._option_rule_state(
+            self, rules, MainWindow._option_rule_combos(self)
+        )
+        return rules.start_blocked(state, key)
+
+    def _guard_rule_start(self, key: str, *, popup: bool = True) -> bool:
+        """Refuse a start the rules block, telling the user why."""
+        reason = MainWindow._start_blocked_reason(self, key)
+        if reason is None:
+            return True
+        label = self._config_buttons.get(key, {}).get('label') or key
+        self._log_info(f'{label} not started: {reason}')
+        if popup:
+            MainWindow._show_rule_popup(
+                self, f'Cannot start {label}', f'{label} cannot start: {reason}.'
+            )
+        return False
+
+    def _show_rule_popup(self, title: str, message: str) -> None:
+        """Show a rule notice without blocking the event loop."""
+        box = QMessageBox(
+            QMessageBox.Warning, title, message, QMessageBox.Ok, self
+        )
+        box.setAttribute(Qt.WA_DeleteOnClose)
+        box.open()
+
     def _invalid_options(self) -> dict[str, dict[str, str]]:
         """Return ``{dropdown: {option: reason}}`` under the current state."""
         rules = getattr(self, '_option_rules', None)
         if rules is None or not rules.rules:
             return {}
         combos = MainWindow._option_rule_combos(self)
-        state: dict = {
-            name: combo.currentText().strip()
-            for name, combo in combos.items()
-        }
-        state['remote_master'] = self._remote_master_enabled()
+        state = MainWindow._option_rule_state(self, rules, combos)
         choices = {
             name: [combo.itemText(i).strip() for i in range(combo.count())]
             for name, combo in combos.items()
         }
         return rules.invalid_options(state, choices)
 
-    def _apply_option_rules(self) -> None:
-        """Grey out invalid dropdown options and move off invalid choices."""
+    def _apply_option_rules(self, notify: bool = False) -> None:
+        """Grey out invalid dropdown options and move off invalid choices.
+
+        ``notify`` pops up a window for switches the user's own change
+        caused; loading and remote-control changes only log them.
+        """
         rules = getattr(self, '_option_rules', None)
         if rules is None or getattr(self, '_applying_option_rules', False):
             return
@@ -13757,6 +13809,7 @@ CMD ["bash"]
                     f'from {rules.path}'
                 )
         self._applying_option_rules = True
+        switches: list[str] = []
         try:
             # A switch can change what another rule forbids; settle it.
             for _attempt in range(4):
@@ -13781,16 +13834,22 @@ CMD ["bash"]
                     if fallback < 0:
                         continue
                     combo.setCurrentIndex(fallback)
-                    self._log_info(
+                    message = (
                         f'{name}={current} is invalid '
                         f'({forbidden[current]}); '
                         f'switched to {combo.itemText(fallback)}'
                     )
+                    self._log_info(message)
+                    switches.append(message)
                     switched = True
                 if not switched:
                     break
         finally:
             self._applying_option_rules = False
+        if notify and switches:
+            MainWindow._show_rule_popup(
+                self, 'Option changed', '.\n'.join(switches) + '.'
+            )
 
     # -- generic toolbar arguments (remote control) ----------------------
 
@@ -13877,6 +13936,7 @@ CMD ["bash"]
             else:
                 inputs[entry['slot']].setCurrentIndex(entry['options'].index(text))
             self._log_info(f'remote control: set {name}={text}')
+        self._apply_option_rules()
         return self.generic_args()
 
     def _disable_toggle_preserving_visual(self, key: str, button: QPushButton | None):

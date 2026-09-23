@@ -5,12 +5,14 @@ import yaml
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
+from mobipick_gui.main_window import MainWindow
 from mobipick_gui.option_rules import (
     load_option_rules,
     option_rules_path,
     parse_option_rules,
 )
 
+from mobipick_gui.remote_adapter import MainWindowRemoteAdapter
 from test_remote_ros_master import _create_window
 
 REAL_ROBOT_RULES = {
@@ -23,6 +25,22 @@ REAL_ROBOT_RULES = {
     ]
 }
 WORLDS = {'world': ['moelk_tables', 'cic_tables']}
+BRINGUP_FIRST = {
+    'when': {'remote_master': True, 'running.tables_demo_bringup': False},
+    'block_start': 'all',
+    'except': ['tables_demo_bringup'],
+    'reason': 'start tables_demo_bringup first',
+}
+
+
+def _record_popups(monkeypatch) -> list:
+    popups = []
+    monkeypatch.setattr(
+        MainWindow,
+        '_show_rule_popup',
+        lambda self, title, message: popups.append((title, message)),
+    )
+    return popups
 
 
 def test_only_rule_invalidates_other_options_while_condition_holds():
@@ -63,6 +81,20 @@ def test_malformed_rules_are_reported_and_skipped():
     assert len(rules.errors) == 2
 
 
+def test_block_start_spares_excepted_buttons_and_lifts_when_running():
+    rules = parse_option_rules({'rules': [BRINGUP_FIRST]})
+    waiting = {'remote_master': True, 'running.tables_demo_bringup': False}
+    running = {'remote_master': True, 'running.tables_demo_bringup': True}
+
+    assert rules.running_keys() == {'tables_demo_bringup'}
+    assert rules.start_blocked(waiting, 'rviz') == (
+        'start tables_demo_bringup first'
+    )
+    assert rules.start_blocked(waiting, 'tables_demo_bringup') is None
+    assert rules.start_blocked(running, 'rviz') is None
+    assert rules.start_blocked({'remote_master': False}, 'rviz') is None
+
+
 def test_rules_file_is_found_beside_the_button_profile(tmp_path):
     profile = tmp_path / 'profile.yaml'
     profile.write_text('buttons: []\n')
@@ -80,6 +112,7 @@ def test_rules_file_is_found_beside_the_button_profile(tmp_path):
 
 
 def test_remote_master_makes_moelk_tables_invalid(monkeypatch, tmp_path):
+    popups = _record_popups(monkeypatch)
     app, window = _create_window(monkeypatch, tmp_path)
     try:
         window._option_rules = parse_option_rules(REAL_ROBOT_RULES)
@@ -90,6 +123,8 @@ def test_remote_master_makes_moelk_tables_invalid(monkeypatch, tmp_path):
         window.remote_master_checkbox.setChecked(True)
 
         assert window._current_world() == 'cic_tables'
+        assert len(popups) == 1
+        assert 'switched to cic_tables' in popups[0][1]
         assert not moelk.isEnabled()
         assert 'cic_tables' in moelk.toolTip()
         world = next(e for e in window.generic_args() if e['name'] == 'world')
@@ -102,6 +137,38 @@ def test_remote_master_makes_moelk_tables_invalid(monkeypatch, tmp_path):
         assert moelk.isEnabled()
         window.set_generic_args({'world': 'moelk_tables'})
         assert window._current_world() == 'moelk_tables'
+    finally:
+        window.close()
+        app.processEvents()
+
+
+def test_buttons_wait_for_bringup_on_the_real_robot(monkeypatch, tmp_path):
+    popups = _record_popups(monkeypatch)
+    app, window = _create_window(monkeypatch, tmp_path)
+    try:
+        window._option_rules = parse_option_rules({'rules': [BRINGUP_FIRST]})
+        running = {'tables_demo_bringup': False}
+        monkeypatch.setattr(
+            window, '_is_button_running', lambda key: running.get(key, False)
+        )
+        started = []
+        monkeypatch.setattr(window, 'toggle_rviz', lambda: started.append(1))
+        adapter = MainWindowRemoteAdapter(window)
+
+        window._on_config_button_clicked('rviz')
+        assert started == [1]
+
+        window.remote_master_checkbox.setChecked(True)
+        window._on_config_button_clicked('rviz')
+        assert started == [1]
+        assert popups[-1][0] == 'Cannot start RViz'
+        pressed = adapter.press_button('rviz', 'start')
+        assert not pressed['accepted']
+        assert 'tables_demo_bringup' in pressed['reason']
+
+        running['tables_demo_bringup'] = True
+        window._on_config_button_clicked('rviz')
+        assert started == [1, 1]
     finally:
         window.close()
         app.processEvents()

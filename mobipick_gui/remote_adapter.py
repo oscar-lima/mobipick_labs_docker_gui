@@ -230,6 +230,14 @@ class MainWindowRemoteAdapter(GuiAdapter):
             return {'accepted': False, 'reason': 'already running', 'button': before}
         if action == 'stop' and not before['running']:
             return {'accepted': False, 'reason': 'not running', 'button': before}
+        if not before['running']:
+            blocked = self.window._start_blocked_reason(key)
+            if blocked:
+                return {
+                    'accepted': False,
+                    'reason': f'blocked by option rules: {blocked}',
+                    'button': before,
+                }
         self.window._log_info(f'remote control: {action} {key}')
         widget.click()
         return {

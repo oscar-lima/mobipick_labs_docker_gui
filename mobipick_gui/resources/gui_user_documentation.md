@@ -329,7 +329,10 @@ choices invalid in certain situations, for example allowing only
 `cic_tables` while **Use remote ROS master** is on because the real robot
 supports no other world. Invalid options are greyed out and their tooltip
 says why; when a selection becomes invalid the GUI switches to the first
-valid option and notes it in the log.
+valid option and a popup tells you. Rules can also require a button to run
+first: with the real robot, for example, every other button refuses to start
+with a popup until **tables_demo_bringup** is running. Stopping is never
+refused.
 
 A loaded toolbar-button profile can expose up to three additional argument
 combo boxes beside **world_config**. Their labels and selectable options come
