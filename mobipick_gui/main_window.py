@@ -738,7 +738,7 @@ class ButtonArgumentsDialog(QDialog):
 
         root = QVBoxLayout(self)
         note = QLabel(
-            'Configure up to three optional ROS arguments. The same slot must '
+            f'Configure up to {len(GENERIC_BUTTON_ARG_SLOTS)} optional ROS arguments. The same slot must '
             'use the same name on every toolbar button. Enable a slot to append '
             'its non-empty main-window value to this button as name:=value.'
         )

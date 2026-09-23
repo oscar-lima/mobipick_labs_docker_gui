@@ -372,6 +372,9 @@ def test_button_profile_dialog_configures_args_in_popup(monkeypatch, tmp_path):
                 'arg_4_name': '',
                 'arg_4_options': [],
                 'arg_4_applies': False,
+                'arg_5_name': '',
+                'arg_5_options': [],
+                'arg_5_applies': False,
             }
 
     monkeypatch.setattr(
