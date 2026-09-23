@@ -155,6 +155,9 @@ Buttons that take a toolbar argument (a dropdown next to the toolbar, e.g.
 Select a value over the API instead of editing the profile YAML: either
 `POST /args` or `args` in the press body, which is applied before the click.
 Unknown names or values are rejected with HTTP 400 and nothing is pressed.
+Each entry's `invalid` maps options the workspace's option rules forbid right
+now (e.g. worlds the real robot cannot run in remote ROS master mode) to the
+reason; selecting one is rejected the same way.
 
 ```bash
 curl -s $GUI/args | python3 -c 'import json,sys; [print(a["name"], a["value"], a["options"], a["buttons"]) for a in json.load(sys.stdin)["args"]]'

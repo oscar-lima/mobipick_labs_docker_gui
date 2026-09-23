@@ -40,6 +40,7 @@ from PyQt5.QtGui import (
     QKeySequence,
     QPainter,
     QPixmap,
+    QStandardItemModel,
     QTextCursor,
     QTextDocument,
 )
@@ -131,6 +132,7 @@ from .display_runtime import (
 )
 from .external_links import open_external_url
 from .flow_layout import FlowLayout
+from .option_rules import load_option_rules
 from .settings_transfer import export_settings, import_settings
 
 CONTAINER_SCRIPTS_DIR = str(
@@ -276,6 +278,23 @@ def _labeled_control(label_text: str, control: QWidget) -> tuple:
     row.addWidget(control)
     container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
     return container, label
+
+
+def _mark_invalid_combo_items(
+    combo: QComboBox,
+    invalid: dict[str, str],
+) -> None:
+    """Disable the options in ``invalid`` and explain why in a tooltip."""
+    model = combo.model()
+    if not isinstance(model, QStandardItemModel):
+        return
+    for index in range(combo.count()):
+        item = model.item(index)
+        if item is None:
+            continue
+        reason = invalid.get(combo.itemText(index).strip())
+        item.setEnabled(reason is None)
+        item.setToolTip(f'Invalid: {reason}' if reason else '')
 
 
 def _configure_shrinkable_combo(
@@ -3355,6 +3374,7 @@ class MainWindow(QMainWindow):
         self._button_layout = load_button_layout(
             self._workspace_button_config_path()
         )
+        self._load_option_rules()
         self._launch_plan = load_launch_sequence_plan(
             self._workspace_button_config_path(),
             self._workspace_launch_config_path(),
@@ -5969,6 +5989,7 @@ class MainWindow(QMainWindow):
         self._button_layout = load_button_layout(
             self._workspace_button_config_path()
         )
+        self._load_option_rules()
         self._launch_plan = load_launch_sequence_plan(
             self._workspace_button_config_path(),
             self._workspace_launch_config_path(),
@@ -8051,6 +8072,9 @@ CMD ["bash"]
             if previous_value in options[slot]:
                 value_input.setCurrentIndex(options[slot].index(previous_value))
             _configure_shrinkable_combo(value_input)
+            value_input.currentIndexChanged.connect(
+                lambda _index: MainWindow._apply_option_rules(self)
+            )
             slot_controls, _slot_label = _labeled_control(
                 f'{name}:',
                 value_input,
@@ -8062,6 +8086,7 @@ CMD ["bash"]
             slot: names[slot] for slot in inputs
         }
         controls.setVisible(bool(inputs))
+        MainWindow._apply_option_rules(self)
 
     def _command_with_generic_args(self, command: str, config: dict) -> str:
         """Append configured, non-empty generic ROS arguments to a command."""
@@ -8765,6 +8790,7 @@ CMD ["bash"]
         self._remote_master_enabled_value = checked
         self.remote_master_input.setEnabled(checked)
         self._clear_remote_ros_cleanup_offer()
+        self._apply_option_rules()
         self._apply_env_to_all_tabs()
         self._update_buttons()
         if checked:
@@ -9830,6 +9856,7 @@ CMD ["bash"]
         self._selected_world = new_world
         self._console_log(2, f'Selected world: {new_world}')
         self._apply_env_to_all_tabs()
+        self._apply_option_rules()
 
     def _cleanup_script_available(self) -> bool:
         return Path(SCRIPT_CLEAN).is_file() and os.access(SCRIPT_CLEAN, os.X_OK)
@@ -12573,6 +12600,7 @@ CMD ["bash"]
         self.world_combo.blockSignals(False)
         self._selected_world = self.world_combo.currentText().strip() or self._default_world
         self._on_world_changed(self.world_combo.currentIndex())
+        self._apply_option_rules()
 
     # ---------- Sim control ----------
 
@@ -13671,12 +13699,106 @@ CMD ["bash"]
         self._button_ready_timers[key] = timer
         timer.start(delay_ms)
 
+    # -- option rules ----------------------------------------------------
+
+    def _load_option_rules(self) -> None:
+        """Load the rules file kept beside the workspace button profile."""
+        self._option_rules = load_option_rules(
+            self._resolved_button_config_path()
+        )
+        self._option_rules_reported = False
+
+    def _option_rule_combos(self) -> dict[str, QComboBox]:
+        """Dropdowns rules can name: ``world`` and each toolbar argument."""
+        combos: dict[str, QComboBox] = {}
+        world_combo = getattr(self, 'world_combo', None)
+        if world_combo is not None:
+            combos['world'] = world_combo
+        names = getattr(self, '_generic_arg_names_by_slot', {})
+        for slot, widget in getattr(self, '_generic_arg_inputs', {}).items():
+            name = str(names.get(slot) or '').strip()
+            if name:
+                combos.setdefault(name, widget)
+        return combos
+
+    def _invalid_options(self) -> dict[str, dict[str, str]]:
+        """Return ``{dropdown: {option: reason}}`` under the current state."""
+        rules = getattr(self, '_option_rules', None)
+        if rules is None or not rules.rules:
+            return {}
+        combos = MainWindow._option_rule_combos(self)
+        state: dict = {
+            name: combo.currentText().strip()
+            for name, combo in combos.items()
+        }
+        state['remote_master'] = self._remote_master_enabled()
+        choices = {
+            name: [combo.itemText(i).strip() for i in range(combo.count())]
+            for name, combo in combos.items()
+        }
+        return rules.invalid_options(state, choices)
+
+    def _apply_option_rules(self) -> None:
+        """Grey out invalid dropdown options and move off invalid choices."""
+        rules = getattr(self, '_option_rules', None)
+        if rules is None or getattr(self, '_applying_option_rules', False):
+            return
+        if not getattr(self, '_option_rules_reported', True):
+            self._option_rules_reported = True
+            for error in rules.errors:
+                self._append_log_html(
+                    '<span style="color:#ff6e6e">'
+                    + html.escape(f'option rules {rules.path}: {error}')
+                    + '</span>'
+                )
+            if rules.rules:
+                self._log_info(
+                    f'loaded {len(rules.rules)} option rule(s) '
+                    f'from {rules.path}'
+                )
+        self._applying_option_rules = True
+        try:
+            # A switch can change what another rule forbids; settle it.
+            for _attempt in range(4):
+                invalid = MainWindow._invalid_options(self)
+                switched = False
+                for name, combo in MainWindow._option_rule_combos(
+                    self
+                ).items():
+                    forbidden = invalid.get(name, {})
+                    _mark_invalid_combo_items(combo, forbidden)
+                    current = combo.currentText().strip()
+                    if current not in forbidden:
+                        continue
+                    fallback = next(
+                        (
+                            i
+                            for i in range(combo.count())
+                            if combo.itemText(i).strip() not in forbidden
+                        ),
+                        -1,
+                    )
+                    if fallback < 0:
+                        continue
+                    combo.setCurrentIndex(fallback)
+                    self._log_info(
+                        f'{name}={current} is invalid '
+                        f'({forbidden[current]}); '
+                        f'switched to {combo.itemText(fallback)}'
+                    )
+                    switched = True
+                if not switched:
+                    break
+        finally:
+            self._applying_option_rules = False
+
     # -- generic toolbar arguments (remote control) ----------------------
 
     def generic_args(self) -> list[dict]:
         """Toolbar argument dropdowns: name, current value, options, buttons they apply to."""
         inputs = getattr(self, '_generic_arg_inputs', {})
         names = getattr(self, '_generic_arg_names_by_slot', {})
+        invalid = MainWindow._invalid_options(self)
         entries: list[dict] = []
         for slot in GENERIC_BUTTON_ARG_SLOTS:
             widget = inputs.get(slot)
@@ -13689,6 +13811,7 @@ CMD ["bash"]
                     'name': name,
                     'value': widget.currentText().strip(),
                     'options': [widget.itemText(i) for i in range(widget.count())],
+                    'invalid': invalid.get(name, {}),
                     'buttons': [
                         key
                         for key, config in self._config_buttons.items()
@@ -13705,6 +13828,7 @@ CMD ["bash"]
                     'name': 'world',
                     'value': self._current_world(),
                     'options': [world_combo.itemText(i) for i in range(world_combo.count())],
+                    'invalid': invalid.get('world', {}),
                     'buttons': sorted(
                         key
                         for key, config in self._config_buttons.items()
@@ -13742,6 +13866,10 @@ CMD ["bash"]
             if text not in entry['options']:
                 raise ValueError(
                     f'{name!r} accepts {entry["options"]}, not {text!r}'
+                )
+            if text in entry['invalid']:
+                raise ValueError(
+                    f'{name}={text} is invalid: {entry["invalid"][text]}'
                 )
             if entry['slot'] == 'world':
                 combo = self.world_combo

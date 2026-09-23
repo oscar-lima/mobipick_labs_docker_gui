@@ -324,6 +324,13 @@ workspace selection is likewise retained in the workspace registry.
 The **world_config** selector chooses the Gazebo world setting passed to the
 simulation and RQt tables launch.
 
+A workspace can ship option rules beside its button profile that make some
+choices invalid in certain situations, for example allowing only
+`cic_tables` while **Use remote ROS master** is on because the real robot
+supports no other world. Invalid options are greyed out and their tooltip
+says why; when a selection becomes invalid the GUI switches to the first
+valid option and notes it in the log.
+
 A loaded toolbar-button profile can expose up to three additional argument
 combo boxes beside **world_config**. Their labels and selectable options come
 from the profile, and each button profile entry controls which values apply to
