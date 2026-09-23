@@ -128,7 +128,8 @@ def test_the_container_is_the_default_even_with_a_remote_master():
     assert spec['runs_on'] == 'container'
     assert spec['container_name'].startswith('mobipick-remote-shell-')
     assert spec.get('signal_prefix') is None     # docker exec, from the name
-    assert 'network' in logs and 'xhost' in logs
+    assert 'network' not in logs and 'xhost' in logs
+    assert spec['ensure_docker_network'] == 'mobipick'
 
 
 def test_explicit_robot_request_opens_the_shell_on_the_robot():

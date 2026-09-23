@@ -1,3 +1,4 @@
+import time
 from types import MethodType, SimpleNamespace
 
 from PyQt5.QtCore import QProcess, QProcessEnvironment
@@ -142,6 +143,9 @@ def test_exit_cleanup_cancels_background_sequence_before_deleting_process():
 
     MainWindow._cancel_background_process(window, process)
 
+    deadline = time.monotonic() + 1.0
+    while process.state() != QProcess.NotRunning and time.monotonic() < deadline:
+        app.processEvents()
     assert process.state() == QProcess.NotRunning
     assert process not in window._bg_procs
     app.processEvents()

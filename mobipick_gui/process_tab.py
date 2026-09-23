@@ -86,7 +86,7 @@ class ProcessTab:
             pass
 
     def stop_for_shutdown(self, timeout_ms: int = 1000) -> bool:
-        """Synchronously stop the process and disable GUI callbacks."""
+        """Request process stop and disable GUI callbacks without waiting."""
         self._shutting_down = True
         process_signals = (
             self.proc.readyReadStandardOutput,
@@ -103,7 +103,7 @@ class ProcessTab:
             if self.proc.state() == QProcess.NotRunning:
                 return True
             self.proc.kill()
-            return self.proc.waitForFinished(timeout_ms)
+            return True
         except RuntimeError:
             return True
 

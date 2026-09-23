@@ -14,6 +14,7 @@ def _pump(condition, timeout_s: float = 3.0) -> None:
     app.processEvents()
 
 from mobipick_gui.main_window import MainWindow
+from mobipick_gui.async_tasks import AsyncTaskRunner
 from mobipick_gui.window_control import WindowInfo
 
 
@@ -49,6 +50,7 @@ class FakeManager:
 def _make_window(monkeypatch, backend, session='wayland'):
     monkeypatch.setenv('XDG_SESSION_TYPE', session)
     window = MainWindow.__new__(MainWindow)
+    window._async_tasks = AsyncTaskRunner()
     window._window_layout_manager = FakeManager(backend)
     logs: list[tuple[int, str]] = []
     window._console_log = lambda level, msg: logs.append((level, msg))

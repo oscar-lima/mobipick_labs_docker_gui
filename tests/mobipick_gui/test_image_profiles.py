@@ -1,5 +1,6 @@
 import copy
 import os
+import time
 from pathlib import Path
 
 import yaml
@@ -35,6 +36,9 @@ def _create_window(monkeypatch, registry_path, images):
     window = MainWindow(verbosity=1)
     window.poll_timer.stop()
     window._sigint_timer.stop()
+    deadline = time.monotonic() + 1.0
+    while not window._image_choices and time.monotonic() < deadline:
+        app.processEvents()
     return app, window
 
 

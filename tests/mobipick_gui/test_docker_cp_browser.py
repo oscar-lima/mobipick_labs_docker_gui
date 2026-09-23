@@ -49,7 +49,7 @@ def test_docker_cp_running_container_path_browser_starts_at_default_path(
     assert result == '/root/catkin_ws/src/demo/config/file.rviz'
     assert seen['container_ref'] == 'container-id'
     assert seen['start_path'] == '/root/catkin_ws/src/demo/config/file.rviz'
-    assert seen['list_provider'] == window._docker_cp_list_container_paths
+    assert seen['list_provider'] == window._docker_cp_list_container_paths_async
 
 
 def test_docker_cp_image_path_browser_starts_at_root(monkeypatch):
@@ -80,7 +80,7 @@ def test_docker_cp_image_path_browser_starts_at_root(monkeypatch):
     assert result == '/root/catkin_ws/src/demo/config/file.rviz'
     assert seen['container_ref'] == '__image__:example:gpt'
     assert seen['start_path'] == '/'
-    assert seen['list_provider'] == window._docker_cp_list_container_paths
+    assert seen['list_provider'] == window._docker_cp_list_container_paths_async
 
 
 def test_docker_cp_container_listing_parses_portable_shell_output(monkeypatch):

@@ -103,7 +103,9 @@ def _launch_harness(events: list) -> SimpleNamespace:
         _ensure_tab=lambda key, label, closable=False: tab,
         _confirm_workspace_mismatch_warning=lambda _label: True,
         _log_info=lambda message: events.append(('log', message)),
-        _claim_xhost=lambda *_args, **_kwargs: None,
+        _claim_xhost=lambda *_args, **kwargs: kwargs.get(
+            'on_finished', lambda: None
+        )(),
         _rqt_tables_command=lambda: 'roslaunch rqt_tables_demo demo.launch',
         _rviz_command=lambda: 'rosrun rviz rviz',
         _compose_env_args=lambda **kwargs: events.append(
@@ -172,9 +174,12 @@ def _config_command_harness(events: list) -> SimpleNamespace:
         _sh_quote=MainWindow._sh_quote,
         _neutralize_compose_ignore=MainWindow._neutralize_compose_ignore,
         _config_runs_on_host=MainWindow._config_runs_on_host,
-        _claim_xhost=lambda *_args, **_kwargs: None,
-        _ensure_network=lambda log_key='log': events.append(
-            ('network', log_key)
+        _claim_xhost=lambda *_args, **kwargs: kwargs.get(
+            'on_finished', lambda: None
+        )(),
+        _ensure_network=lambda log_key='log', on_finished=None: (
+            events.append(('network', log_key)),
+            on_finished() if on_finished else None,
         ),
         _configured_command_service=lambda _config: 'mobipick_cmd',
         _wrap_line_buffered=lambda command: command,
@@ -247,7 +252,9 @@ def test_sim_launch_keeps_alias_and_lends_rqt_identity_to_helper_panels():
         _current_world=lambda: 'moelk_tables',
         _log_info=lambda message: events.append(('log', message)),
         _ensure_tab=lambda key, label, closable=False: FakeTab(),
-        _claim_xhost=lambda *_args, **_kwargs: None,
+        _claim_xhost=lambda *_args, **kwargs: kwargs.get(
+            'on_finished', lambda: None
+        )(),
         _compose_env_args=lambda **kwargs: events.append(
             ('compose_env', kwargs)
         ) or ['--env', 'DISPLAY=:0'],

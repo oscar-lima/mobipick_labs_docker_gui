@@ -107,7 +107,9 @@ class ImageSetupWizard(PersistentWindowStateMixin, QWizard):
         install_source_default: bool = False,
         image_blacklist: Iterable[str] = (),
         host_dependencies: Iterable[HostDependency] = (),
-        host_dependency_refresher: Callable[[], Iterable[HostDependency]] | None = None,
+        host_dependency_refresher: Callable[
+            [], Iterable[HostDependency] | None
+        ] | None = None,
         host_dependency_report_handler: Callable[[str], None] | None = None,
         simulation_test_start_handler: Callable[[], bool] | None = None,
         simulation_test_stop_handler: Callable[[], None] | None = None,
@@ -929,10 +931,34 @@ class ImageSetupWizard(PersistentWindowStateMixin, QWizard):
 
     def _mark_selected_dependencies_done(self) -> None:
         if self._host_dependency_refresher is not None:
-            refreshed = {
-                dep.key: dep
-                for dep in self._host_dependency_refresher()
-            }
+            result = self._host_dependency_refresher()
+            if result is None:
+                self.dependency_done_button.setEnabled(False)
+                self.dependency_done_button.setText('Checking...')
+                return
+            self.apply_host_dependencies(result)
+            self._finish_dependency_check()
+            return
+
+        for dep in self._selected_host_dependencies():
+            checkbox = self._dependency_checkboxes.get(dep.key)
+            label = self._dependency_status_labels.get(dep.key)
+            dep.installed = True
+            if checkbox is not None:
+                checkbox.setChecked(False)
+            if label is not None:
+                label.setText(f'done: {dep.reason}')
+        self._update_dependency_command()
+        self._finish_dependency_check()
+
+    def apply_host_dependencies(
+        self, dependencies: Iterable[HostDependency]
+    ) -> None:
+        """Apply an asynchronously refreshed dependency result."""
+        refreshed = {dep.key: dep for dep in dependencies}
+        self.dependency_done_button.setEnabled(True)
+        self.dependency_done_button.setText('Run Checks')
+        if refreshed:
             for dep in self._host_dependencies:
                 fresh = refreshed.get(dep.key)
                 if fresh is None:
@@ -952,20 +978,7 @@ class ImageSetupWizard(PersistentWindowStateMixin, QWizard):
                     checkbox.setChecked(not dep.installed)
                 if label is not None:
                     label.setText(self._dependency_status_text(dep))
-            self._update_dependency_command()
-            self._finish_dependency_check()
-            return
-
-        for dep in self._selected_host_dependencies():
-            checkbox = self._dependency_checkboxes.get(dep.key)
-            label = self._dependency_status_labels.get(dep.key)
-            dep.installed = True
-            if checkbox is not None:
-                checkbox.setChecked(False)
-            if label is not None:
-                label.setText(f'done: {dep.reason}')
         self._update_dependency_command()
-        self._finish_dependency_check()
 
     def _finish_dependency_check(self) -> None:
         failures = [dep for dep in self._host_dependencies if not dep.installed]

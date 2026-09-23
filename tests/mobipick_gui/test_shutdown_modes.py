@@ -58,7 +58,10 @@ def test_fast_remote_stop_offers_manual_ros_cleanup():
         _shutdown_grace=lambda: 0.0,
         _fast_stop_enabled=lambda: True,
         _remote_master_enabled=lambda: True,
-        _collect_container_commands=lambda *args, **kwargs: (
+        _resolve_container_ids_async=lambda **kwargs: kwargs['on_finished'](
+            ['container-id']
+        ),
+        _container_commands_for_ids=lambda *args, **kwargs: (
             calls.append(('collect', args, kwargs)) or [['stop']]
         ),
         _append_gui_html=lambda *args: calls.append(('html', args)),
@@ -94,7 +97,10 @@ def test_slow_remote_stop_keeps_grace_and_does_not_offer_cleanup():
         _shutdown_grace=lambda: 20.0,
         _fast_stop_enabled=lambda: False,
         _remote_master_enabled=lambda: True,
-        _collect_container_commands=lambda *args, **kwargs: (
+        _resolve_container_ids_async=lambda **kwargs: kwargs['on_finished'](
+            ['container-id']
+        ),
+        _container_commands_for_ids=lambda *args, **kwargs: (
             calls.append(kwargs) or [['stop']]
         ),
         _append_gui_html=lambda *args: None,
@@ -111,7 +117,7 @@ def test_slow_remote_stop_keeps_grace_and_does_not_offer_cleanup():
 
     harness._graceful_stop_container('rviz-container')
 
-    assert calls == [{'exec_id': None, 'log_key': 'log', 'grace_s': 20.0}]
+    assert calls == [{'grace_s': 20.0, 'include_int': True}]
 
 
 def test_remote_ros_cleanup_runs_in_remote_tool_service(monkeypatch):
@@ -121,7 +127,10 @@ def test_remote_ros_cleanup_runs_in_remote_tool_service(monkeypatch):
         clean_stale_ros_nodes_button=button,
         _remote_ros_cleanup_pending=True,
         _remote_master_enabled=lambda: True,
-        _ensure_network=lambda **kwargs: calls.append(('network', kwargs)),
+        _ensure_network=lambda **kwargs: (
+            calls.append(('network', kwargs)),
+            kwargs['on_finished'](),
+        ),
         _compose_env_args=lambda **kwargs: ['--env', 'ROS_MASTER_URI=robot'],
         _ros_tool_service=lambda: 'mobipick_remote_cmd',
         _wrap_line_buffered=lambda command: command,

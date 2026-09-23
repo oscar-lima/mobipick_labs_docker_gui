@@ -109,6 +109,12 @@ for b in json.load(sys.stdin)["buttons"]:
 - `curl -s $GUI/status` adds `roscore_running`, `sim_running`,
   `auto_launch_running`, active workspace, image, world, and `dialog`.
 
+The status, button-list, tab-list, presence, and event endpoints do not wait
+for the GUI thread. They keep answering from a recent state snapshot while a
+Docker start/stop is slow or hung. An endpoint that must operate a widget
+instead returns an explicit error promptly if Qt cannot accept the action;
+report that error instead of silently retrying it in a tight loop.
+
 `curl -s $GUI/tabs` lists all log tabs with `running`; keys usually match
 button keys (`roscore`, `sim`, `rviz`, `rqt`, `tables`, custom keys,
 `log` for the GUI's own log, `customN`, `terminalN`, `terminal-remoteN`).

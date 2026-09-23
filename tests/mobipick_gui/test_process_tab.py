@@ -1,5 +1,6 @@
 import codecs
 import sys
+import time
 
 from PyQt5.QtCore import QProcess, QProcessEnvironment
 from PyQt5.QtWidgets import QApplication, QMainWindow
@@ -102,6 +103,10 @@ def test_stop_for_shutdown_reaps_process_and_disables_callbacks():
     assert tab.proc.waitForStarted(1000)
 
     assert tab.stop_for_shutdown()
+    deadline = time.monotonic() + 2
+    while tab.proc.state() != QProcess.NotRunning and time.monotonic() < deadline:
+        app.processEvents()
+        time.sleep(0.01)
     assert tab.proc.state() == QProcess.NotRunning
 
     app.processEvents()

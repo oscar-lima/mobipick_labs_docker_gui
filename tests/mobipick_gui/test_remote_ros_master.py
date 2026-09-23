@@ -175,6 +175,10 @@ def test_docker_cp_setup_containers_include_workspace_matched_docker_ps(
             )
         ),
     )
+    window._docker_container_records_cache = [
+        {'id': 'abc123', 'image': 'repo/matched:tag', 'name': 'matched-container'},
+        {'id': 'def456', 'image': 'repo/other:tag', 'name': 'other-container'},
+    ]
 
     options = window._docker_cp_setup_container_options()
 
@@ -207,6 +211,9 @@ def test_docker_cp_setup_containers_include_workspace_match_image(
             stdout='def456\trepo/other:tag\tother-container\n'
         ),
     )
+    window._docker_container_records_cache = [
+        {'id': 'def456', 'image': 'repo/other:tag', 'name': 'other-container'},
+    ]
 
     options = window._docker_cp_setup_container_options()
 
@@ -243,6 +250,7 @@ def test_docker_cp_setup_container_options_use_requested_workspace(
         'run',
         lambda *args, **kwargs: SimpleNamespace(stdout=''),
     )
+    window._docker_container_records_cache = []
 
     options = window._docker_cp_setup_container_options('gpt_ws')
 
@@ -290,6 +298,14 @@ def test_docker_cp_setup_container_options_skip_blacklisted_images(
             )
         ),
     )
+    window._docker_container_records_cache = [
+        {'id': 'abc123', 'image': 'repo/gpt:tag', 'name': 'matched-container'},
+        {
+            'id': 'def456',
+            'image': 'docker.n8n.io/n8nio/n8n:latest',
+            'name': 'n8n',
+        },
+    ]
 
     options = window._docker_cp_setup_container_options('gpt_ws')
 
@@ -431,7 +447,18 @@ def test_rviz_uses_remote_service_without_starting_local_roscore(
     started = {}
     rviz_tab = window.tasks['rviz']
 
-    monkeypatch.setattr(window, '_claim_xhost', lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        window,
+        '_claim_xhost',
+        lambda *args, **kwargs: kwargs.get('on_finished', lambda: None)(),
+    )
+    monkeypatch.setattr(
+        window,
+        '_ensure_network',
+        lambda log_key='log', on_finished=None: (
+            on_finished() if on_finished else None
+        ),
+    )
     monkeypatch.setattr(
         window,
         '_confirm_workspace_mismatch_warning',
@@ -508,7 +535,10 @@ def test_container_commands_create_the_network_without_a_local_roscore():
     created = []
     harness = SimpleNamespace(
         _remote_master_enabled=lambda: True,
-        _ensure_network=lambda log_key='log': created.append(log_key),
+        _ensure_network=lambda log_key='log', on_finished=None: (
+            created.append(log_key),
+            on_finished() if on_finished else None,
+        ),
     )
     harness._ensure_roscore_ready = MethodType(
         MainWindow._ensure_roscore_ready,

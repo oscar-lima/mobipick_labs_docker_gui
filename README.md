@@ -731,11 +731,18 @@ Anyone who can reach the port can run commands inside the containers, so set
 `Authorization: Bearer <token>` (or `?token=`).
 
 Implementation lives in `mobipick_gui/remote_control.py` (server, event bus,
-shell sessions), `mobipick_gui/remote_adapter.py` (the bridge that touches
-`MainWindow`; every call is marshalled onto the Qt thread through
-`GuiInvoker`), and `mobipick_gui/remote_client.py` (the
+shell sessions), `mobipick_gui/remote_adapter.py` (the `MainWindow` bridge and
+its thread-safe status snapshot), and `mobipick_gui/remote_client.py` (the
 `mobipick-labs-docker-gui-remote` CLI, standard library only). Configuration
 keys are documented in `config/gui_settings.yaml` under `remote_control`.
+
+Docker, host subprocess, network discovery, and window-manager commands never
+run on the Qt event thread. Their results return through Qt signals, so a slow
+or unreachable Docker daemon leaves an operation pending without freezing the
+window. `GET /status`, `GET /buttons`, and `GET /tabs` read the last published
+snapshot directly on HTTP worker threads, as do presence and event requests.
+Endpoints that must inspect or change widgets are marshalled to Qt and return
+a clear 504 error after one second if Qt cannot service the action.
 
 ### Endpoints
 

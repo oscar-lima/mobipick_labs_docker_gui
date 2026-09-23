@@ -403,7 +403,7 @@ CONFIG_DEFAULTS: Dict[str, Dict] = {
         'host': '0.0.0.0',
         'port': 8765,
         'token': '',
-        'gui_timeout_s': 10,
+        'gui_timeout_s': 1,
         'shell_max_lines': 20000,
         'shell_start_timeout_s': 180,
         'default_exec_timeout_s': 60,

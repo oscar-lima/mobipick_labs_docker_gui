@@ -1,6 +1,7 @@
 from pathlib import Path
 from types import MethodType, SimpleNamespace
 
+import pytest
 from PyQt5.QtCore import QProcess
 from PyQt5.QtWidgets import QApplication, QHeaderView, QWidget
 
@@ -17,7 +18,7 @@ def test_auto_launch_progress_counts_down_and_hides_after_ready(monkeypatch):
     monkeypatch.delenv('ROBOT_RACE', raising=False)
     app = QApplication.instance() or QApplication([])
     now = {'ns': 0}
-    progress = AutoLaunchProgressWindow()
+    progress = AutoLaunchProgressWindow(robot_race_enabled=False)
     progress._clock = lambda: now['ns']
 
     progress.start_countdown(5.7)
@@ -45,7 +46,7 @@ def test_auto_launch_progress_shows_each_process_timeline(monkeypatch):
     monkeypatch.delenv('ROBOT_RACE', raising=False)
     app = QApplication.instance() or QApplication([])
     now = {'ns': 0}
-    progress = AutoLaunchProgressWindow()
+    progress = AutoLaunchProgressWindow(robot_race_enabled=False)
     progress._clock = lambda: now['ns']
 
     progress.start_countdown(
@@ -284,11 +285,15 @@ def test_auto_launch_adds_saved_window_layout_to_progress():
 
 def test_auto_launch_progress_centers_on_parent():
     app = QApplication.instance() or QApplication([])
+    if app.platformName() in {'offscreen', 'minimal'}:
+        pytest.skip('headless Qt plugins do not implement window placement')
     parent = QWidget()
     parent.setGeometry(100, 120, 900, 600)
     parent.show()
     app.processEvents()
-    progress = AutoLaunchProgressWindow(parent)
+    progress = AutoLaunchProgressWindow(
+        parent, robot_race_enabled=False
+    )
 
     progress.start_countdown(10)
     app.processEvents()
@@ -798,7 +803,14 @@ def test_host_config_command_does_not_start_roscore():
         _guard_toggle_action=lambda key, button: True,
         _ensure_tab=lambda key, label, closable=False: FakeTab(),
         _current_master_uri=lambda: '',
-        _host_ros_environment=lambda: {},
+        _remote_master_enabled=lambda: False,
+        is_roscore_running=lambda: False,
+        _host_ros_environment=lambda **_kwargs: {},
+        _async_tasks=SimpleNamespace(
+            submit=lambda function, on_result=None, on_error=None: on_result(
+                function()
+            )
+        ),
         _log_info=lambda message: events.append(('log', message)),
         _neutralize_compose_ignore=MainWindow._neutralize_compose_ignore,
         _config_runs_on_host=MainWindow._config_runs_on_host,
@@ -911,7 +923,14 @@ def test_host_config_command_receives_local_roscore_environment():
         _guard_toggle_action=lambda key, button: True,
         _ensure_tab=lambda key, label, closable=False: FakeTab(),
         _current_master_uri=lambda: 'http://mobipick-roscore:11311',
-        _host_ros_environment=lambda: ros_env,
+        _remote_master_enabled=lambda: False,
+        is_roscore_running=lambda: True,
+        _host_ros_environment=lambda **_kwargs: ros_env,
+        _async_tasks=SimpleNamespace(
+            submit=lambda function, on_result=None, on_error=None: on_result(
+                function()
+            )
+        ),
         _log_info=lambda message: events.append(('log', message)),
         _neutralize_compose_ignore=MainWindow._neutralize_compose_ignore,
         _sh_quote=MainWindow._sh_quote,
