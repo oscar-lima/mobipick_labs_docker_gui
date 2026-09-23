@@ -604,6 +604,12 @@ the **Install Source** tab.
   command line options, or the `MOBIPICK_GUI_REMOTE_*` environment variables.
 - **Show Remote Control Info** displays the listening address, whether a token
   is required, and how many remote shells are open.
+- Slow or unavailable Docker operations remain pending without freezing the
+  window. The toolbar, repainting, and remote presence/events remain usable.
+  Remote `GET /status`, `GET /buttons`, and `GET /tabs` calls use the most
+  recent GUI snapshot and therefore keep answering even while Docker is hung.
+  Requests that must touch a widget fail explicitly if the GUI cannot service
+  them promptly.
 - While the API is enabled the window icon glows: **light blue** when idle,
   **green** while a remote client has announced that it is working (`POST
   /presence`, `mobipick-labs-docker-gui-remote hello <name>`), and pulsing

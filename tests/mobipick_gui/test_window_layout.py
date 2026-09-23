@@ -112,7 +112,10 @@ def test_select_backend_falls_back_to_wmctrl_when_extension_missing(monkeypatch)
     monkeypatch.setattr(window_control.shutil, 'which', lambda name: f'/usr/bin/{name}')
     monkeypatch.setattr(subprocess, 'run', fake_run)
     backend = select_backend(environ=WAYLAND_ENV)
-    assert isinstance(backend, X11WindowBackend)
+    assert isinstance(backend, GnomeWaylandWindowBackend)
+    backend._probe_thread.join(timeout=1)
+    assert backend._extension_available is False
+    assert isinstance(backend._fallback, X11WindowBackend)
 
 
 def test_wayland_without_any_tool_reports_extension_install_hint(monkeypatch):
@@ -307,7 +310,8 @@ def test_wmctrl_fallback_on_wayland_explains_empty_capture(monkeypatch, tmp_path
     manager = WindowLayoutManager(
         tmp_path / 'layout.yaml', environ=WAYLAND_ENV, log_warning=warnings.append
     )
-    assert manager.backend_name == 'wmctrl'
+    manager.backend._probe_thread.join(timeout=1)
+    assert manager.backend_name == 'gnome-shell extension'
     assert warnings == []  # nothing logged at construction time
     assert manager.capture_layout() is None
     assert len(warnings) == 1

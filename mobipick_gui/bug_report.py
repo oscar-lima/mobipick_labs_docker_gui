@@ -164,7 +164,6 @@ def _runtime_private_names() -> tuple[set[str], set[str]]:
     }
     try:
         hosts.add(socket.gethostname())
-        hosts.add(socket.getfqdn())
     except OSError:
         pass
 

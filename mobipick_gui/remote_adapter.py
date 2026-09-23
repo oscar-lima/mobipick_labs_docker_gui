@@ -1,11 +1,13 @@
 """Bridge between :class:`RemoteControlServer` and :class:`MainWindow`.
 
-Every method here runs on the Qt GUI thread; the server marshals calls
-through :class:`mobipick_gui.remote_control.GuiInvoker`.
+Widget actions run through :class:`~mobipick_gui.remote_control.GuiInvoker`.
+Read-only status, button, and tab inventories are snapshots that HTTP worker
+threads can read without depending on the Qt event thread.
 """
 from __future__ import annotations
 
 import html
+import threading
 import uuid
 from typing import TYPE_CHECKING
 
@@ -32,10 +34,16 @@ class MainWindowRemoteAdapter(GuiAdapter):
 
     def __init__(self, window: 'MainWindow'):
         self.window = window
+        self._snapshot_lock = threading.Lock()
+        self._snapshot: dict = {}
+        # Lightweight harnesses and shell-only adapters do not necessarily
+        # provide widgets. A real MainWindow publishes immediately.
+        if hasattr(window, '_button_widgets') and hasattr(window, 'tasks'):
+            self.publish_snapshot()
 
     # -- status --------------------------------------------------------
 
-    def status(self) -> dict:
+    def _status_from_gui(self) -> dict:
         window = self.window
         registry = getattr(window, '_workspace_registry', None)
         return {
@@ -57,6 +65,25 @@ class MainWindowRemoteAdapter(GuiAdapter):
             'tabs': self.tabs(),
             'dialog': self.active_dialog(),
         }
+
+    def publish_snapshot(self) -> None:
+        """Publish widget-derived state for HTTP threads to read safely."""
+        snapshot = self._status_from_gui()
+        with self._snapshot_lock:
+            self._snapshot = snapshot
+
+    def status(self) -> dict:
+        """Return the latest GUI snapshot without accessing Qt objects."""
+        with self._snapshot_lock:
+            return dict(self._snapshot)
+
+    def cached_buttons(self) -> list[dict]:
+        with self._snapshot_lock:
+            return [dict(entry) for entry in self._snapshot.get('buttons', [])]
+
+    def cached_tabs(self) -> list[dict]:
+        with self._snapshot_lock:
+            return [dict(entry) for entry in self._snapshot.get('tabs', [])]
 
     def shell_targets(self) -> dict:
         """Describe where ``POST /shell`` can open a session, and where by default."""
@@ -117,7 +144,7 @@ class MainWindowRemoteAdapter(GuiAdapter):
 
     def _button_widget(self, key: str) -> QPushButton | None:
         window = self.window
-        widget = window._button_widgets.get(key)
+        widget = getattr(window, '_button_widgets', {}).get(key)
         if widget is None:
             widget = getattr(window, f'{key}_button', None)
         return widget if isinstance(widget, QPushButton) else None
@@ -125,10 +152,15 @@ class MainWindowRemoteAdapter(GuiAdapter):
     def _button_keys(self) -> list[str]:
         window = self.window
         keys: list[str] = []
-        for key in ('roscore', *window._config_button_order, 'terminal', 'auto_launch'):
+        for key in (
+            'roscore',
+            *getattr(window, '_config_button_order', []),
+            'terminal',
+            'auto_launch',
+        ):
             if key not in keys:
                 keys.append(key)
-        for key in window._button_widgets:
+        for key in getattr(window, '_button_widgets', {}):
             if key not in keys:
                 keys.append(key)
         return keys
@@ -445,7 +477,6 @@ class MainWindowRemoteAdapter(GuiAdapter):
             )
         if robot:
             return self.robot_shell_spec(session_id, label)
-        window._ensure_network(log_key='log')
         exec_id = uuid.uuid4().hex
         container_name = f'mobipick-remote-shell-{exec_id[:10]}'
         tab_key = f'{REMOTE_SHELL_TAB_PREFIX}{session_id}'
@@ -487,6 +518,7 @@ class MainWindowRemoteAdapter(GuiAdapter):
         window._log_info(f'remote control: opening shell {session_id} ({container_name})')
         return {
             'argv': argv,
+            'ensure_docker_network': 'mobipick',
             'env': env,
             'cwd': str(window._project_root),
             'container_name': container_name,

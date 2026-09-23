@@ -1,5 +1,6 @@
 import copy
 import os
+import time
 from unittest.mock import MagicMock
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
@@ -11,6 +12,12 @@ from mobipick_gui.config import CONFIG
 import mobipick_gui.main_window as main_window_module
 from mobipick_gui.main_window import MainWindow
 from mobipick_gui.workspaces import RosWorkspace, WorkspaceRegistry
+
+
+def _wait_for_images(app, window):
+    deadline = time.monotonic() + 1.0
+    while not window._image_choices and time.monotonic() < deadline:
+        app.processEvents()
 
 
 def test_workspace_manager_opens_detached_from_main_window(monkeypatch):
@@ -179,6 +186,7 @@ buttons:
     window = MainWindow(verbosity=1)
     window.poll_timer.stop()
     window._sigint_timer.stop()
+    _wait_for_images(app, window)
     stale_output = window._ensure_tab(
         'custom-stale',
         'Custom Stale',
@@ -273,6 +281,7 @@ def test_workspace_switch_reloads_workspace_window_layout(tmp_path, monkeypatch)
     window = MainWindow(verbosity=1)
     window.poll_timer.stop()
     window._sigint_timer.stop()
+    _wait_for_images(app, window)
 
     assert window._window_layout_path == layout_dir / 'gpt_ws.yaml'
     assert window._window_layout_manager._layout['windows'][0]['title'] == 'GPT'
@@ -364,6 +373,7 @@ def test_workspace_switch_selects_first_matching_image(tmp_path, monkeypatch):
     window = MainWindow(verbosity=1)
     window.poll_timer.stop()
     window._sigint_timer.stop()
+    _wait_for_images(app, window)
 
     assert window._selected_image == 'example/mobipick:gpt'
 

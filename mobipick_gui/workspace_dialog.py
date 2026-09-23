@@ -2,13 +2,12 @@
 from __future__ import annotations
 
 import shutil
-import subprocess
 import tempfile
 from pathlib import Path
 from typing import Callable
 
 import yaml
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import QProcess, Qt, pyqtSignal
 from PyQt5.QtGui import QPixmap
 from PyQt5.QtWidgets import (
     QComboBox,
@@ -751,23 +750,33 @@ class WorkspaceManagerDialog(QDialog):
             dot_path = temp_dir / 'workspaces.dot'
             png_path = temp_dir / 'workspaces.png'
             dot_path.write_text(dot, encoding='utf-8')
-            result = subprocess.run(
-                [dot_binary, '-Tpng', str(dot_path), '-o', str(png_path)],
-                capture_output=True,
-                text=True,
-                check=False,
+            status = QLabel('Rendering workspace graph...')
+            layout.addWidget(status)
+            process = QProcess(dialog)
+            process.setProcessChannelMode(QProcess.MergedChannels)
+
+            def finished(code: int, _exit_status) -> None:
+                output = bytes(process.readAll()).decode(
+                    'utf-8', errors='replace'
+                )
+                if code == 0 and png_path.is_file():
+                    label = QLabel()
+                    label.setPixmap(QPixmap(str(png_path)))
+                    label.setAlignment(Qt.AlignCenter)
+                    scroll = QScrollArea()
+                    scroll.setWidget(label)
+                    scroll.setWidgetResizable(True)
+                    layout.replaceWidget(status, scroll)
+                    status.deleteLater()
+                else:
+                    status.setText(output or 'Graphviz failed.')
+                shutil.rmtree(temp_dir, ignore_errors=True)
+
+            process.finished.connect(finished)
+            process.start(
+                dot_binary,
+                ['-Tpng', str(dot_path), '-o', str(png_path)],
             )
-            if result.returncode == 0 and png_path.is_file():
-                label = QLabel()
-                label.setPixmap(QPixmap(str(png_path)))
-                label.setAlignment(Qt.AlignCenter)
-                scroll = QScrollArea()
-                scroll.setWidget(label)
-                scroll.setWidgetResizable(True)
-                layout.addWidget(scroll)
-            else:
-                layout.addWidget(QLabel(result.stderr or 'Graphviz failed.'))
-            shutil.rmtree(temp_dir, ignore_errors=True)
         else:
             message = QLabel(
                 'Graphviz "dot" was not found. Install the graphviz package.\n\n'

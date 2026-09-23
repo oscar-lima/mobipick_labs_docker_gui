@@ -1,5 +1,7 @@
 import copy
 import os
+import time
+from types import SimpleNamespace
 
 os.environ['QT_QPA_PLATFORM'] = 'offscreen'
 
@@ -16,6 +18,12 @@ from mobipick_gui.setup_wizard import (
     SetupWizardSelection,
 )
 from mobipick_gui.workspaces import RosWorkspace, WorkspaceRegistry
+
+
+def _process_until(app, predicate, timeout=1.0):
+    deadline = time.monotonic() + timeout
+    while not predicate() and time.monotonic() < deadline:
+        app.processEvents()
 
 
 def test_wizard_parses_newline_and_comma_image_lists():
@@ -777,7 +785,11 @@ def test_setup_simulation_test_disables_host_workspace_and_uses_root(
         },
     )
     monkeypatch.setattr(window, '_ensure_network', lambda **_kwargs: True)
-    monkeypatch.setattr(window, '_claim_xhost', lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        window,
+        '_claim_xhost',
+        lambda *_args, **kwargs: kwargs.get('on_finished', lambda: None)(),
+    )
     monkeypatch.setattr(window, '_release_xhost', lambda *_args, **_kwargs: None)
     monkeypatch.setattr(window, '_wrap_line_buffered', lambda command: command)
 
@@ -994,6 +1006,10 @@ def test_setup_wizard_persists_custom_image_profile(
 
     window._apply_setup_wizard(selection)
 
+    deadline = time.monotonic() + 1.0
+    while 'pulls' not in started and time.monotonic() < deadline:
+        app.processEvents()
+
     updates = saved['updates']
     assert updates['setup_wizard']['completed'] is True
     assert updates['images']['default'] == 'ozkrelo/x_mobipick_labs:noetic-v1.1'
@@ -1167,6 +1183,11 @@ def test_image_blacklist_dialog_saves_patterns(monkeypatch):
         return ([{'ref': 'ozkrelo/x_mobipick_labs:gpt'}], None)
 
     window._discover_filtered_image_records = discover_images
+    window._async_tasks = SimpleNamespace(
+        submit=lambda function, on_result=None, on_error=None: on_result(
+            function()
+        )
+    )
     saved = {}
 
     class AcceptedDialog:
@@ -1257,7 +1278,13 @@ def test_source_workspace_install_registers_workspace_and_streams_in_color(
         'update_sim_status_from_poll',
         lambda self, force=False: None,
     )
-    monkeypatch.setattr(MainWindow, '_ensure_network', lambda self, log_key=None: None)
+    monkeypatch.setattr(
+        MainWindow,
+        '_ensure_network',
+        lambda self, log_key=None, on_finished=None: (
+            on_finished() if on_finished else None
+        ),
+    )
 
     captured = {}
 
@@ -1340,6 +1367,7 @@ def test_setup_wizard_does_not_auto_open_when_images_are_available(
     window.poll_timer.stop()
     window._sigint_timer.stop()
     monkeypatch.setenv('QT_QPA_PLATFORM', 'xcb')
+    _process_until(app, lambda: bool(window._image_choices))
 
     assert window._image_choices == ['ozkrelo/x_mobipick_labs:noetic-v1.1']
     assert not window._should_auto_show_setup_wizard()
@@ -1380,6 +1408,7 @@ def test_setup_wizard_does_not_auto_open_for_optional_dependency(
     window.poll_timer.stop()
     window._sigint_timer.stop()
     monkeypatch.setenv('QT_QPA_PLATFORM', 'xcb')
+    _process_until(app, lambda: bool(window._image_choices))
 
     assert not window._should_auto_show_setup_wizard()
 
@@ -1411,6 +1440,7 @@ def test_setup_wizard_auto_opens_without_images_even_when_completed(
     window = MainWindow(verbosity=1)
     window.poll_timer.stop()
     window._sigint_timer.stop()
+    _process_until(app, lambda: bool(window._image_choices))
     monkeypatch.setenv('QT_QPA_PLATFORM', 'xcb')
     window._image_choices = []
 
@@ -1553,6 +1583,7 @@ def test_missing_default_image_silently_uses_available_image(
     window._images_cfg['default'] = 'ozkrelo/mobipick_labs:noetic'
 
     window._load_available_images(show_feedback=False)
+    _process_until(app, lambda: not window._image_load_pending)
 
     assert window._image_choices == ['ozkrelo/x_mobipick_labs:noetic-v1.1']
     assert window._selected_image == 'ozkrelo/x_mobipick_labs:noetic-v1.1'
@@ -1600,7 +1631,15 @@ def test_optional_dependency_warning_describes_disabled_functionality(
     )
 
     window._log_optional_dependency_warnings()
+    _process_until(
+        app,
+        lambda: any('Optional host dependencies' in item[1] for item in messages),
+    )
 
+    messages = [
+        entry for entry in messages
+        if 'Optional host dependencies' in entry[1]
+    ]
     assert len(messages) == 1
     assert (
         'Auto Launch screen recording will not be available'

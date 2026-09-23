@@ -353,19 +353,47 @@ class GnomeWaylandWindowBackend:
         log_info: LogFn | None = None,
         log_warning: LogFn | None = None,
         probe: bool = True,
+        fallback=None,
     ):
         self._gdbus_bin = gdbus_bin
         self._log_info = log_info or (lambda _msg: None)
         self._log_warning = log_warning or (lambda _msg: None)
         self._gdbus_available = bool(shutil.which(gdbus_bin))
         self._extension_available = False
+        self._fallback = fallback
+        self._probe_thread: threading.Thread | None = None
         self.hint: str = ''
         if probe and self._gdbus_available:
             self._extension_available = self._call('Version') is not None
 
+    def start_probe(self) -> None:
+        """Probe the Shell extension without blocking the caller."""
+        if not self._gdbus_available or self._probe_thread is not None:
+            return
+        self._probe_thread = threading.Thread(
+            target=self._probe_extension,
+            name='mobipick-window-backend-probe',
+            daemon=True,
+        )
+        self._probe_thread.start()
+
+    def _probe_extension(self) -> None:
+        self._extension_available = self._call('Version') is not None
+        if self._extension_available:
+            self.hint = ''
+        else:
+            self.hint = (
+                'wmctrl only sees XWayland windows. Install the native '
+                'Wayland helper with '
+                f'{GNOME_EXTENSION_INSTALL_COMMAND} and then log out and in.'
+            )
+
     @property
     def available(self) -> bool:
-        return self._gdbus_available and self._extension_available
+        return bool(
+            (self._gdbus_available and self._extension_available)
+            or (self._fallback is not None and self._fallback.available)
+        )
 
     def missing_tools(self) -> list[str]:
         missing = []
@@ -384,6 +412,11 @@ class GnomeWaylandWindowBackend:
         include_classes: bool = False,
         include_stack: bool = False,
     ) -> list[WindowInfo]:
+        if not self._extension_available and self._fallback is not None:
+            return self._fallback.list_windows(
+                include_classes=include_classes,
+                include_stack=include_stack,
+            )
         result = self._call('ListWindows')
         if not result:
             return []
@@ -417,30 +450,47 @@ class GnomeWaylandWindowBackend:
         return windows
 
     def move_resize(self, wid: str, x: int, y: int, width: int, height: int) -> None:
+        if not self._extension_available and self._fallback is not None:
+            self._fallback.move_resize(wid, x, y, width, height)
+            return
         self._call('MoveResize', str(wid), int(x), int(y), int(width), int(height))
 
     def unmaximize(self, wid: str) -> bool:
         """Leave maximized state before applying saved geometry."""
+        if not self._extension_available and self._fallback is not None:
+            return self._fallback.unmaximize(wid)
         result = self._call('Unmaximize', str(wid))
         return bool(result and result[0])
 
     def set_desktop(self, wid: str, desktop: int) -> None:
+        if not self._extension_available and self._fallback is not None:
+            self._fallback.set_desktop(wid, desktop)
+            return
         self._call('SetWorkspace', str(wid), int(desktop))
 
     def restack(self, wids: list[str]) -> None:
+        if not self._extension_available and self._fallback is not None:
+            self._fallback.restack(wids)
+            return
         for wid in wids:
             self._call('Activate', str(wid))
 
     def activate(self, wid: str) -> bool:
+        if not self._extension_available and self._fallback is not None:
+            return self._fallback.activate(wid)
         result = self._call('Activate', str(wid))
         return bool(result and result[0])
 
     def clear_attention(self, wid: str) -> bool:
         """Remove Mutter's attention state from a managed window."""
+        if not self._extension_available and self._fallback is not None:
+            return self._fallback.clear_attention(wid)
         result = self._call('ClearAttention', str(wid))
         return bool(result and result[0])
 
     def set_above(self, wid: str, above: bool = True) -> bool:
+        if not self._extension_available and self._fallback is not None:
+            return self._fallback.set_above(wid, above)
         result = self._call('SetAbove', str(wid), bool(above))
         return bool(result and result[0])
 
@@ -599,12 +649,21 @@ class GnomeAppGlow:
         self._sent: tuple[float, str] | None = None
         self._cond = threading.Condition()
         self._thread: threading.Thread | None = None
+        self._probe_thread: threading.Thread | None = None
         self._stopping = False
         if probe and is_gnome_session(environ) and shutil.which(gdbus_bin):
-            version = self._call('Version')
-            self._available = bool(
-                version and int(version[0]) >= GNOME_APP_GLOW_PROTOCOL_VERSION
+            self._probe_thread = threading.Thread(
+                target=self._probe,
+                name='mobipick-app-glow-probe',
+                daemon=True,
             )
+            self._probe_thread.start()
+
+    def _probe(self) -> None:
+        version = self._call('Version')
+        self._available = bool(
+            version and int(version[0]) >= GNOME_APP_GLOW_PROTOCOL_VERSION
+        )
 
     @property
     def available(self) -> bool:
@@ -631,16 +690,13 @@ class GnomeAppGlow:
             self._cond.notify()
 
     def clear(self, timeout: float = 3.0) -> None:
-        """Restore the plain icon and stop the worker."""
+        """Request restoration of the plain icon without joining the worker."""
         if not self._available:
             return
         with self._cond:
             self._level = 0.0
             self._stopping = True
             self._cond.notify()
-            thread = self._thread
-        if thread is not None:
-            thread.join(timeout)
 
     def _run(self) -> None:
         while True:
@@ -730,16 +786,14 @@ def select_backend(
         gdbus_bin=gdbus_bin,
         log_info=log_info,
         log_warning=log_warning,
+        probe=False,
+        fallback=x11,
     )
-    if gnome.available:
-        return gnome
-    if x11.available:
-        x11.hint = (
-            'Wayland session without the GNOME Shell window extension: '
-            'wmctrl only sees XWayland windows. Install the extension with '
-            f'"{GNOME_EXTENSION_INSTALL_COMMAND}" and log in again.'
-        )
-        return x11
+    gnome.hint = (
+        'Until the asynchronous GNOME Shell extension probe succeeds, '
+        'wmctrl only sees XWayland windows.'
+    )
+    gnome.start_probe()
     return gnome
 
 

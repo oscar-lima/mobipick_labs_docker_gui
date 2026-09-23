@@ -1,12 +1,14 @@
 import json
 import os
 import shutil
+import subprocess
 import threading
 import time
 from urllib import error as urlerror
 from urllib import request as urlrequest
 
 import pytest
+from PyQt5.QtCore import QTimer
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
@@ -16,6 +18,8 @@ from mobipick_gui.remote_control import (
     DirectInvoker,
     EventBus,
     GuiAdapter,
+    GuiInvoker,
+    GuiTimeout,
     RemoteControlServer,
     RemoteShellSession,
     build_exec_line,
@@ -714,6 +718,7 @@ def _make_window(tmp_path, monkeypatch, **remote):
     from mobipick_gui.main_window import MainWindow
 
     monkeypatch.setenv('MOBIPICK_WORKSPACE_CONFIG', str(tmp_path / 'workspaces.yaml'))
+    monkeypatch.setitem(CONFIG, 'selections', {})
     monkeypatch.setattr(
         MainWindow,
         '_discover_filtered_image_records',
@@ -792,6 +797,99 @@ def test_main_window_starts_remote_control_and_serves_buttons(tmp_path, monkeypa
             window._stop_remote_control()
         window.deleteLater()
         app.processEvents()
+
+
+def test_hung_docker_never_blocks_gui_or_read_only_remote_api(
+    tmp_path, monkeypatch
+):
+    """A Docker CLI hang may leave work pending, never the event loop/API."""
+    app, window = _make_window(tmp_path, monkeypatch)
+    release = threading.Event()
+    entered = threading.Event()
+    real_run = subprocess.run
+
+    def hanging_run(args, *positional, **kwargs):
+        if args and args[0] == 'docker':
+            entered.set()
+            release.wait(10)
+            return subprocess.CompletedProcess(args, 1, stdout='', stderr='hung')
+        return real_run(args, *positional, **kwargs)
+
+    monkeypatch.setattr('mobipick_gui.main_window.subprocess.run', hanging_run)
+    try:
+        window._sp_run_async(
+            ['docker', 'ps'],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+        assert entered.wait(2), 'the background Docker probe did not start'
+
+        ticks = []
+        timer = QTimer()
+        timer.setInterval(10)
+        timer.timeout.connect(lambda: ticks.append(time.monotonic()))
+        timer.start()
+        deadline = time.monotonic() + 0.25
+        while time.monotonic() < deadline:
+            app.processEvents()
+            time.sleep(0.005)
+        assert len(ticks) >= 5, 'Qt event processing stalled behind Docker'
+
+        server = window.remote_control
+        api = _Api(f'http://{server.address[0]}:{server.address[1]}')
+        for path in ('/status', '/buttons', '/tabs', '/presence', '/events'):
+            started = time.monotonic()
+            status, payload = api('GET', path)
+            assert status == 200 and payload['ok']
+            assert time.monotonic() - started < 0.5
+
+        result = {}
+
+        def press_roscore():
+            result['reply'] = api('POST', '/buttons/roscore/start', {})
+
+        request = threading.Thread(target=press_roscore, daemon=True)
+        request.start()
+        deadline = time.monotonic() + 0.8
+        while request.is_alive() and time.monotonic() < deadline:
+            app.processEvents()
+            time.sleep(0.005)
+        assert not request.is_alive(), 'button request waited behind hung Docker'
+        status, payload = result['reply']
+        assert status == 200 and payload['accepted'] is True
+        assert window._toggle_states['roscore'] == 'yellow'
+    finally:
+        release.set()
+        if window.remote_control is not None:
+            window._stop_remote_control()
+        window.deleteLater()
+        app.processEvents()
+
+
+def test_timed_out_gui_action_is_cancelled_before_late_delivery():
+    from PyQt5.QtWidgets import QApplication
+
+    app = QApplication.instance() or QApplication([])
+    invoker = GuiInvoker()
+    called = []
+    result = {}
+
+    def invoke() -> None:
+        try:
+            invoker.invoke(lambda: called.append(True), timeout=0.05)
+        except GuiTimeout as exc:
+            result['error'] = str(exc)
+
+    worker = threading.Thread(target=invoke)
+    worker.start()
+    worker.join(timeout=1)
+    assert not worker.is_alive()
+    assert 'queued action was cancelled' in result['error']
+
+    app.processEvents()
+    assert called == []
 
 
 def test_main_window_layout_apply_and_ready_emit_remote_events(tmp_path, monkeypatch):

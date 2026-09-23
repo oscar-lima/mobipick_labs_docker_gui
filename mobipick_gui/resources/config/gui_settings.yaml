@@ -84,7 +84,7 @@ remote_control:
   host: "0.0.0.0"                            # bind address; 0.0.0.0 accepts requests from other machines, 127.0.0.1 keeps it local
   port: 8765                                 # TCP port for the JSON API
   token: ""                                  # optional shared secret; clients send "Authorization: Bearer <token>" when set
-  gui_timeout_s: 10                          # how long a request waits for the GUI thread before reporting a blocking dialog
+  gui_timeout_s: 1                           # fail widget actions loudly when the GUI is unavailable; read-only snapshots never wait
   shell_max_lines: 20000                     # output lines buffered per remote shell session
   shell_start_timeout_s: 180                 # how long POST /shell waits for the container shell to become ready
   default_exec_timeout_s: 60                 # default wait for a shell command before the response returns without it finishing

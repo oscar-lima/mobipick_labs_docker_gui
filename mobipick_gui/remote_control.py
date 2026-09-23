@@ -46,7 +46,7 @@ REMOTE_CONTROL_DEFAULTS: dict[str, Any] = {
     'host': '0.0.0.0',
     'port': 8765,
     'token': '',
-    'gui_timeout_s': 10.0,
+    'gui_timeout_s': 1.0,
     'shell_max_lines': 20000,
     'shell_start_timeout_s': 180.0,
     'default_exec_timeout_s': 60.0,
@@ -172,13 +172,31 @@ class EventBus:
 
 
 class _Job:
-    __slots__ = ('fn', 'result', 'error', 'done')
+    __slots__ = ('fn', 'result', 'error', 'done', 'lock', 'state')
 
     def __init__(self, fn: Callable[[], Any]):
         self.fn = fn
         self.result: Any = None
         self.error: BaseException | None = None
         self.done = threading.Event()
+        self.lock = threading.Lock()
+        self.state = 'pending'
+
+    def cancel_if_pending(self) -> bool:
+        """Cancel a queued call before the GUI thread begins executing it."""
+        with self.lock:
+            if self.state != 'pending':
+                return False
+            self.state = 'cancelled'
+            return True
+
+    def begin(self) -> bool:
+        """Claim a queued call for execution unless its caller timed out."""
+        with self.lock:
+            if self.state != 'pending':
+                return False
+            self.state = 'running'
+            return True
 
 
 class GuiInvoker(QObject):
@@ -190,15 +208,21 @@ class GuiInvoker(QObject):
         super().__init__(parent)
         self._job_signal.connect(self._run_job, Qt.QueuedConnection)
 
-    def invoke(self, fn: Callable[[], Any], *, timeout: float = 10.0) -> Any:
+    def invoke(self, fn: Callable[[], Any], *, timeout: float = 1.0) -> Any:
         if QThread.currentThread() is self.thread():
             return fn()
         job = _Job(fn)
         self._job_signal.emit(job)
         if not job.done.wait(max(0.0, float(timeout))):
+            cancelled = job.cancel_if_pending()
+            outcome = (
+                'the queued action was cancelled'
+                if cancelled else
+                'the action had already begun; its outcome is unknown'
+            )
             raise GuiTimeout(
-                f'the GUI thread did not respond within {timeout:g}s '
-                '(a modal dialog or a blocking operation may be active)'
+                f'GUI action failed: the GUI thread was unavailable for '
+                f'{timeout:g}s ({outcome})'
             )
         if job.error is not None:
             raise job.error
@@ -209,6 +233,9 @@ class GuiInvoker(QObject):
         self._job_signal.emit(_Job(fn))
 
     def _run_job(self, job: _Job) -> None:
+        if not job.begin():
+            job.done.set()
+            return
         try:
             job.result = job.fn()
         except BaseException as exc:  # noqa: BLE001 - forwarded to caller
@@ -801,7 +828,7 @@ class RemoteControlServer:
         port: int = 8765,
         token: str = '',
         invoker: Any = None,
-        gui_timeout: float = 10.0,
+        gui_timeout: float = 1.0,
         shell_max_lines: int = 20000,
         shell_start_timeout: float = 180.0,
         default_exec_timeout: float = 60.0,
@@ -1095,6 +1122,9 @@ class RemoteControlServer:
                 session_id, label, root=root, robot=robot
             )
         )
+        network = str(spec.get('ensure_docker_network') or '').strip()
+        if network:
+            self._ensure_docker_network(network)
         session = RemoteShellSession(
             session_id,
             label,
@@ -1142,6 +1172,23 @@ class RemoteControlServer:
                 else f'startup command failed with exit code {init.exit_code}'
             )
         return result
+
+    @staticmethod
+    def _ensure_docker_network(name: str) -> None:
+        """Ensure a network from an HTTP worker, never from the Qt thread."""
+        inspected = subprocess.run(
+            ['docker', 'network', 'inspect', name],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        if inspected.returncode != 0:
+            subprocess.run(
+                ['docker', 'network', 'create', name],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
 
     def stop_tab(self, key: str) -> dict:
         """Stop whatever runs behind log tab ``key`` (button, custom command, shell)."""
@@ -1221,7 +1268,12 @@ class RemoteControlServer:
         try:
             payload = self._dispatch(method, parts, query, body)
         except GuiTimeout as exc:
-            data = {'ok': False, 'error': exc.message, 'dialog': self._active_dialog()}
+            cached = self.adapter.status()
+            data = {
+                'ok': False,
+                'error': exc.message,
+                'dialog': cached.get('dialog'),
+            }
             data.update(exc.extra)
             return int(exc.status), data
         except RemoteControlError as exc:
@@ -1256,7 +1308,7 @@ class RemoteControlServer:
             }
         head = parts[0]
         if head == 'status' and method == 'GET':
-            status = self._invoke(self.adapter.status)
+            status = self.adapter.status()
             status['shells'] = [session.describe() for session in self.sessions()]
             status['clients'] = self.clients()
             status['in_use'] = bool(status['clients'])
@@ -1330,7 +1382,7 @@ class RemoteControlServer:
             if method != 'GET':
                 raise RemoteControlError('method not allowed', status=HTTPStatus.METHOD_NOT_ALLOWED)
             if len(parts) == 1:
-                return {'tabs': self._invoke(self.adapter.tabs)}
+                return {'tabs': self.adapter.cached_tabs()}
             key = parts[1]
             tail = _int_param(query.get('tail'), 100)
             grep = query.get('grep') or None
@@ -1380,7 +1432,7 @@ class RemoteControlServer:
         if not parts:
             if method != 'GET':
                 raise RemoteControlError('method not allowed', status=HTTPStatus.METHOD_NOT_ALLOWED)
-            return {'buttons': self._invoke(self.adapter.buttons)}
+            return {'buttons': self.adapter.cached_buttons()}
         key = parts[0]
         action = parts[1] if len(parts) > 1 else 'click'
         if method != 'POST' or action not in {'click', 'start', 'stop'}:
@@ -1741,13 +1793,20 @@ class _RequestHandler(BaseHTTPRequestHandler):
 
 
 class GuiAdapter:
-    """Interface the server expects; every method runs on the GUI thread."""
+    """Interface the server expects.
+
+    Widget methods run on the GUI thread. Cached read methods must be safe on
+    HTTP threads; the defaults support headless test adapters.
+    """
 
     def status(self) -> dict:
         raise NotImplementedError
 
     def buttons(self) -> list[dict]:
         raise NotImplementedError
+
+    def cached_buttons(self) -> list[dict]:
+        return self.buttons()
 
     def press_button(self, key: str, action: str) -> dict:
         raise NotImplementedError
@@ -1760,6 +1819,9 @@ class GuiAdapter:
 
     def tabs(self) -> list[dict]:
         raise NotImplementedError
+
+    def cached_tabs(self) -> list[dict]:
+        return self.tabs()
 
     def tab_text(self, key: str) -> str:
         raise NotImplementedError
