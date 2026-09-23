@@ -3632,7 +3632,6 @@ class MainWindow(QMainWindow):
         if self._workspace_load_error:
             self._console_log(1, self._workspace_load_error)
         self._log_optional_dependency_warnings()
-        self._schedule_first_run_setup_wizard()
 
         app_instance = QApplication.instance()
         if app_instance:
@@ -9535,16 +9534,30 @@ CMD ["bash"]
             self._image_choices = []
             self.image_combo.blockSignals(True)
             self.image_combo.clear()
-            self.image_combo.addItem('No images found')
+            self.image_combo.addItem(
+                'Image discovery failed'
+                if error_message else
+                'No images found'
+            )
             self.image_combo.setEnabled(False)
             self.image_combo.blockSignals(False)
-            self.image_combo.setToolTip('No image selected')
-            if self._can_offer_setup_wizard():
+            self.image_combo.setToolTip(
+                error_message or 'No image selected'
+            )
+            if error_message:
+                if show_feedback:
+                    QMessageBox.warning(
+                        self,
+                        'Images',
+                        error_message,
+                    )
+                return
+            if self._should_auto_show_setup_wizard():
                 self._console_log(
                     1,
                     'no matching Docker images found; opening setup wizard'
                 )
-                QTimer.singleShot(0, self._open_setup_wizard)
+                self._schedule_first_run_setup_wizard()
                 return
             self._inform_no_images_and_exit()
             return

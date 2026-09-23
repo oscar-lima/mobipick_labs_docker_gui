@@ -1,5 +1,6 @@
 import copy
 import os
+import threading
 import time
 from types import SimpleNamespace
 
@@ -1371,6 +1372,91 @@ def test_setup_wizard_does_not_auto_open_when_images_are_available(
 
     assert window._image_choices == ['ozkrelo/x_mobipick_labs:noetic-v1.1']
     assert not window._should_auto_show_setup_wizard()
+
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_setup_wizard_waits_for_async_image_discovery(
+    tmp_path,
+    monkeypatch,
+):
+    registry_path = tmp_path / 'workspaces.yaml'
+    release = threading.Event()
+    opened = []
+    monkeypatch.setenv('MOBIPICK_WORKSPACE_CONFIG', str(registry_path))
+    monkeypatch.setenv('QT_QPA_PLATFORM', 'xcb')
+
+    def discover(_self):
+        assert release.wait(2)
+        return ([{'ref': 'ozkrelo/x_mobipick_labs:noetic-v1.1'}], None)
+
+    monkeypatch.setattr(MainWindow, '_discover_filtered_image_records', discover)
+    monkeypatch.setattr(
+        MainWindow,
+        '_open_setup_wizard',
+        lambda self, **_kwargs: opened.append(True),
+    )
+    monkeypatch.setattr(
+        MainWindow,
+        'update_sim_status_from_poll',
+        lambda self, force=False: None,
+    )
+
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow(verbosity=1)
+    window.poll_timer.stop()
+    window._sigint_timer.stop()
+    app.processEvents()
+
+    assert window._image_load_pending
+    assert opened == []
+
+    release.set()
+    _process_until(app, lambda: bool(window._image_choices))
+    app.processEvents()
+
+    assert window._image_choices == ['ozkrelo/x_mobipick_labs:noetic-v1.1']
+    assert opened == []
+
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_setup_wizard_does_not_open_when_image_discovery_fails(
+    tmp_path,
+    monkeypatch,
+):
+    registry_path = tmp_path / 'workspaces.yaml'
+    opened = []
+    monkeypatch.setenv('MOBIPICK_WORKSPACE_CONFIG', str(registry_path))
+    monkeypatch.setenv('QT_QPA_PLATFORM', 'xcb')
+    monkeypatch.setattr(
+        MainWindow,
+        '_discover_filtered_image_records',
+        lambda self: ([], 'Docker daemon is unavailable'),
+    )
+    monkeypatch.setattr(
+        MainWindow,
+        '_open_setup_wizard',
+        lambda self, **_kwargs: opened.append(True),
+    )
+    monkeypatch.setattr(
+        MainWindow,
+        'update_sim_status_from_poll',
+        lambda self, force=False: None,
+    )
+
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow(verbosity=1)
+    window.poll_timer.stop()
+    window._sigint_timer.stop()
+    _process_until(app, lambda: not window._image_load_pending)
+    app.processEvents()
+
+    assert opened == []
+    assert window.image_combo.currentText() == 'Image discovery failed'
+    assert window.image_combo.toolTip() == 'Docker daemon is unavailable'
 
     window.deleteLater()
     app.processEvents()
