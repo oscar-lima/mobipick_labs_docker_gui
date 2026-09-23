@@ -7,9 +7,14 @@ import signal
 import sys
 from typing import Sequence
 
-from PyQt5.QtCore import QCoreApplication, qInstallMessageHandler
+from PyQt5.QtCore import (
+    QCoreApplication,
+    QLockFile,
+    QStandardPaths,
+    qInstallMessageHandler,
+)
 from PyQt5.QtGui import QIcon
-from PyQt5.QtWidgets import QApplication
+from PyQt5.QtWidgets import QApplication, QMessageBox
 
 from . import MainWindow, trigger_sigint
 from .desktop_launcher import (
@@ -29,6 +34,28 @@ _QT_SOCKET_NOTIFIER_THREAD_WARNING = (
 _QT_WAYLAND_ACTIVATION_WARNING = (
     'Wayland does not support QWindow::requestActivate()'
 )
+_SINGLE_INSTANCE_LOCK_NAME = 'mobipick-labs-docker-gui.lock'
+_SINGLE_INSTANCE_MESSAGE = (
+    'Mobipick Labs Control is already open. Close it before opening a new one.'
+)
+
+
+def _acquire_single_instance_lock() -> QLockFile | None:
+    """Return a held per-user lock, or ``None`` when another GUI owns it."""
+    lock_directory = QStandardPaths.writableLocation(
+        QStandardPaths.RuntimeLocation
+    )
+    lock_name = _SINGLE_INSTANCE_LOCK_NAME
+    if not lock_directory:
+        lock_directory = QStandardPaths.writableLocation(
+            QStandardPaths.TempLocation
+        )
+        lock_name = f'{os.getuid()}-{lock_name}'
+
+    lock = QLockFile(os.path.join(lock_directory, lock_name))
+    if not lock.tryLock():
+        return None
+    return lock
 
 
 def _create_application(
@@ -264,19 +291,32 @@ def main(argv: Sequence[str] | None = None) -> int:
         [sys.argv[0]] + qt_args,
         desktop_session=desktop_session,
     )
-    window = MainWindow(
-        verbosity=verbosity,
-        remote_control=remote_control_overrides(parsed_args),
-    )
-    window.setWindowIcon(app.windowIcon())
-    window.show_with_restored_state()
+    instance_lock = _acquire_single_instance_lock()
+    if instance_lock is None:
+        print(_SINGLE_INSTANCE_MESSAGE, file=sys.stderr)
+        QMessageBox.critical(
+            None,
+            'Mobipick Labs Control',
+            _SINGLE_INSTANCE_MESSAGE,
+        )
+        return 1
 
-    def _handle_sigint(_sig, _frame):
-        trigger_sigint()
+    try:
+        window = MainWindow(
+            verbosity=verbosity,
+            remote_control=remote_control_overrides(parsed_args),
+        )
+        window.setWindowIcon(app.windowIcon())
+        window.show_with_restored_state()
 
-    signal.signal(signal.SIGINT, _handle_sigint)
+        def _handle_sigint(_sig, _frame):
+            trigger_sigint()
 
-    return app.exec_()
+        signal.signal(signal.SIGINT, _handle_sigint)
+
+        return app.exec_()
+    finally:
+        instance_lock.unlock()
 
 
 __all__ = ['main', 'remote_control_overrides']

@@ -4,6 +4,9 @@ This guide explains the controls in the Mobipick Labs Docker GUI from a user
 perspective. It describes what each button and menu option does while you are
 running the simulator, ROS tools, scripts, terminals, recordings, and logs.
 
+Only one Mobipick Labs Control window can run at a time. If you try to launch
+another one, it asks you to close the running GUI before opening a new one.
+
 ## Main workflow
 
 1. Choose a ROS 1 workspace at the top of the window.

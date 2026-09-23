@@ -5,6 +5,33 @@ import pytest
 from mobipick_gui import cli
 
 
+class FakeInstanceLock:
+    def __init__(self):
+        self.unlocked = False
+
+    def unlock(self):
+        self.unlocked = True
+
+
+def test_single_instance_lock_allows_only_one_owner(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        cli.QStandardPaths,
+        'writableLocation',
+        lambda _location: str(tmp_path),
+    )
+
+    first_lock = cli._acquire_single_instance_lock()
+    try:
+        assert first_lock is not None
+        assert cli._acquire_single_instance_lock() is None
+    finally:
+        first_lock.unlock()
+
+    replacement_lock = cli._acquire_single_instance_lock()
+    assert replacement_lock is not None
+    replacement_lock.unlock()
+
+
 def test_create_application_suppresses_only_known_startup_warning(monkeypatch, capsys):
     monkeypatch.setattr(cli, 'session_type', lambda: 'x11')
     monkeypatch.setattr(cli, 'QIcon', lambda path: path)
@@ -232,6 +259,12 @@ def test_main_refreshes_tool_desktop_entries_on_every_session_type(
         '_create_application',
         lambda *_args, **_kwargs: FakeApplication(),
     )
+    instance_lock = FakeInstanceLock()
+    monkeypatch.setattr(
+        cli,
+        '_acquire_single_instance_lock',
+        lambda: instance_lock,
+    )
     monkeypatch.setattr(cli, 'MainWindow', FakeWindow)
     monkeypatch.setattr(cli.signal, 'signal', lambda *_args: None)
 
@@ -239,6 +272,7 @@ def test_main_refreshes_tool_desktop_entries_on_every_session_type(
     assert events[:2] == ['application_entry', 'tool_entries']
     assert 'show_restored' in events
     assert events[-1] == 'exec'
+    assert instance_lock.unlocked
 
 
 def test_main_reports_desktop_metadata_failure_and_still_starts(
@@ -275,9 +309,54 @@ def test_main_reports_desktop_metadata_failure_and_still_starts(
         '_create_application',
         lambda *_args, **_kwargs: FakeApplication(),
     )
+    instance_lock = FakeInstanceLock()
+    monkeypatch.setattr(
+        cli,
+        '_acquire_single_instance_lock',
+        lambda: instance_lock,
+    )
     monkeypatch.setattr(cli, 'MainWindow', FakeWindow)
     monkeypatch.setattr(cli.signal, 'signal', lambda *_args: None)
 
     assert cli.main([]) == 0
     assert events == ['window']
     assert 'read-only applications directory' in capsys.readouterr().err
+    assert instance_lock.unlocked
+
+
+def test_main_rejects_a_second_gui_instance(monkeypatch, capsys):
+    events = []
+
+    class FakeApplication:
+        pass
+
+    monkeypatch.setattr(cli, 'session_type', lambda: 'unknown')
+    monkeypatch.setattr(cli, 'refresh_installed_skill', lambda: None)
+    monkeypatch.setattr(
+        cli,
+        '_create_application',
+        lambda *_args, **_kwargs: FakeApplication(),
+    )
+    monkeypatch.setattr(cli, '_acquire_single_instance_lock', lambda: None)
+    monkeypatch.setattr(
+        cli,
+        'MainWindow',
+        lambda **_kwargs: pytest.fail('A second window must not be created'),
+    )
+    monkeypatch.setattr(
+        cli.QMessageBox,
+        'critical',
+        lambda parent, title, message: events.append(
+            (parent, title, message)
+        ),
+    )
+
+    assert cli.main([]) == 1
+    assert events == [
+        (
+            None,
+            'Mobipick Labs Control',
+            cli._SINGLE_INSTANCE_MESSAGE,
+        )
+    ]
+    assert capsys.readouterr().err == f'{cli._SINGLE_INSTANCE_MESSAGE}\n'

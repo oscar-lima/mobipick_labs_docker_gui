@@ -69,7 +69,9 @@ excluded from package data and source distribution output.
 `mobipick_gui.cli.main()` creates a `QApplication`, instantiates
 `MainWindow`, and forwards unknown arguments to Qt. `MainWindow` owns the GUI
 state, menu actions, process tabs, workspace/image selection, recording state,
-and shutdown sequence.
+and shutdown sequence. Before creating the main window, startup acquires a
+per-user runtime lock. If another Mobipick Labs Control GUI is already running,
+the new process shows an error and exits instead of opening a second window.
 
 At startup, the GUI refreshes its per-user desktop entry at
 `~/.local/share/applications/mobipick-labs-docker-gui.desktop` (or below
