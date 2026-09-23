@@ -624,8 +624,11 @@ are greyed out with the reason as tooltip. A selection that becomes invalid
 switches to the first valid option; when the user's own change (a dropdown or
 the remote master checkbox) caused it, a non-modal popup explains it.
 `block_start` refuses starting toolbar buttons, Roscore and Terminal (never
-stopping them) with a popup. Auto Launch steps are refused with a log line
-only. `POST /args` rejects invalid values and a button press returns
+stopping them) with a popup. Pressing Auto Launch checks every step first,
+treating the run's own steps as running (so a rule waiting for a step of
+the same run passes), and refuses the whole run with a popup when any step
+stays blocked. A step still blocked when its turn comes is logged and never
+marked ready. `POST /args` rejects invalid values and a button press returns
 `accepted: false` with the rule's reason instead of opening a popup.
 `running.*` conditions are read when a start or dropdown change is evaluated,
 not polled. Malformed rules are skipped and reported in the GUI log. The

@@ -3391,6 +3391,7 @@ class MainWindow(QMainWindow):
         self._auto_launch_timers: list[QTimer] = []
         self._auto_launch_active_keys: list[str] = []
         self._auto_launch_ready_keys: set[str] = set()
+        self._auto_launch_blocked_keys: set[str] = set()
         self._auto_launch_schedule: dict[str, tuple[float, float, bool]] = {}
         self._auto_launch_progress: AutoLaunchProgressWindow | None = None
         self._auto_launch_run_count = 0
@@ -11453,6 +11454,34 @@ CMD ["bash"]
             )
             return
 
+        blocked = MainWindow._auto_launch_blocked_steps(
+            self,
+            [
+                str(entry.get('button'))
+                for entry in launch_entries
+                if isinstance(entry, dict) and entry.get('button')
+            ],
+        )
+        if blocked:
+            lines = [f'{label}: {reason}' for label, reason in blocked]
+            self._log_info(
+                'auto launch not started, option rules block '
+                + '; '.join(lines)
+            )
+            MainWindow._show_rule_popup(
+                self,
+                f'Cannot start {self._auto_launch_label()}',
+                'The option rules block these steps:\n'
+                + '\n'.join(lines),
+            )
+            self._auto_launch_running = False
+            self.set_auto_launch_visual(
+                'red',
+                self._auto_launch_start_text(),
+                True,
+            )
+            return
+
         if self._auto_launch_run_count > 0:
             self.clear_all_tabs()
             self._append_gui_html('log', '<i>Cleared tabs before starting a new auto launch run.</i>')
@@ -11464,6 +11493,7 @@ CMD ["bash"]
         self._cancel_auto_launch_timers()
         self._auto_launch_running = True
         self._auto_launch_ready_keys.clear()
+        self._auto_launch_blocked_keys = set()
         self._auto_launch_active_keys = [
             entry.get('button')
             for entry in launch_entries
@@ -11598,7 +11628,11 @@ CMD ["bash"]
 
         def _ready():
             try:
-                if self._auto_launch_running:
+                if key in getattr(self, '_auto_launch_blocked_keys', ()):
+                    self._log_info(
+                        f'auto launch: {key} was blocked, so it is not ready'
+                    )
+                elif self._auto_launch_running:
                     self._mark_auto_launch_ready(key)
             finally:
                 if timer in self._auto_launch_timers:
@@ -11970,11 +12004,17 @@ CMD ["bash"]
         self._dispatch_auto_launch_toggle(key)
 
     def _dispatch_auto_launch_toggle(self, key: str) -> bool:
+        if not self._is_button_running(key):
+            reason = MainWindow._start_blocked_reason(self, key)
+            if reason is not None:
+                self._log_info(f'auto launch: {key} not started: {reason}')
+                blocked = getattr(self, '_auto_launch_blocked_keys', None)
+                if blocked is not None:
+                    blocked.add(key)
+                return False
         if key in self._config_buttons:
             self._on_config_button_clicked(key, popup=False)
             return True
-        if not self._guard_rule_start(key, popup=False):
-            return False
         if key == 'roscore':
             self.toggle_roscore()
             return True
@@ -13751,6 +13791,33 @@ CMD ["bash"]
             self, rules, MainWindow._option_rule_combos(self)
         )
         return rules.start_blocked(state, key)
+
+    def _auto_launch_blocked_steps(
+        self, keys: list[str]
+    ) -> list[tuple[str, str]]:
+        """Return ``(label, reason)`` for Auto Launch steps the rules block.
+
+        Every step of the run counts as running, so a rule that only waits
+        for another step of the same run (such as tables_demo_bringup) does
+        not block it; anything else the run needs but never starts does.
+        """
+        rules = getattr(self, '_option_rules', None)
+        if rules is None or not rules.rules:
+            return []
+        state = MainWindow._option_rule_state(
+            self, rules, MainWindow._option_rule_combos(self)
+        )
+        for key in keys:
+            state[f'running.{key}'] = True
+        blocked = []
+        for key in dict.fromkeys(keys):
+            if self._is_button_running(key):
+                continue
+            reason = rules.start_blocked(state, key)
+            if reason is not None:
+                label = self._config_buttons.get(key, {}).get('label') or key
+                blocked.append((label, reason))
+        return blocked
 
     def _guard_rule_start(self, key: str, *, popup: bool = True) -> bool:
         """Refuse a start the rules block, telling the user why."""

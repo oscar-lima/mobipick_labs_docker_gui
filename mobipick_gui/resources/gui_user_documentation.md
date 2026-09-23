@@ -331,8 +331,10 @@ supports no other world. Invalid options are greyed out and their tooltip
 says why; when a selection becomes invalid the GUI switches to the first
 valid option and a popup tells you. Rules can also require a button to run
 first: with the real robot, for example, every other button refuses to start
-with a popup until **tables_demo_bringup** is running. Stopping is never
-refused.
+with a popup until **tables_demo_bringup** is running. **Auto Launch**
+checks the whole sequence before starting: if a step would be refused and
+the sequence does not start the required button itself, nothing starts and
+a popup lists the blocked steps. Stopping is never refused.
 
 A loaded toolbar-button profile can expose up to three additional argument
 combo boxes beside **world_config**. Their labels and selectable options come

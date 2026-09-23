@@ -172,3 +172,76 @@ def test_buttons_wait_for_bringup_on_the_real_robot(monkeypatch, tmp_path):
     finally:
         window.close()
         app.processEvents()
+
+
+def test_auto_launch_refuses_steps_the_rules_block(monkeypatch, tmp_path):
+    popups = _record_popups(monkeypatch)
+    app, window = _create_window(monkeypatch, tmp_path)
+    try:
+        window._option_rules = parse_option_rules({'rules': [BRINGUP_FIRST]})
+        monkeypatch.setattr(window, '_is_button_running', lambda key: False)
+        monkeypatch.setattr(
+            window, '_confirm_workspace_mismatch_warning', lambda _label: True
+        )
+        launched = []
+        monkeypatch.setattr(
+            window, '_start_dependency_launch', launched.append
+        )
+        monkeypatch.setattr(window, '_schedule_recording_after_launch', lambda: None)
+        window.remote_master_checkbox.setChecked(True)
+        popups.clear()
+        window._launch_plan = {
+            'mode': 'advanced',
+            'processes': [{'button': 'rviz'}],
+        }
+
+        # Repeated clicks keep refusing instead of turning the button green.
+        for _attempt in range(2):
+            window._on_auto_launch_toggle_clicked()
+            assert launched == []
+            assert not window._auto_launch_running
+            assert popups[-1][0].startswith('Cannot start')
+            assert 'RViz: start tables_demo_bringup first' in popups[-1][1]
+        assert len(popups) == 2
+
+        # A run that starts the bringup itself satisfies the rule.
+        window._launch_plan = {
+            'mode': 'advanced',
+            'processes': [
+                {'button': 'tables_demo_bringup'},
+                {'button': 'rviz', 'depends_on': 'tables_demo_bringup'},
+            ],
+        }
+        window._on_auto_launch_toggle_clicked()
+        assert len(launched) == 1
+        assert window._auto_launch_running
+        assert len(popups) == 2
+    finally:
+        window._auto_launch_running = False
+        window.close()
+        app.processEvents()
+
+
+def test_blocked_auto_launch_step_is_never_marked_ready(monkeypatch, tmp_path):
+    app, window = _create_window(monkeypatch, tmp_path)
+    try:
+        window._option_rules = parse_option_rules({'rules': [BRINGUP_FIRST]})
+        monkeypatch.setattr(window, '_is_button_running', lambda key: False)
+        started = []
+        monkeypatch.setattr(window, 'toggle_rviz', lambda: started.append(1))
+        window.remote_master_checkbox.setChecked(True)
+        window._auto_launch_running = True
+        window._auto_launch_blocked_keys = set()
+
+        assert window._dispatch_auto_launch_toggle('rviz') is False
+        assert started == []
+        assert window._auto_launch_blocked_keys == {'rviz'}
+
+        window._schedule_auto_launch_ready('rviz', 0)
+        for _ in range(5):
+            app.processEvents()
+        assert 'rviz' not in window._auto_launch_ready_keys
+    finally:
+        window._auto_launch_running = False
+        window.close()
+        app.processEvents()
