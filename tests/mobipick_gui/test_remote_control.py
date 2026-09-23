@@ -1471,6 +1471,48 @@ def test_gnome_app_glow_sends_colour_changes(monkeypatch):
     assert 'rgba(1, 2, 3, 0.95)' in colours and 'rgba(9, 9, 9, 0.95)' in colours
 
 
+def test_gnome_app_glow_retains_level_while_async_probe_runs(monkeypatch):
+    from mobipick_gui.window_control import GnomeAppGlow
+
+    probe_started = threading.Event()
+    release_probe = threading.Event()
+    calls = []
+
+    def fake_call(self, method, *args):
+        if method == 'Version':
+            probe_started.set()
+            assert release_probe.wait(5)
+            return (4,)
+        calls.append((method, args))
+        return (1,)
+
+    monkeypatch.setattr(
+        'mobipick_gui.window_control.is_gnome_session', lambda _env: True
+    )
+    monkeypatch.setattr(
+        'mobipick_gui.window_control.shutil.which',
+        lambda _name: '/usr/bin/gdbus',
+    )
+    monkeypatch.setattr(GnomeAppGlow, '_call', fake_call)
+
+    glow = GnomeAppGlow('app')
+    assert probe_started.wait(5)
+    glow.set_level(0.7, 'rgba(120, 200, 255, 0.95)')
+    assert calls == []
+    release_probe.set()
+
+    deadline = time.time() + 5
+    while not calls and time.time() < deadline:
+        time.sleep(0.01)
+    assert calls == [
+        (
+            'SetAppGlow',
+            ('app.desktop', 0.7, 'rgba(120, 200, 255, 0.95)'),
+        )
+    ]
+    glow.clear()
+
+
 def test_reload_endpoint_rereads_button_profile():
     adapter = FakeAdapter()
     server = RemoteControlServer(adapter, host='127.0.0.1', port=0)

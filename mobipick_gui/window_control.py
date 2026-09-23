@@ -661,9 +661,26 @@ class GnomeAppGlow:
 
     def _probe(self) -> None:
         version = self._call('Version')
-        self._available = bool(
+        available = bool(
             version and int(version[0]) >= GNOME_APP_GLOW_PROTOCOL_VERSION
         )
+        with self._cond:
+            self._available = available
+            # The GUI requests its initial idle halo immediately after
+            # constructing us.  Keep that request while the asynchronous
+            # probe is running, then deliver it as soon as the extension is
+            # known to be available.
+            if available and self._level is not None:
+                self._start_worker_locked()
+
+    def _start_worker_locked(self) -> None:
+        """Start the sender thread; the caller must hold ``self._cond``."""
+        if self._thread is None or not self._thread.is_alive():
+            self._thread = threading.Thread(
+                target=self._run, name='mobipick-app-glow', daemon=True
+            )
+            self._thread.start()
+        self._cond.notify()
 
     @property
     def available(self) -> bool:
@@ -674,29 +691,23 @@ class GnomeAppGlow:
 
         The colour is part of the state, so a caller can switch the halo
         between e.g. an idle and a busy colour without recreating the client.
+        Requests made while the extension probe is pending are retained.
         """
-        if not self._available:
-            return
         with self._cond:
             self._level = max(0.0, min(1.0, float(level)))
             if color:
                 self.color = str(color)
-            if self._thread is None or not self._thread.is_alive():
-                self._stopping = False
-                self._thread = threading.Thread(
-                    target=self._run, name='mobipick-app-glow', daemon=True
-                )
-                self._thread.start()
-            self._cond.notify()
+            self._stopping = False
+            if self._available:
+                self._start_worker_locked()
 
     def clear(self, timeout: float = 3.0) -> None:
         """Request restoration of the plain icon without joining the worker."""
-        if not self._available:
-            return
         with self._cond:
             self._level = 0.0
             self._stopping = True
-            self._cond.notify()
+            if self._available:
+                self._start_worker_locked()
 
     def _run(self) -> None:
         while True:
