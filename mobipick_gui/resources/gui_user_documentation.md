@@ -271,6 +271,13 @@ Unchecking an Advanced process excludes it from Auto Launch without discarding
 its readiness duration or dependency settings; those values return when the
 configuration window is reopened.
 
+**Export...** in the configuration window writes the settings currently shown
+(both modes, the recording delay, and the button text) to a YAML file of your
+choice, for example to keep a backup or share it with another machine.
+**Import...** loads such a file into the window; nothing is saved until you
+press **Save**. Processes in the file that are not toolbar buttons of the
+active workspace are skipped and listed in a message.
+
 To measure a readiness duration experimentally, stop the process first and
 click **Measure** in its Advanced row. The GUI launches that process immediately
 and enables **Ready**. Click **Ready** as soon as the process is usable; the

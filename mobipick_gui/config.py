@@ -858,83 +858,170 @@ def save_button_layout(path: str | Path, entries: list[dict]) -> Path:
     return destination
 
 
+def _normalize_launch_timeline(entries) -> list[dict]:
+    """Normalize legacy fixed-delay auto-launch steps."""
+    if not isinstance(entries, list):
+        return []
+    normalized: list[dict] = []
+    for item in entries:
+        if not isinstance(item, dict):
+            continue
+        key = str(item.get('button') or item.get('key') or '').strip()
+        if not key:
+            continue
+        at_value = item.get('at_seconds', item.get('at', item.get('time_seconds')))
+        try:
+            at_seconds = max(0.0, float(at_value))
+        except (TypeError, ValueError):
+            continue
+        normalized.append({'button': key, 'at_seconds': at_seconds})
+    normalized.sort(key=lambda e: (e['at_seconds'], e['button']))
+    return normalized
+
+def _normalize_launch_processes(entries) -> list[dict]:
+    """Normalize dependency-aware auto-launch process definitions."""
+    if not isinstance(entries, list):
+        return []
+    normalized: list[dict] = []
+    for item in entries:
+        if not isinstance(item, dict):
+            continue
+        key = str(item.get('button') or item.get('key') or '').strip()
+        if not key:
+            continue
+        try:
+            duration = max(
+                0.0,
+                float(item.get('duration_seconds', item.get('duration', 0)) or 0),
+            )
+        except (TypeError, ValueError):
+            duration = 0.0
+        depends_on = str(
+            item.get('depends_on') or item.get('dependency') or ''
+        ).strip()
+        dependency_type = str(
+            item.get('dependency_type') or item.get('type') or 'hard'
+        ).strip().lower()
+        if dependency_type not in {'hard', 'soft'}:
+            dependency_type = 'hard'
+        try:
+            ready_percentage = min(
+                100.0,
+                max(
+                    0.0,
+                    float(
+                        item.get(
+                            'ready_percentage',
+                            item.get('soft_ready_percentage', 30),
+                        )
+                        or 0
+                    ),
+                ),
+            )
+        except (TypeError, ValueError):
+            ready_percentage = 30.0
+        normalized.append(
+            {
+                'button': key,
+                'duration_seconds': duration,
+                'depends_on': depends_on,
+                'dependency_type': dependency_type,
+                'ready_percentage': ready_percentage,
+            }
+        )
+    return normalized
+
+
+def read_launch_sequence_file(path: str | Path) -> Dict:
+    """Parse one auto-launch YAML file, raising on unreadable content.
+
+    The ``button`` entry holds only the file's own button text overrides.
+    """
+    source = Path(path).expanduser()
+    with open(source, 'r', encoding='utf-8') as handle:
+        data = yaml.safe_load(handle) or {}
+    if not isinstance(data, dict):
+        raise ValueError(f'{source} does not contain a YAML mapping')
+    timeline = _normalize_launch_timeline(data.get('timeline', []))
+    processes = _normalize_launch_processes(
+        data.get('processes', data.get('advanced', []))
+    )
+    process_settings: list[dict] = []
+    raw_process_settings = data.get('process_settings')
+    if isinstance(raw_process_settings, list):
+        for raw in raw_process_settings:
+            normalized_entries = _normalize_launch_processes([raw])
+            if not normalized_entries:
+                continue
+            normalized = normalized_entries[0]
+            raw_enabled = raw.get('enabled', True)
+            if isinstance(raw_enabled, str):
+                normalized['enabled'] = (
+                    raw_enabled.strip().lower()
+                    not in {'0', 'false', 'no', 'off'}
+                )
+            else:
+                normalized['enabled'] = bool(raw_enabled)
+            process_settings.append(normalized)
+    else:
+        process_settings = [
+            {**entry, 'enabled': True} for entry in processes
+        ]
+    mode = 'legacy'
+    raw_mode = str(data.get('mode') or '').strip().lower()
+    if processes and raw_mode != 'legacy':
+        mode = 'advanced'
+    shutdown_order: list[str] = []
+    shutdown_skip: list[str] = []
+    shutdown_section = data.get('shutdown') or {}
+    raw_order = []
+    if isinstance(shutdown_section, dict):
+        raw_order = shutdown_section.get('order') or shutdown_section.get('buttons') or []
+        raw_skip = shutdown_section.get('skip') or shutdown_section.get('ignore') or []
+        if isinstance(raw_skip, list):
+            shutdown_skip = [str(entry).strip() for entry in raw_skip if str(entry).strip()]
+    elif isinstance(data.get('shutdown_order'), list):
+        raw_order = data.get('shutdown_order') or []
+    if isinstance(raw_order, list):
+        shutdown_order = [str(entry).strip() for entry in raw_order if str(entry).strip()]
+    button: dict = {}
+    if isinstance(data.get('button'), dict):
+        button = {k: v for k, v in data['button'].items() if v is not None}
+    raw_recording = data.get('recording') or {}
+    raw_recording_delay = None
+    if isinstance(raw_recording, dict):
+        raw_recording_delay = raw_recording.get(
+            'start_delay_seconds',
+            raw_recording.get('extra_start_delay_seconds'),
+        )
+    raw_recording_delay = data.get(
+        'recording_start_delay_seconds',
+        raw_recording_delay,
+    )
+    try:
+        recording_start_delay_seconds = max(
+            0.0,
+            float(raw_recording_delay or 0),
+        )
+    except (TypeError, ValueError):
+        recording_start_delay_seconds = 0.0
+    return {
+        'timeline': timeline,
+        'mode': mode,
+        'processes': processes,
+        'process_settings': process_settings,
+        'shutdown_order': shutdown_order,
+        'shutdown_skip': shutdown_skip,
+        'button': button,
+        'recording_start_delay_seconds': recording_start_delay_seconds,
+    }
+
+
 def load_launch_sequence_plan(
     button_config_path: str | Path | None = None,
     launch_config_path: str | Path | None = None,
 ) -> Dict:
     """Load auto-launch timeline and button text."""
-
-    def _normalize_timeline(entries) -> list[dict]:
-        if not isinstance(entries, list):
-            return []
-        normalized: list[dict] = []
-        for item in entries:
-            if not isinstance(item, dict):
-                continue
-            key = str(item.get('button') or item.get('key') or '').strip()
-            if not key:
-                continue
-            at_value = item.get('at_seconds', item.get('at', item.get('time_seconds')))
-            try:
-                at_seconds = max(0.0, float(at_value))
-            except (TypeError, ValueError):
-                continue
-            normalized.append({'button': key, 'at_seconds': at_seconds})
-        normalized.sort(key=lambda e: (e['at_seconds'], e['button']))
-        return normalized
-
-    def _normalize_processes(entries) -> list[dict]:
-        """Normalize dependency-aware auto-launch process definitions."""
-        if not isinstance(entries, list):
-            return []
-        normalized: list[dict] = []
-        for item in entries:
-            if not isinstance(item, dict):
-                continue
-            key = str(item.get('button') or item.get('key') or '').strip()
-            if not key:
-                continue
-            try:
-                duration = max(
-                    0.0,
-                    float(item.get('duration_seconds', item.get('duration', 0)) or 0),
-                )
-            except (TypeError, ValueError):
-                duration = 0.0
-            depends_on = str(
-                item.get('depends_on') or item.get('dependency') or ''
-            ).strip()
-            dependency_type = str(
-                item.get('dependency_type') or item.get('type') or 'hard'
-            ).strip().lower()
-            if dependency_type not in {'hard', 'soft'}:
-                dependency_type = 'hard'
-            try:
-                ready_percentage = min(
-                    100.0,
-                    max(
-                        0.0,
-                        float(
-                            item.get(
-                                'ready_percentage',
-                                item.get('soft_ready_percentage', 30),
-                            )
-                            or 0
-                        ),
-                    ),
-                )
-            except (TypeError, ValueError):
-                ready_percentage = 30.0
-            normalized.append(
-                {
-                    'button': key,
-                    'duration_seconds': duration,
-                    'depends_on': depends_on,
-                    'dependency_type': dependency_type,
-                    'ready_percentage': ready_percentage,
-                }
-            )
-        return normalized
 
     cfg = CONFIG.get('launch_sequence', {})
     button_defaults = {
@@ -1021,69 +1108,17 @@ def load_launch_sequence_plan(
     shutdown_skip: list[str] = []
     try:
         if path.is_file():
-            with open(path, 'r', encoding='utf-8') as handle:
-                data = yaml.safe_load(handle) or {}
-            if isinstance(data, dict):
-                timeline = _normalize_timeline(data.get('timeline', []))
-                processes = _normalize_processes(
-                    data.get('processes', data.get('advanced', []))
-                )
-                raw_process_settings = data.get('process_settings')
-                if isinstance(raw_process_settings, list):
-                    for raw in raw_process_settings:
-                        normalized_entries = _normalize_processes([raw])
-                        if not normalized_entries:
-                            continue
-                        normalized = normalized_entries[0]
-                        raw_enabled = raw.get('enabled', True)
-                        if isinstance(raw_enabled, str):
-                            normalized['enabled'] = (
-                                raw_enabled.strip().lower()
-                                not in {'0', 'false', 'no', 'off'}
-                            )
-                        else:
-                            normalized['enabled'] = bool(raw_enabled)
-                        process_settings.append(normalized)
-                else:
-                    process_settings = [
-                        {**entry, 'enabled': True} for entry in processes
-                    ]
-                raw_mode = str(data.get('mode') or '').strip().lower()
-                if processes and raw_mode != 'legacy':
-                    mode = 'advanced'
-                shutdown_section = data.get('shutdown') or {}
-                raw_order = []
-                if isinstance(shutdown_section, dict):
-                    raw_order = shutdown_section.get('order') or shutdown_section.get('buttons') or []
-                    raw_skip = shutdown_section.get('skip') or shutdown_section.get('ignore') or []
-                    if isinstance(raw_skip, list):
-                        shutdown_skip = [str(entry).strip() for entry in raw_skip if str(entry).strip()]
-                elif isinstance(data.get('shutdown_order'), list):
-                    raw_order = data.get('shutdown_order') or []
-                if isinstance(raw_order, list):
-                    shutdown_order = [str(entry).strip() for entry in raw_order if str(entry).strip()]
-                if isinstance(data.get('button'), dict):
-                    merged = dict(button_cfg)
-                    merged.update({k: v for k, v in data['button'].items() if v is not None})
-                    button_cfg = merged
-                raw_recording = data.get('recording') or {}
-                raw_recording_delay = None
-                if isinstance(raw_recording, dict):
-                    raw_recording_delay = raw_recording.get(
-                        'start_delay_seconds',
-                        raw_recording.get('extra_start_delay_seconds'),
-                    )
-                raw_recording_delay = data.get(
-                    'recording_start_delay_seconds',
-                    raw_recording_delay,
-                )
-                try:
-                    recording_start_delay_seconds = max(
-                        0.0,
-                        float(raw_recording_delay or 0),
-                    )
-                except (TypeError, ValueError):
-                    recording_start_delay_seconds = 0.0
+            parsed = read_launch_sequence_file(path)
+            timeline = parsed['timeline']
+            processes = parsed['processes']
+            process_settings = parsed['process_settings']
+            mode = parsed['mode']
+            shutdown_order = parsed['shutdown_order']
+            shutdown_skip = parsed['shutdown_skip']
+            button_cfg.update(parsed['button'])
+            recording_start_delay_seconds = parsed[
+                'recording_start_delay_seconds'
+            ]
     except Exception as exc:
         print(f'Warning: failed to load auto launch configuration from {path}: {exc}', file=sys.stderr)
 
@@ -1388,6 +1423,7 @@ __all__ = [
     'PROJECT_ROOT',
     'SCRIPT_CLEAN',
     'save_launch_sequence_plan',
+    'read_launch_sequence_file',
     'save_button_layout',
     'save_docker_cp_config',
     'save_user_config_update',

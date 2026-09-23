@@ -628,6 +628,12 @@ percentage. Processes already running at the start are ready immediately.
 Each Advanced row also has an interactive readiness measurement: **Measure**
 launches the process at time zero, and **Ready** records the user's confirmation
 into `duration_seconds`, rounded upward to one decimal place.
+**Import...** and **Export...** move a plan between the wizard and an
+arbitrary YAML file. Export writes the shown state with
+`save_launch_sequence_plan()`; import parses the file with
+`read_launch_sequence_file()` (the strict parser `load_launch_sequence_plan()`
+also uses) and only refills the widgets, so the active plan changes when the
+user presses Save. Imported button text overrides are kept for that save.
 In remote ROS master mode the local Roscore and simulation entries are dropped
 from the sequence and from the progress window, since that master already
 provides them; advanced dependents of the simulation start at time zero, and a

@@ -97,6 +97,7 @@ from .config import (
     load_docker_cp_user_config,
     load_button_layout,
     load_launch_sequence_plan,
+    read_launch_sequence_file,
     reload_config,
     save_button_layout,
     save_docker_cp_config,
@@ -1800,6 +1801,7 @@ class AutoLaunchWizard(QDialog):
         measurement_launcher: Callable[[str], bool] | None = None,
         parent: QWidget | None = None,
         process_settings: list[dict] | None = None,
+        button_config: dict | None = None,
     ):
         super().__init__(parent)
         self.setWindowTitle('Configure Auto Launch')
@@ -1807,12 +1809,8 @@ class AutoLaunchWizard(QDialog):
         self._advanced_rows: list[dict] = []
         self._measurement_launcher = measurement_launcher
         self._measurement_clock = time.monotonic_ns
-
-        existing = {
-            str(entry.get('button')): float(entry.get('at_seconds', 0.0))
-            for entry in timeline
-            if isinstance(entry, dict) and entry.get('button') is not None
-        }
+        self._save_path = Path(save_path)
+        self._button_config = dict(button_config or {})
 
         root = QVBoxLayout(self)
         self._tabs = QTabWidget()
@@ -1824,22 +1822,16 @@ class AutoLaunchWizard(QDialog):
             QLabel('Legacy: start each process at a fixed time after Auto Launch.')
         )
 
-        for index, (key, label) in enumerate(buttons):
+        for key, label in buttons:
             row = QHBoxLayout()
             checkbox = QCheckBox(label)
             checkbox.setProperty('button_key', key)
-            checked = key in existing
-            if not existing and key != 'terminal':
-                checked = True
-            checkbox.setChecked(checked)
 
             delay = QDoubleSpinBox()
             delay.setRange(0.0, 3600.0)
             delay.setDecimals(1)
             delay.setSingleStep(1.0)
             delay.setSuffix(' s')
-            delay.setValue(existing.get(key, float(index * 2)))
-            delay.setEnabled(checkbox.isChecked())
             checkbox.toggled.connect(delay.setEnabled)
 
             row.addWidget(checkbox, 1)
@@ -1882,33 +1874,14 @@ class AutoLaunchWizard(QDialog):
         header.setSectionResizeMode(5, QHeaderView.Stretch)
         header.setSectionResizeMode(6, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(7, QHeaderView.ResizeToContents)
-        saved_process_settings = (
-            process_settings if process_settings is not None else processes
-        )
-        advanced_by_key = {
-            str(entry.get('button')): entry
-            for entry in (saved_process_settings or [])
-            if isinstance(entry, dict) and entry.get('button')
-        }
-        selected_legacy = set(existing)
         for row_index, (key, label) in enumerate(buttons):
-            current = advanced_by_key.get(key, {})
             enabled = QCheckBox()
-            if 'enabled' in current:
-                row_enabled = bool(current['enabled'])
-            else:
-                row_enabled = (
-                    key in advanced_by_key
-                    or (not advanced_by_key and key in selected_legacy)
-                )
-            enabled.setChecked(row_enabled)
             self._advanced_table.setCellWidget(row_index, 0, enabled)
             self._advanced_table.setItem(row_index, 1, QTableWidgetItem(label))
             duration = QDoubleSpinBox()
             duration.setRange(0.0, 3600.0)
             duration.setDecimals(1)
             duration.setSuffix(' s')
-            duration.setValue(float(current.get('duration_seconds', 10.0)))
             self._advanced_table.setCellWidget(row_index, 2, duration)
             measure = QPushButton('Measure')
             measure.setToolTip(
@@ -1926,21 +1899,14 @@ class AutoLaunchWizard(QDialog):
             for dependency_key, dependency_label in buttons:
                 if dependency_key != key:
                     dependency.addItem(dependency_label, dependency_key)
-            dependency_index = dependency.findData(current.get('depends_on', ''))
-            dependency.setCurrentIndex(max(0, dependency_index))
             self._advanced_table.setCellWidget(row_index, 5, dependency)
             dependency_type = QComboBox()
             dependency_type.addItem('Hard', 'hard')
             dependency_type.addItem('Soft', 'soft')
-            type_index = dependency_type.findData(
-                current.get('dependency_type', 'hard')
-            )
-            dependency_type.setCurrentIndex(max(0, type_index))
             self._advanced_table.setCellWidget(row_index, 6, dependency_type)
             percentage = QSpinBox()
             percentage.setRange(0, 100)
             percentage.setSuffix(' %')
-            percentage.setValue(int(current.get('ready_percentage', 30)))
             self._advanced_table.setCellWidget(row_index, 7, percentage)
             self._advanced_rows.append(
                 {
@@ -1982,10 +1948,9 @@ class AutoLaunchWizard(QDialog):
                 lambda _checked=False, row=self._advanced_rows[-1]:
                 self._finish_ready_measurement(row)
             )
-            _update_row()
+            self._advanced_rows[-1]['update'] = _update_row
         advanced_root.addWidget(self._advanced_table)
         self._tabs.addTab(advanced_tab, 'Advanced')
-        self._tabs.setCurrentIndex(1 if mode == 'advanced' else 0)
         self.resize(900, 560)
 
         recording_row = QHBoxLayout()
@@ -1995,7 +1960,6 @@ class AutoLaunchWizard(QDialog):
         self._recording_delay.setDecimals(1)
         self._recording_delay.setSingleStep(1.0)
         self._recording_delay.setSuffix(' s')
-        self._recording_delay.setValue(max(0.0, float(recording_start_delay_seconds or 0)))
         self._recording_delay.setToolTip(
             'Additional time to wait after the last launch/layout delay '
             'before Auto Launch recording starts.'
@@ -2003,14 +1967,213 @@ class AutoLaunchWizard(QDialog):
         recording_row.addWidget(self._recording_delay)
         root.addLayout(recording_row)
 
-        path_label = QLabel(f'Saves to: {save_path}')
-        path_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        root.addWidget(path_label)
+        self._path_label = QLabel(f'Saves to: {save_path}')
+        self._path_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        root.addWidget(self._path_label)
+
+        file_row = QHBoxLayout()
+        import_button = QPushButton('Import...')
+        import_button.setToolTip(
+            'Load auto launch settings from a YAML file into this window'
+        )
+        import_button.clicked.connect(self._import_config)
+        file_row.addWidget(import_button)
+        export_button = QPushButton('Export...')
+        export_button.setToolTip(
+            'Write the settings shown in this window to a YAML file'
+        )
+        export_button.clicked.connect(self._export_config)
+        file_row.addWidget(export_button)
+        file_row.addStretch(1)
+        root.addLayout(file_row)
 
         self._button_box = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
         self._button_box.accepted.connect(self.accept)
         self._button_box.rejected.connect(self.reject)
         root.addWidget(self._button_box)
+
+        self._apply_settings(
+            timeline,
+            mode,
+            processes,
+            process_settings,
+            recording_start_delay_seconds,
+        )
+
+    def _apply_settings(
+        self,
+        timeline: list[dict],
+        mode: str,
+        processes: list[dict] | None,
+        process_settings: list[dict] | None,
+        recording_start_delay_seconds: float,
+    ) -> None:
+        """Show a launch plan's values in the legacy and advanced editors."""
+        existing = {
+            str(entry.get('button')): float(entry.get('at_seconds', 0.0))
+            for entry in timeline
+            if isinstance(entry, dict) and entry.get('button') is not None
+        }
+        for index, (key, checkbox, delay) in enumerate(self._rows):
+            checked = key in existing
+            if not existing and key != 'terminal':
+                checked = True
+            checkbox.setChecked(checked)
+            delay.setValue(existing.get(key, float(index * 2)))
+            delay.setEnabled(checked)
+
+        saved_process_settings = (
+            process_settings if process_settings is not None else processes
+        )
+        advanced_by_key = {
+            str(entry.get('button')): entry
+            for entry in (saved_process_settings or [])
+            if isinstance(entry, dict) and entry.get('button')
+        }
+        for row in self._advanced_rows:
+            key = row['key']
+            current = advanced_by_key.get(key, {})
+            if 'enabled' in current:
+                row_enabled = bool(current['enabled'])
+            else:
+                row_enabled = (
+                    key in advanced_by_key
+                    or (not advanced_by_key and key in existing)
+                )
+            row['enabled'].setChecked(row_enabled)
+            row['duration'].setValue(
+                float(current.get('duration_seconds', 10.0))
+            )
+            dependency_index = row['dependency'].findData(
+                current.get('depends_on', '')
+            )
+            row['dependency'].setCurrentIndex(max(0, dependency_index))
+            type_index = row['dependency_type'].findData(
+                current.get('dependency_type', 'hard')
+            )
+            row['dependency_type'].setCurrentIndex(max(0, type_index))
+            row['percentage'].setValue(
+                int(current.get('ready_percentage', 30))
+            )
+            row['update']()
+        self._tabs.setCurrentIndex(1 if mode == 'advanced' else 0)
+        self._recording_delay.setValue(
+            max(0.0, float(recording_start_delay_seconds or 0))
+        )
+
+    def button_config(self) -> dict:
+        """Return Auto Launch button text, including imported overrides."""
+        return dict(self._button_config)
+
+    def _selected_entries(self) -> list[dict]:
+        if self.mode() == 'advanced':
+            return self.processes()
+        return self.timeline()
+
+    def shutdown_order(self) -> list[str]:
+        """Return the stop order: the reverse of the selected launch steps."""
+        return [entry['button'] for entry in reversed(self._selected_entries())]
+
+    def _file_dialog_start_dir(self) -> str:
+        directory = self._save_path.parent
+        return str(directory if directory.is_dir() else Path.home())
+
+    def _import_config(self) -> None:
+        """Replace the shown settings with those of a YAML file."""
+        path, _selected_filter = QFileDialog.getOpenFileName(
+            self,
+            'Import Auto Launch Configuration',
+            self._file_dialog_start_dir(),
+            'YAML files (*.yaml *.yml);;All files (*)',
+        )
+        if not path:
+            return
+        source = Path(path).expanduser()
+        try:
+            plan = read_launch_sequence_file(source)
+        except (OSError, ValueError, yaml.YAMLError) as exc:
+            QMessageBox.warning(
+                self,
+                'Auto Launch',
+                f'Failed to import auto launch configuration:\n{exc}',
+            )
+            return
+        if not (
+            plan['timeline'] or plan['processes'] or plan['process_settings']
+        ):
+            QMessageBox.warning(
+                self,
+                'Auto Launch',
+                f'{source} does not define any auto launch steps.',
+            )
+            return
+        known = {key for key, _checkbox, _delay in self._rows}
+        referenced = {
+            str(entry.get('button'))
+            for entry in (
+                plan['timeline']
+                + plan['processes']
+                + plan['process_settings']
+            )
+        }
+        self._apply_settings(
+            plan['timeline'],
+            plan['mode'],
+            plan['processes'],
+            plan['process_settings'],
+            plan['recording_start_delay_seconds'],
+        )
+        self._button_config.update(plan['button'])
+        self._path_label.setText(
+            f'Imported from: {source}\nSaves to: {self._save_path}'
+        )
+        unknown = sorted(referenced - known)
+        if unknown:
+            QMessageBox.information(
+                self,
+                'Auto Launch',
+                'These processes are not toolbar buttons of the active '
+                'workspace and were skipped:\n' + ', '.join(unknown),
+            )
+
+    def _export_config(self) -> None:
+        """Write the shown settings to a YAML file chosen by the user."""
+        if not self._validate():
+            return
+        path, _selected_filter = QFileDialog.getSaveFileName(
+            self,
+            'Export Auto Launch Configuration',
+            self._file_dialog_start_dir(),
+            'YAML files (*.yaml *.yml);;All files (*)',
+        )
+        if not path:
+            return
+        target = Path(path).expanduser()
+        if not target.suffix:
+            target = target.with_suffix('.yaml')
+        try:
+            saved_path = save_launch_sequence_plan(
+                target,
+                self.timeline(),
+                self.shutdown_order(),
+                self.button_config(),
+                self.recording_start_delay_seconds(),
+                mode=self.mode(),
+                processes=self.processes(),
+                process_settings=self.process_settings(),
+            )
+        except OSError as exc:
+            QMessageBox.warning(
+                self,
+                'Auto Launch',
+                f'Failed to export auto launch configuration:\n{exc}',
+            )
+            return
+        QMessageBox.information(
+            self,
+            'Auto Launch',
+            f'Exported auto launch configuration to:\n{saved_path}',
+        )
 
     def timeline(self) -> list[dict]:
         """Return selected launch steps sorted by delay."""
@@ -2112,20 +2275,24 @@ class AutoLaunchWizard(QDialog):
                 key = dependencies.get(key, '')
         return ''
 
-    def accept(self):
-        entries = self.processes() if self.mode() == 'advanced' else self.timeline()
-        if not entries:
+    def _validate(self) -> bool:
+        if not self._selected_entries():
             QMessageBox.warning(
                 self,
                 'Auto Launch',
                 'Select at least one launch step before saving.',
             )
-            return
+            return False
         if self.mode() == 'advanced':
             error = self._advanced_validation_error()
             if error:
                 QMessageBox.warning(self, 'Auto Launch', error)
-                return
+                return False
+        return True
+
+    def accept(self):
+        if not self._validate():
+            return
         super().accept()
 
 
@@ -11577,26 +11744,20 @@ CMD ["bash"]
                 if isinstance(self._launch_plan, dict)
                 else None
             ),
+            button_config=self._auto_launch_button_cfg(),
         )
         if dialog.exec_() != QDialog.Accepted:
             return
 
-        timeline = dialog.timeline()
-        processes = dialog.processes()
-        selected_entries = processes if dialog.mode() == 'advanced' else timeline
-        shutdown_order = [
-            entry['button'] for entry in reversed(selected_entries)
-        ]
-        recording_delay = dialog.recording_start_delay_seconds()
         try:
             saved_path = save_launch_sequence_plan(
                 save_path,
-                timeline,
-                shutdown_order,
-                self._auto_launch_button_cfg(),
-                recording_delay,
+                dialog.timeline(),
+                dialog.shutdown_order(),
+                dialog.button_config(),
+                dialog.recording_start_delay_seconds(),
                 mode=dialog.mode(),
-                processes=processes,
+                processes=dialog.processes(),
                 process_settings=dialog.process_settings(),
             )
         except OSError as exc:

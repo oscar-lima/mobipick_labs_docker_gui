@@ -420,6 +420,146 @@ def test_auto_launch_wizard_preserves_disabled_dependency_settings():
     app.processEvents()
 
 
+def test_auto_launch_wizard_export_then_import_restores_settings(
+    monkeypatch, tmp_path
+):
+    app = QApplication.instance() or QApplication([])
+    buttons = [('roscore', 'Roscore'), ('sim', 'Simulation')]
+    exported = tmp_path / 'exported'
+    monkeypatch.setattr(
+        main_window_module.QFileDialog,
+        'getSaveFileName',
+        lambda *args, **kwargs: (str(exported), ''),
+    )
+    monkeypatch.setattr(
+        main_window_module.QFileDialog,
+        'getOpenFileName',
+        lambda *args, **kwargs: (str(exported.with_suffix('.yaml')), ''),
+    )
+    messages = []
+    monkeypatch.setattr(
+        main_window_module.QMessageBox,
+        'information',
+        lambda _parent, _title, text: messages.append(text),
+    )
+    source = AutoLaunchWizard(
+        buttons,
+        [],
+        tmp_path / 'saved.yaml',
+        recording_start_delay_seconds=3.0,
+        processes=[
+            {'button': 'roscore', 'duration_seconds': 4},
+            {
+                'button': 'sim',
+                'duration_seconds': 12,
+                'depends_on': 'roscore',
+                'dependency_type': 'soft',
+                'ready_percentage': 40,
+            },
+        ],
+        mode='advanced',
+        button_config={'label': 'Bring Up'},
+    )
+    source._export_config()
+    source.close()
+    assert exported.with_suffix('.yaml').is_file()
+
+    target = AutoLaunchWizard(
+        buttons,
+        [{'button': 'roscore', 'at_seconds': 0}],
+        tmp_path / 'saved.yaml',
+    )
+    assert target.mode() == 'legacy'
+    target._import_config()
+    assert target.mode() == 'advanced'
+    assert target.processes() == [
+        {
+            'button': 'roscore',
+            'duration_seconds': 4.0,
+            'depends_on': '',
+            'dependency_type': 'hard',
+            'ready_percentage': 30.0,
+        },
+        {
+            'button': 'sim',
+            'duration_seconds': 12.0,
+            'depends_on': 'roscore',
+            'dependency_type': 'soft',
+            'ready_percentage': 40.0,
+        },
+    ]
+    assert target.recording_start_delay_seconds() == 3.0
+    assert target.button_config()['label'] == 'Bring Up'
+    assert target.shutdown_order() == ['sim', 'roscore']
+    assert len(messages) == 1 and 'Exported' in messages[0]
+    target.close()
+    app.processEvents()
+
+
+def test_auto_launch_wizard_import_reports_unknown_processes(
+    monkeypatch, tmp_path
+):
+    app = QApplication.instance() or QApplication([])
+    source = tmp_path / 'other_ws.yaml'
+    source.write_text(
+        'timeline:\n'
+        '  - {button: roscore, at_seconds: 0}\n'
+        '  - {button: gripper, at_seconds: 5}\n',
+        encoding='utf-8',
+    )
+    monkeypatch.setattr(
+        main_window_module.QFileDialog,
+        'getOpenFileName',
+        lambda *args, **kwargs: (str(source), ''),
+    )
+    messages = []
+    monkeypatch.setattr(
+        main_window_module.QMessageBox,
+        'information',
+        lambda _parent, _title, text: messages.append(text),
+    )
+    dialog = AutoLaunchWizard(
+        [('roscore', 'Roscore'), ('sim', 'Simulation')],
+        [],
+        tmp_path / 'saved.yaml',
+    )
+    dialog._import_config()
+    assert dialog.timeline() == [{'button': 'roscore', 'at_seconds': 0.0}]
+    assert len(messages) == 1 and 'gripper' in messages[0]
+    dialog.close()
+    app.processEvents()
+
+
+def test_auto_launch_wizard_import_rejects_file_without_steps(
+    monkeypatch, tmp_path
+):
+    app = QApplication.instance() or QApplication([])
+    source = tmp_path / 'empty.yaml'
+    source.write_text('mode: legacy\n', encoding='utf-8')
+    monkeypatch.setattr(
+        main_window_module.QFileDialog,
+        'getOpenFileName',
+        lambda *args, **kwargs: (str(source), ''),
+    )
+    warnings = []
+    monkeypatch.setattr(
+        main_window_module.QMessageBox,
+        'warning',
+        lambda _parent, _title, text: warnings.append(text),
+    )
+    timeline = [{'button': 'sim', 'at_seconds': 2.0}]
+    dialog = AutoLaunchWizard(
+        [('roscore', 'Roscore'), ('sim', 'Simulation')],
+        timeline,
+        tmp_path / 'saved.yaml',
+    )
+    dialog._import_config()
+    assert dialog.timeline() == timeline
+    assert len(warnings) == 1
+    dialog.close()
+    app.processEvents()
+
+
 def test_dependency_schedule_supports_hard_and_soft_dependencies():
     schedule = dependency_launch_schedule(
         [
