@@ -306,9 +306,14 @@ def test_bringup_start_reminds_and_copies_to_clipboard(
         popups.clear()
         window._on_config_button_clicked('tables_demo_bringup')
         assert started == [1, 1]
-        assert popups[-1][0] == 'Starting Tables Demo Bringup'
-        assert 'rgbd_snapshot_server.py' in popups[-1][1]
-        assert 'copied to the clipboard' in popups[-1][1]
+        assert popups == []
+        dialog = window._start_reminder_dialog
+        assert dialog is not None and dialog.isVisible()
+        assert [item[2] for item in dialog.items()] == ['rgbd_snapshot_server']
+        assert 'rgbd_snapshot_server.py' in dialog.items()[0][1]
+        # nothing is copied until the user asks for it
+        assert app.clipboard().text() == 'before'
+        dialog.copy_button('rgbd_snapshot_server').click()
         assert app.clipboard().text() == 'rgbd_snapshot_server'
 
         # Stopping a running bringup shows no reminder.
@@ -368,3 +373,46 @@ def test_start_args_reach_the_command_and_the_remote_api(monkeypatch, tmp_path):
     finally:
         window.close()
         app.processEvents()
+
+
+def test_start_reminders_share_one_window(monkeypatch, tmp_path):
+    """Reminders of several starts go into one window, each with its own copy button."""
+    popups = _record_popups(monkeypatch)
+    app, window = _create_window(monkeypatch, tmp_path)
+    try:
+        disc_reminder = {
+            'when': {'remote_master': True},
+            'remind_start': ['disc_ros'],
+            'notice': 'Run the alias disc_keyframe on the robot PC.',
+            'clipboard': 'disc_keyframe',
+        }
+        window._option_rules = parse_option_rules(
+            {'rules': [SNAPSHOT_REMINDER, disc_reminder]}
+        )
+        window.remote_master_checkbox.setChecked(True)
+        app.clipboard().setText('before')
+
+        window._show_start_reminders('tables_demo_bringup')
+        first = window._start_reminder_dialog
+        window._show_start_reminders('disc_ros')
+        window._show_start_reminders('tables_demo_bringup')  # a repeat is not added twice
+
+        assert popups == []
+        assert window._start_reminder_dialog is first
+        assert [item[2] for item in first.items()] == ['rgbd_snapshot_server', 'disc_keyframe']
+        assert app.clipboard().text() == 'before'
+        first.copy_button('disc_keyframe').click()
+        assert app.clipboard().text() == 'disc_keyframe'
+
+        # Close copies nothing and the next reminder opens a fresh window
+        app.clipboard().setText('before')
+        first.close()
+        app.processEvents()
+        assert app.clipboard().text() == 'before'
+        window._show_start_reminders('disc_ros')
+        assert window._start_reminder_dialog is not first
+        assert [item[2] for item in window._start_reminder_dialog.items()] == ['disc_keyframe']
+    finally:
+        window.close()
+        app.processEvents()
+

@@ -80,6 +80,8 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from .start_reminders import StartReminderDialog
+
 from .ansi import CSI_SEQ_RE, OSC_SEQ_RE, ansi_to_html
 from .async_tasks import AsyncTaskRunner
 from .bug_report import BugReportDialog
@@ -13864,8 +13866,9 @@ CMD ["bash"]
     def _show_start_reminders(self, key: str) -> None:
         """Pop up the rules' reminders for starting ``key``.
 
-        The start goes ahead; a reminder's clipboard text is copied so the
-        user can paste it where the notice says.
+        The start goes ahead. All reminders share one window (see
+        ``start_reminders``): a reminder raised while it is open is added to
+        it, and each clipboard text gets its own copy button.
         """
         rules = getattr(self, '_option_rules', None)
         if rules is None or not rules.rules:
@@ -13874,15 +13877,22 @@ CMD ["bash"]
             self, rules, MainWindow._option_rule_combos(self)
         )
         label = self._config_buttons.get(key, {}).get('label') or key
-        for notice, clipboard in rules.start_reminders(state, key):
-            message = notice
-            if clipboard:
-                QApplication.clipboard().setText(clipboard)
-                message += f'\n\n"{clipboard}" was copied to the clipboard.'
-            self._log_info(f'{label} reminder: {notice}')
-            MainWindow._show_rule_popup(
-                self, f'Starting {label}', message, QMessageBox.Information
+        reminders = rules.start_reminders(state, key)
+        if not reminders:
+            return
+        dialog = getattr(self, '_start_reminder_dialog', None)
+        if dialog is None:
+            dialog = StartReminderDialog(self)
+            # closing ends it at once (deletion itself is deferred)
+            dialog.finished.connect(
+                lambda *_: setattr(self, '_start_reminder_dialog', None)
             )
+            self._start_reminder_dialog = dialog
+        for notice, clipboard in reminders:
+            if dialog.add(label, notice, clipboard):
+                self._log_info(f'{label} reminder: {notice}')
+        dialog.show()
+        dialog.raise_()
 
     def _show_rule_popup(
         self,
