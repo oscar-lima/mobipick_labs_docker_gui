@@ -35,7 +35,7 @@ class StartReminderDialog(QDialog):
         self._items: list[tuple[str, str, str]] = []
         self._copy_buttons: dict[str, QPushButton] = {}
         layout = QVBoxLayout(self)
-        intro = QLabel('These processes are not started by the GUI. Start any that are not running yet:')
+        intro = QLabel('Review these reminders for the buttons you started:')
         intro.setWordWrap(True)
         layout.addWidget(intro)
         self._rows = QVBoxLayout()

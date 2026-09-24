@@ -24,9 +24,9 @@ never blocked::
       reason: start tables_demo_bringup first
 
 A rule can remind the user when a button starts. ``remind_start`` names the
-button keys (or ``all``) whose start shows the ``notice`` popup; the start
-goes ahead. An optional ``clipboard`` text is copied to the clipboard, and
-the popup says so::
+button keys (or ``all``) whose start adds the ``notice`` to the reminder
+window; the start goes ahead. An optional ``clipboard`` text gets its own
+Copy button::
 
     - when:
         remote_master: true
