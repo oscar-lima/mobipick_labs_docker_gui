@@ -480,6 +480,11 @@ The tab search is separate from the documentation window search.
   nodes on the host and in Mobipick Labs can communicate. In remote ROS master
   mode the Host command gets the remote `ROS_MASTER_URI` and the host address
   that routes to that master instead.
+  A command is a Bash command line (host commands run through `bash -lc`), so
+  a button can set its own environment variables by prefixing them, for
+  example `DISC_DATASET_ROOT=$HOME/datasets/scene_graph /path/to/disc.sh`.
+  Variables exported before the GUI was started reach host commands too, but
+  the prefix keeps them visible in the profile.
   **Stop Roscore** leaves running Host commands alive; stop them with their own
   toolbar buttons when needed.
   **Sim** and **RViz** cannot be removed, but their commands can be changed.

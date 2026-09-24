@@ -563,6 +563,23 @@ of the `mobipick` Docker bridge. In remote ROS master mode a host command
 instead receives the configured remote `ROS_MASTER_URI` and the host address
 that routes to it. These overrides apply only to host commands.
 
+A `command` (and a `stop_command`) is a Bash command line: host commands run
+through `bash -lc` and Docker commands through `bash -c` inside the container,
+after the selected generic arguments are appended. To give one button its own
+environment, prefix the command with shell assignments, which is also the way
+to set a per-machine path without editing the script it starts:
+
+```yaml
+- key: disc
+  kind: command
+  host: true
+  command: DISC_DATASET_ROOT=$HOME/datasets/scene_graph $HOME/ros1_ws/amenable_ws/src/disc_mapping_ros/scripts/disc.sh
+```
+
+The script also inherits the environment the GUI was started with, so a
+variable exported before launching the GUI works as well, but it is invisible
+in the profile; prefer the explicit prefix.
+
 Command entries can declare:
 
 - `requires_roscore`;
