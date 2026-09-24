@@ -13285,18 +13285,12 @@ CMD ["bash"]
 
         tab = self._ensure_tab('sim', 'Sim', closable=False)
 
-        pid = tab.pid()
-        if pid:
-            try:
-                os.kill(pid, signal.SIGINT)
-                self._append_gui_html(tab.key, '<i>Sent SIGINT to docker compose (graceful stop)...</i>')
-                self._log_cmd(f'kill -SIGINT {pid}')
-            except Exception as e:
-                self._append_gui_html(tab.key, f'<i>Failed to send SIGINT: {html.escape(str(e))}</i>')
-
+        # the container gets the SIGINT while docker compose stays attached,
+        # so the tab shows the roslaunch shutdown output until it has exited
         def _fallbacks():
             def _finalize():
                 self._release_xhost(tab, log_key=tab.key)
+                self._reap_detached_client(tab)
                 self._sim_running_cached = False
                 self._killing = False
                 self.set_toggle_visual('red', 'Start Sim', enabled=True)
@@ -13309,7 +13303,7 @@ CMD ["bash"]
                 on_finished=_finalize,
             )
 
-        QTimer.singleShot(int(self._timers_cfg['sim_shutdown_delay_ms']), _fallbacks)
+        QTimer.singleShot(0, _fallbacks)
 
     def _collect_container_commands(
         self,
@@ -14599,8 +14593,16 @@ CMD ["bash"]
         on_stopped: Callable[[], None] | None = None,
         stop_command: str | None = None,
     ):
+        container_name = tab.container_name
+        exec_id = getattr(tab, 'exec_id', None)
+        # a container command is interrupted inside the container while its
+        # docker client stays attached, so the tab keeps streaming the
+        # roslaunch shutdown ("killing ...", "shutting down processing
+        # monitor...") instead of the client exiting with 130 at once
+        container_backed = bool(container_name or exec_id)
+
         pid = tab.pid()
-        if pid:
+        if pid and not container_backed:
             try:
                 os.kill(pid, signal.SIGINT)
                 self._append_gui_html(tab.key, '<i>Sent SIGINT to client (ctrl+c)...</i>')
@@ -14608,9 +14610,6 @@ CMD ["bash"]
             except Exception as e:
                 self._append_gui_html(tab.key, f'<i>Failed to SIGINT client: {html.escape(str(e))}</i>')
 
-        container_name = tab.container_name
-
-        exec_id = getattr(tab, 'exec_id', None)
         if not hasattr(self, '_stopping_tab_keys'):
             self._stopping_tab_keys = set()
         self._stopping_tab_keys.add(tab.key)
@@ -14621,6 +14620,8 @@ CMD ["bash"]
                 tab.container_name = None
             tab.exec_id = None
             self._release_xhost(tab, log_key=tab.key)
+            if container_backed:
+                self._reap_detached_client(tab)
             if on_stopped:
                 on_stopped()
             if tab.key in getattr(self, '_config_buttons', {}) and not tab.is_running():
@@ -14653,7 +14654,34 @@ CMD ["bash"]
             else:
                 finalize()
 
-        QTimer.singleShot(int(self._timers_cfg['custom_tab_sigint_delay_ms']), _container_sigint_then_stop)
+        delay = (
+            0 if container_backed
+            else int(self._timers_cfg['custom_tab_sigint_delay_ms'])
+        )
+        QTimer.singleShot(delay, _container_sigint_then_stop)
+
+    def _reap_detached_client(
+        self,
+        tab: ProcessTab,
+        timeout_ms: int = 3000,
+    ) -> None:
+        """Kill a docker client still attached after its container is gone.
+
+        The client normally exits on its own once the container has stopped;
+        this only guards against one that hangs, so the tab and its button
+        can never stay busy forever.
+        """
+        def reap() -> None:
+            if not tab.is_running():
+                return
+            self._append_gui_html(
+                tab.key,
+                '<i>docker client still attached after its container '
+                'stopped, killing it</i>',
+            )
+            tab.kill()
+
+        QTimer.singleShot(timeout_ms, reap)
 
     # ---------- Output and search ----------
 

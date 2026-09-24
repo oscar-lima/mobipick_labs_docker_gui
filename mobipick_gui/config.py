@@ -228,7 +228,6 @@ CONFIG_DEFAULTS: Dict[str, Dict] = {
         'poll_ms': 1200,
         'sigint_check_ms': 100,
         'custom_tab_sigint_delay_ms': 1000,
-        'sim_shutdown_delay_ms': 2500,
         'roscore_start_delay_ms': 1000,
     },
     'buttons': {

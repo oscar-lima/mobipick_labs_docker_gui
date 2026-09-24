@@ -41,8 +41,7 @@ display:
 timers:
   poll_ms: 1200                     # interval for the UI poller that updates button state, etc.
   sigint_check_ms: 100              # how often we check for Ctrl+C from the launch terminal
-  custom_tab_sigint_delay_ms: 1000  # delay before sending docker stop after SIGINT for custom tabs
-  sim_shutdown_delay_ms: 2500       # wait time before running fallback shutdown steps for the sim
+  custom_tab_sigint_delay_ms: 1000  # delay before stopping the container after SIGINT to a host-side client
 
 buttons:
   sim_toggle:

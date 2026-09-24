@@ -1391,6 +1391,97 @@ def test_dependency_schedule_does_not_wait_for_a_dropped_dependency():
     assert schedule['anygrasp'] == (0.0, 10.0, False)
 
 
+def _stop_tab_harness(events, delays):
+    return SimpleNamespace(
+        _config_buttons={},
+        _stopping_tab_keys=set(),
+        _timers_cfg={'custom_tab_sigint_delay_ms': 1000},
+        _release_xhost=lambda _tab, log_key=None: None,
+        _update_stop_custom_enabled=lambda: None,
+        _append_gui_html=lambda key, text: events.append(('html', text)),
+        _log_cmd=lambda cmd: events.append(('cmd', cmd)),
+        _graceful_stop_container=lambda name, tab, exec_id=None, on_finished=None: (
+            events.append(('container_stop', name)) or on_finished()
+        ),
+        _reap_detached_client=lambda _tab: events.append('reap'),
+    )
+
+
+def _run_timers(monkeypatch, delays):
+    def single_shot(ms, callback):
+        delays.append(ms)
+        callback()
+
+    monkeypatch.setattr(
+        main_window_module.QTimer, 'singleShot', staticmethod(single_shot)
+    )
+
+
+def test_container_stop_keeps_client_attached_for_shutdown_logs(monkeypatch):
+    events, delays, kills = [], [], []
+    _run_timers(monkeypatch, delays)
+    monkeypatch.setattr(
+        main_window_module.os, 'kill', lambda pid, sig: kills.append(pid)
+    )
+    tab = SimpleNamespace(
+        key='custom1',
+        pid=lambda: 4242,
+        is_running=lambda: True,
+        container_name='mpcmd-0acb687be6',
+        exec_id='abc',
+    )
+
+    MainWindow._stop_custom_tab(_stop_tab_harness(events, delays), tab)
+
+    # the docker client must keep streaming the roslaunch shutdown output
+    assert kills == []
+    assert delays == [0]
+    assert events == [('container_stop', 'mpcmd-0acb687be6'), 'reap']
+
+
+def test_host_command_stop_still_interrupts_the_client(monkeypatch):
+    events, delays, kills = [], [], []
+    _run_timers(monkeypatch, delays)
+    monkeypatch.setattr(
+        main_window_module.os, 'kill', lambda pid, sig: kills.append(pid)
+    )
+    tab = SimpleNamespace(
+        key='custom1',
+        pid=lambda: 4242,
+        is_running=lambda: True,
+        container_name=None,
+        exec_id=None,
+    )
+
+    MainWindow._stop_custom_tab(_stop_tab_harness(events, delays), tab)
+
+    assert kills == [4242]
+    assert delays == [1000]
+    assert 'reap' not in events
+
+
+@pytest.mark.parametrize('still_running', [True, False])
+def test_reap_detached_client_kills_only_a_hanging_client(
+    monkeypatch, still_running
+):
+    delays, notes, killed = [], [], []
+    _run_timers(monkeypatch, delays)
+    tab = SimpleNamespace(
+        key='custom1',
+        is_running=lambda: still_running,
+        kill=lambda: killed.append(True),
+    )
+    harness = SimpleNamespace(
+        _append_gui_html=lambda key, text: notes.append(text),
+    )
+
+    MainWindow._reap_detached_client(harness, tab)
+
+    assert delays == [3000]
+    assert killed == ([True] if still_running else [])
+    assert len(notes) == len(killed)
+
+
 def test_config_button_stays_stopping_until_container_is_gone(monkeypatch):
     monkeypatch.setattr(
         main_window_module.QTimer,
@@ -1418,6 +1509,7 @@ def test_config_button_stays_stopping_until_container_is_gone(monkeypatch):
         _graceful_stop_container=lambda name, tab, exec_id=None, on_finished=None: (
             container_stops.append(on_finished)
         ),
+        _reap_detached_client=lambda _tab: None,
     )
     harness._config_label = MethodType(MainWindow._config_label, harness)
     harness._mark_config_button_stopped = MethodType(

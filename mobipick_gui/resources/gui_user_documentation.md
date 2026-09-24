@@ -745,5 +745,12 @@ master, a fast stop enables **Clean stale ROS nodes** beside the master URI;
 use it when unreachable registrations remain. The cleanup can unregister a
 temporarily unavailable node, so review the warning before continuing.
 
+The SIGINT goes to the container itself while its tab stays attached, so the
+tab shows the usual roslaunch shutdown output (`killing ...`, `shutting down
+processing monitor...`) until the container has exited. If the command does not
+exit within the grace period, the GUI stops the container, and a docker client
+that stays attached after that is killed a few seconds later, so a stop never
+leaves a button busy.
+
 The main window remembers its last normal size, position, and maximized state
 and restores them the next time the GUI opens.
