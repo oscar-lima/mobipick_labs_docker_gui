@@ -8108,6 +8108,14 @@ CMD ["bash"]
             value = widget.currentText().strip() if widget is not None else ''
             if name and value:
                 full_command += f' {name}:={self._sh_quote(value)}'
+        rules = getattr(self, '_option_rules', None)
+        key = str(config.get('key') or '').strip()
+        if rules is not None and rules.rules and key:
+            state = MainWindow._option_rule_state(
+                self, rules, MainWindow._option_rule_combos(self)
+            )
+            for name, value in rules.start_args(state, key):
+                full_command += f' {name}:={self._sh_quote(value)}'
         return full_command
 
     def _get_button_widget(self, key: str) -> QPushButton | None:

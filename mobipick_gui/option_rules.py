@@ -34,6 +34,18 @@ the popup says so::
       notice: launch rgbd_snapshot_server.py on the real robot
       clipboard: rgbd_snapshot_server
 
+A rule can also add launch arguments to a button's command while it
+matches. ``start_args`` maps button keys to ``name: value`` pairs, which
+the GUI appends as ``name:=value`` after the toolbar arguments when the
+button starts, so one button runs right in every mode::
+
+    - when:
+        remote_master: true
+      start_args:
+        disc_ros:
+          start_keyframe_node: false
+      reason: the keyframe node runs on the robot PC
+
 State names are ``remote_master`` (true when the GUI uses a remote ROS
 master), ``world`` (the world_config dropdown), the name of every generic
 toolbar argument such as ``model_profile``, and ``running.<button key>``
@@ -68,6 +80,7 @@ class OptionRule:
     remind_start: tuple[str, ...] = ()
     notice: str = ''
     clipboard: str = ''
+    start_args: dict[str, tuple[tuple[str, str], ...]] = field(default_factory=dict)
 
     def _names(self, keys: tuple[str, ...], key: str) -> bool:
         if key in self.block_start_except:
@@ -131,6 +144,16 @@ class OptionRules:
             if rule.reminds_start(key) and rule.matches(normalized)
         ]
 
+    def start_args(self, state: dict, key: str) -> list[tuple[str, str]]:
+        """Return the ``(name, value)`` launch arguments rules add to ``key``."""
+        normalized = {name: _text(value) for name, value in state.items()}
+        return [
+            pair
+            for rule in self.rules
+            if key in rule.start_args and rule.matches(normalized)
+            for pair in rule.start_args[key]
+        ]
+
     def invalid_options(
         self,
         state: dict,
@@ -176,6 +199,25 @@ def _choice_map(raw, label: str, errors: list[str], index: int) -> dict:
     return {str(name).strip(): _values(value) for name, value in raw.items()}
 
 
+def _start_args_map(raw, errors: list[str], index: int) -> dict:
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        errors.append(f'rule {index}: start_args must be a mapping')
+        return {}
+    result = {}
+    for key, pairs in raw.items():
+        if not isinstance(pairs, dict) or not pairs:
+            errors.append(
+                f'rule {index}: start_args.{key} must map argument names to values'
+            )
+            continue
+        result[str(key).strip()] = tuple(
+            (str(name).strip(), _text(value)) for name, value in pairs.items()
+        )
+    return result
+
+
 def parse_option_rules(data, path: Path | None = None) -> OptionRules:
     """Build rules from parsed YAML, collecting problems instead of raising."""
     loaded = OptionRules(path=path)
@@ -202,15 +244,21 @@ def parse_option_rules(data, path: Path | None = None) -> OptionRules:
         )
         raw_remind = item.get('remind_start')
         remind_start = _values(raw_remind) if raw_remind is not None else ()
+        start_args = _start_args_map(
+            item.get('start_args'), loaded.errors, index
+        )
         notice = str(item.get('notice') or '').strip()
         if remind_start and not notice:
             loaded.errors.append(f'rule {index}: remind_start needs "notice"')
         if len(loaded.errors) > errors_before:
             continue
-        if not invalid and not only and not block_start and not remind_start:
+        if (
+            not invalid and not only and not block_start and not remind_start
+            and not start_args
+        ):
             loaded.errors.append(
-                f'rule {index}: needs "invalid", "only", "block_start" '
-                'or "remind_start"'
+                f'rule {index}: needs "invalid", "only", "block_start", '
+                '"remind_start" or "start_args"'
             )
             continue
         loaded.rules.append(
@@ -224,6 +272,7 @@ def parse_option_rules(data, path: Path | None = None) -> OptionRules:
                 remind_start=remind_start,
                 notice=notice,
                 clipboard=str(item.get('clipboard') or '').strip(),
+                start_args=start_args,
             )
         )
     return loaded

@@ -636,6 +636,12 @@ rules:
   remind_start: [tables_demo_bringup]   # or all
   notice: launch rgbd_snapshot_server.py on the real robot
   clipboard: rgbd_snapshot_server       # optional
+- when:
+    remote_master: true
+  start_args:                    # button key -> launch arguments
+    disc_ros:
+      start_keyframe_node: false # appended as start_keyframe_node:='false'
+  reason: the keyframe node runs on the robot PC
 ```
 
 `when` conditions and the `invalid` / `only` lists name `world` or any generic
@@ -654,6 +660,11 @@ marked ready. `POST /args` rejects invalid values and a button press returns
 `remind_start` does not refuse anything: when a named toolbar button starts
 (by click, remote control or Auto Launch) the GUI logs the `notice`, shows it
 in an information popup and copies `clipboard`, if set, to the clipboard.
+`start_args` adds `name:=value` launch arguments to a command button while
+its rule holds, after the toolbar arguments, so one button runs correctly in
+simulation and on the real robot. The arguments are read when the button
+starts (a running process keeps what it started with) and show in the
+remote API's `full_command`.
 `running.*` conditions are read when a start or dropdown change is evaluated,
 not polled. Malformed rules are skipped and reported in the GUI log. The
 profile editor does not rewrite the rules file.

@@ -319,3 +319,52 @@ def test_bringup_start_reminds_and_copies_to_clipboard(
     finally:
         window.close()
         app.processEvents()
+
+
+KEYFRAME_ON_ROBOT = {
+    'when': {'remote_master': True},
+    'start_args': {'disc_ros': {'start_keyframe_node': False}},
+    'reason': 'the keyframe node runs on the robot PC',
+}
+
+
+def test_start_args_apply_only_while_the_rule_matches():
+    rules = parse_option_rules(
+        {'rules': [KEYFRAME_ON_ROBOT, {'start_args': {'disc_ros': 'oops'}}]}
+    )
+
+    assert len(rules.rules) == 1
+    assert 'start_args.disc_ros' in rules.errors[0]
+    assert rules.start_args({'remote_master': True}, 'disc_ros') == [
+        ('start_keyframe_node', 'false')
+    ]
+    assert rules.start_args({'remote_master': False}, 'disc_ros') == []
+    assert rules.start_args({'remote_master': True}, 'rviz') == []
+
+
+def test_start_args_reach_the_command_and_the_remote_api(monkeypatch, tmp_path):
+    app, window = _create_window(monkeypatch, tmp_path)
+    try:
+        window._option_rules = parse_option_rules({'rules': [KEYFRAME_ON_ROBOT]})
+        config = {
+            'key': 'disc_ros',
+            'label': 'DISC ROS',
+            'kind': 'command',
+            'command': 'roslaunch disc_mapping_ros disc_mapping_live.launch',
+        }
+        window._config_buttons['disc_ros'] = config
+
+        assert MainWindow._command_with_generic_args(
+            window, config['command'], config
+        ) == config['command']
+
+        window.remote_master_checkbox.setChecked(True)
+        expected = f"{config['command']} start_keyframe_node:='false'"
+        assert MainWindow._command_with_generic_args(
+            window, config['command'], config
+        ) == expected
+        described = MainWindowRemoteAdapter(window)._describe_button('disc_ros')
+        assert described['full_command'] == expected
+    finally:
+        window.close()
+        app.processEvents()
