@@ -750,7 +750,8 @@ tab shows the usual roslaunch shutdown output (`killing ...`, `shutting down
 processing monitor...`) until the container has exited. If the command does not
 exit within the grace period, the GUI stops the container, and a docker client
 that stays attached after that is killed a few seconds later, so a stop never
-leaves a button busy.
+leaves a button busy. If you restart the button, cleanup from its previous run
+does not interrupt the new tab's output or change the new button state.
 
 If a configured command's Docker client exits while its container is still
 running, its button stays on **Stop**. Press it to stop that container before

@@ -59,8 +59,10 @@ class ProcessTab:
         self.container_name: str | None = None
         self.exec_id: str | None = None
         self.xhost_token: str | None = None
+        self.run_generation = 0
 
     def start_shell(self, bash_cmd: str):
+        self.run_generation += 1
         self._reset_output_stream()
         self._append_command_line(bash_cmd)
         self.parent._log_cmd(bash_cmd)
@@ -68,6 +70,7 @@ class ProcessTab:
         self.proc.start('bash', ['-lc', bash_cmd])
 
     def start_program(self, program: str, args: list[str]):
+        self.run_generation += 1
         self._reset_output_stream()
         cmdline = program + ' ' + ' '.join(args)
         self._append_command_line(cmdline)

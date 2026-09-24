@@ -3221,6 +3221,7 @@ class MainWindow(QMainWindow):
         self._killing = False
         # tabs whose container is still being stopped after the client exited
         self._stopping_tab_keys: set[str] = set()
+        self._stopping_tab_generations: dict[str, int | None] = {}
         self._last_search = ''
         self._yaml_path = None
         self._custom_counter = 0
@@ -9490,12 +9491,18 @@ CMD ["bash"]
     def _container_reference_for_tab(self, tab: ProcessTab) -> str | None:
         return getattr(tab, 'container_name', None)
 
-    def _schedule_host_to_container_copy(self, tab: ProcessTab, attempt: int = 0):
+    def _schedule_host_to_container_copy(
+        self, tab: ProcessTab, attempt: int = 0, generation: int | None = None
+    ):
         if attempt > 6:
             return
         if not isinstance(tab, ProcessTab):
             return
         if not getattr(tab, 'container_name', None):
+            return
+        if generation is None:
+            generation = tab.run_generation
+        if tab.run_generation != generation:
             return
         entries = self._docker_cp_entries('host_to_container')
         if not entries:
@@ -9504,13 +9511,17 @@ CMD ["bash"]
         delay_ms = 500 if attempt == 0 else 1000
 
         def _attempt():
-            if not getattr(tab, 'container_name', None):
+            if tab.run_generation != generation or not tab.container_name:
                 return
 
             def resolved(ids: list[str]) -> None:
+                if tab.run_generation != generation:
+                    return
                 container_ref = ids[0] if ids else None
                 if not container_ref:
-                    self._schedule_host_to_container_copy(tab, attempt + 1)
+                    self._schedule_host_to_container_copy(
+                        tab, attempt + 1, generation
+                    )
                     return
                 ref_key = f'{container_ref}:{tab.key}'
                 if ref_key in self._synced_container_refs:
@@ -12096,7 +12107,7 @@ CMD ["bash"]
         ids: list[str] = []
         if exec_id:
             ids.extend(self._docker_ps_ids([f'label=mobipick.exec={exec_id}']))
-        if name:
+        elif name:
             ids.extend(self._docker_ps_ids([f'name={name}']))
             ids.extend(self._docker_ps_ids([f'label=com.docker.compose.oneoff.name={name}']))
         return list(dict.fromkeys(ids))
@@ -12131,7 +12142,7 @@ CMD ["bash"]
                 if exec_id and label_values.get('mobipick.exec') == exec_id:
                     ids.append(container_id)
                     continue
-                if name and (
+                if not exec_id and name and (
                     container_name == name
                     or label_values.get('com.docker.compose.oneoff.name') == name
                 ):
@@ -13053,6 +13064,8 @@ CMD ["bash"]
             self._disable_toggle_preserving_visual('terminal', self.terminal_button)
 
         tab = self._ensure_tab('roscore', 'Roscore', closable=False)
+        generation = tab.run_generation
+        exec_id = tab.exec_id
 
         pid = tab.pid()
         if pid:
@@ -13064,7 +13077,11 @@ CMD ["bash"]
                 self._append_gui_html(tab.key, f'<i>Failed to send SIGINT: {html.escape(str(e))}</i>')
 
         def _cleanup():
+            if tab.run_generation != generation:
+                return
             def _finalize():
+                if tab.run_generation != generation:
+                    return
                 self._roscore_running_cached = False
                 self._roscore_stopping = False
                 self._roscore_last_start_ts = None
@@ -13096,7 +13113,7 @@ CMD ["bash"]
                 commands = self._docker_stop_if_exists(
                     self._roscore_container_name,
                     tab,
-                    exec_id=tab.exec_id,
+                    exec_id=exec_id,
                     grace_s=0.0,
                 )
                 commands += self._stop_all_related(
@@ -13115,6 +13132,8 @@ CMD ["bash"]
                 return
 
             def plan(cp: subprocess.CompletedProcess) -> None:
+                if tab.run_generation != generation:
+                    return
                 commands: list[list[str]] = []
                 patterns = [value.lower() for value in self._related_patterns]
                 running_ids: list[str] = []
@@ -13295,11 +13314,17 @@ CMD ["bash"]
         self._killing = True
 
         tab = self._ensure_tab('sim', 'Sim', closable=False)
+        generation = tab.run_generation
+        exec_id = tab.exec_id
 
         # the container gets the SIGINT while docker compose stays attached,
         # so the tab shows the roslaunch shutdown output until it has exited
         def _fallbacks():
+            if tab.run_generation != generation:
+                return
             def _finalize():
+                if tab.run_generation != generation:
+                    return
                 self._release_xhost(tab, log_key=tab.key)
                 self._reap_detached_client(tab)
                 self._sim_running_cached = False
@@ -13310,7 +13335,7 @@ CMD ["bash"]
             self._graceful_stop_container(
                 self._sim_container_name,
                 tab,
-                exec_id=tab.exec_id,
+                exec_id=exec_id,
                 on_finished=_finalize,
             )
 
@@ -14452,16 +14477,19 @@ CMD ["bash"]
             self.set_terminal_visual('yellow', 'Closing Terminal...', False)
 
         if self._terminal_proc and self._terminal_proc.state() != QProcess.NotRunning:
-            self._terminal_proc.terminate()
-            QTimer.singleShot(2000, self._force_kill_terminal_proc)
+            proc = self._terminal_proc
+            proc.terminate()
+            QTimer.singleShot(
+                2000, lambda: self._force_kill_terminal_proc(proc)
+            )
         else:
             self._finalize_terminal_stop()
 
         self._cleanup_terminal_container()
 
-    def _force_kill_terminal_proc(self):
-        if self._terminal_proc and self._terminal_proc.state() != QProcess.NotRunning:
-            self._terminal_proc.kill()
+    def _force_kill_terminal_proc(self, proc: QProcess):
+        if proc is self._terminal_proc and proc.state() != QProcess.NotRunning:
+            proc.kill()
 
     def _finalize_terminal_stop(self):
         self._terminal_running_cached = False
@@ -14614,6 +14642,13 @@ CMD ["bash"]
     ):
         container_name = tab.container_name
         exec_id = getattr(tab, 'exec_id', None)
+        generation = getattr(tab, 'run_generation', None)
+
+        def same_launch() -> bool:
+            if generation is not None:
+                return getattr(tab, 'run_generation', None) == generation
+            return tab.container_name == container_name and tab.exec_id == exec_id
+
         # a container command is interrupted inside the container while its
         # docker client stays attached, so the tab keeps streaming the
         # roslaunch shutdown ("killing ...", "shutting down processing
@@ -14632,9 +14667,16 @@ CMD ["bash"]
         if not hasattr(self, '_stopping_tab_keys'):
             self._stopping_tab_keys = set()
         self._stopping_tab_keys.add(tab.key)
+        if not hasattr(self, '_stopping_tab_generations'):
+            self._stopping_tab_generations = {}
+        self._stopping_tab_generations[tab.key] = generation
 
         def finalize():
-            self._stopping_tab_keys.discard(tab.key)
+            if self._stopping_tab_generations.get(tab.key) == generation:
+                self._stopping_tab_generations.pop(tab.key, None)
+                self._stopping_tab_keys.discard(tab.key)
+            if not same_launch():
+                return
             if container_name:
                 tab.container_name = None
             tab.exec_id = None
@@ -14648,7 +14690,13 @@ CMD ["bash"]
             self._update_stop_custom_enabled()
 
         def _container_sigint_then_stop():
+            if not same_launch():
+                finalize()
+                return
             def stop_container() -> None:
+                if not same_launch():
+                    finalize()
+                    return
                 if container_name or exec_id:
                     self._graceful_stop_container(
                         container_name,
@@ -14690,7 +14738,14 @@ CMD ["bash"]
         this only guards against one that hangs, so the tab and its button
         can never stay busy forever.
         """
+        generation = getattr(tab, 'run_generation', None)
+        pid = tab.pid() if hasattr(tab, 'pid') else None
+
         def reap() -> None:
+            if generation is not None and tab.run_generation != generation:
+                return
+            if pid and tab.pid() != pid:
+                return
             if not tab.is_running():
                 return
             self._append_gui_html(
@@ -14701,6 +14756,15 @@ CMD ["bash"]
             tab.kill()
 
         QTimer.singleShot(timeout_ms, reap)
+
+    def _is_stopping_tab_run(self, key: str, tab: ProcessTab) -> bool:
+        """Whether the pending stop belongs to the tab's current launch."""
+        if key not in getattr(self, '_stopping_tab_keys', set()):
+            return False
+        generations = getattr(self, '_stopping_tab_generations', None)
+        return generations is None or generations.get(key) == getattr(
+            tab, 'run_generation', None
+        )
 
     # ---------- Output and search ----------
 
@@ -15454,7 +15518,7 @@ CMD ["bash"]
         self._set_config_visual(config, 'yellow', f'Checking {label}...', False)
 
         def resolved(ids: list[str]) -> None:
-            if tab.exec_id != exec_id or key in self._stopping_tab_keys:
+            if tab.exec_id != exec_id or MainWindow._is_stopping_tab_run(self, key, tab):
                 return
             if ids:
                 self._append_gui_html(
@@ -15470,7 +15534,7 @@ CMD ["bash"]
             self._mark_config_button_stopped(key)
 
         def query_failed(exc: Exception) -> None:
-            if tab.exec_id != exec_id or key in self._stopping_tab_keys:
+            if tab.exec_id != exec_id or MainWindow._is_stopping_tab_run(self, key, tab):
                 return
             self._append_gui_html(
                 key,
@@ -15506,7 +15570,7 @@ CMD ["bash"]
                 self._config_buttons.get(key, {}).get('kind') == 'command'
                 and tab.exec_id
             ):
-                if key not in self._stopping_tab_keys:
+                if not MainWindow._is_stopping_tab_run(self, key, tab):
                     self._reconcile_config_container_exit(key, tab)
                 return
             self._release_xhost(tab, log_key=key)
@@ -15543,7 +15607,7 @@ CMD ["bash"]
             self.set_toggle_visual('red', 'Start Sim', enabled=True)
             return
         if key in self._config_buttons:
-            if key in getattr(self, '_stopping_tab_keys', set()):
+            if tab and MainWindow._is_stopping_tab_run(self, key, tab):
                 # the docker client exited, but the container may still be
                 # shutting down; _stop_custom_tab turns the button red once
                 # it is gone, so a restart cannot overlap the old nodes

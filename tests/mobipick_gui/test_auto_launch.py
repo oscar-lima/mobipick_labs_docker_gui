@@ -1,8 +1,9 @@
 from pathlib import Path
 from types import MethodType, SimpleNamespace
+import sys
 
 import pytest
-from PyQt5.QtCore import QProcess
+from PyQt5.QtCore import QProcess, QProcessEnvironment
 from PyQt5.QtWidgets import QApplication, QHeaderView, QWidget
 
 import mobipick_gui.main_window as main_window_module
@@ -12,6 +13,7 @@ from mobipick_gui.main_window import (
     MainWindow,
     dependency_launch_schedule,
 )
+from mobipick_gui.process_tab import ProcessTab
 
 
 def test_auto_launch_progress_counts_down_and_hides_after_ready(monkeypatch):
@@ -1145,6 +1147,7 @@ def test_roscore_shutdown_finalizer_resets_config_buttons(monkeypatch):
         key = 'roscore'
         container_name = 'mobipick-roscore'
         exec_id = 'exec-id'
+        run_generation = 1
 
         def is_running(self):
             return False
@@ -1558,6 +1561,165 @@ def test_reap_detached_client_kills_only_a_hanging_client(
     assert delays == [3000]
     assert killed == ([True] if still_running else [])
     assert len(notes) == len(killed)
+
+
+def test_old_stop_completion_does_not_reset_restarted_button(monkeypatch):
+    timers, completions, visuals = [], [], []
+    monkeypatch.setattr(
+        main_window_module.QTimer, 'singleShot',
+        staticmethod(lambda delay, callback: timers.append((delay, callback))),
+    )
+    tab = SimpleNamespace(
+        key='gpt_demo', container_name='mpcmd-old', exec_id='old',
+        run_generation=1, pid=lambda: 1234, is_running=lambda: True,
+    )
+    harness = _stop_tab_harness([], [])
+    harness._config_buttons = {'gpt_demo': {'kind': 'command'}}
+    harness._graceful_stop_container = lambda name, stopped_tab, **kwargs: (
+        completions.append(kwargs['on_finished'])
+    )
+    harness._reap_detached_client = lambda _tab: visuals.append('reap')
+    harness._mark_config_button_stopped = lambda key: visuals.append(key)
+
+    MainWindow._stop_custom_tab(harness, tab)
+    timers.pop(0)[1]()
+    assert len(completions) == 1
+
+    tab.run_generation = 2
+    tab.container_name = 'mpcmd-new'
+    tab.exec_id = 'new'
+    completions[0]()
+
+    assert tab.container_name == 'mpcmd-new'
+    assert tab.exec_id == 'new'
+    assert visuals == []
+    assert harness._stopping_tab_keys == set()
+
+
+def test_old_delayed_stop_does_not_target_restarted_button(monkeypatch):
+    timers, stopped = [], []
+    monkeypatch.setattr(
+        main_window_module.QTimer, 'singleShot',
+        staticmethod(lambda delay, callback: timers.append((delay, callback))),
+    )
+    tab = SimpleNamespace(
+        key='gpt_demo', container_name='mpcmd-old', exec_id='old',
+        run_generation=1, pid=lambda: 1234, is_running=lambda: True,
+    )
+    harness = _stop_tab_harness([], [])
+    harness._graceful_stop_container = lambda *args, **kwargs: stopped.append(
+        (args, kwargs)
+    )
+
+    MainWindow._stop_custom_tab(harness, tab)
+    tab.run_generation = 2
+    tab.container_name = 'mpcmd-new'
+    tab.exec_id = 'new'
+    timers.pop(0)[1]()
+
+    assert stopped == []
+    assert tab.container_name == 'mpcmd-new'
+    assert tab.exec_id == 'new'
+
+
+def test_container_lookup_uses_launch_label_over_reused_name():
+    queries, resolved = [], []
+    harness = SimpleNamespace(
+        _docker_ps_ids=lambda filters: queries.append(filters) or ['old-id'],
+        _sp_run_async=lambda _cmd, **kwargs: kwargs['on_finished'](
+            SimpleNamespace(
+                returncode=0,
+                stdout=(
+                    'old-id|shared-name|mobipick.exec=old\n'
+                    'new-id|shared-name|mobipick.exec=new\n'
+                ),
+            )
+        ),
+    )
+
+    assert MainWindow._resolve_container_ids(
+        harness, name='shared-name', exec_id='old'
+    ) == ['old-id']
+    assert queries == [['label=mobipick.exec=old']]
+    MainWindow._resolve_container_ids_async(
+        harness, name='shared-name', exec_id='old',
+        on_finished=resolved.extend,
+    )
+    assert resolved == ['old-id']
+
+
+def test_terminal_kill_timer_ignores_replacement_launcher():
+    killed = []
+    old_proc = SimpleNamespace(
+        state=lambda: QProcess.Running,
+        kill=lambda: killed.append('old'),
+    )
+    new_proc = SimpleNamespace(
+        state=lambda: QProcess.Running,
+        kill=lambda: killed.append('new'),
+    )
+    harness = SimpleNamespace(_terminal_proc=new_proc)
+
+    MainWindow._force_kill_terminal_proc(harness, old_proc)
+    assert killed == []
+    MainWindow._force_kill_terminal_proc(harness, new_proc)
+    assert killed == ['new']
+
+
+def test_old_reap_does_not_kill_restarted_client_or_its_output(monkeypatch):
+    app = QApplication.instance() or QApplication([])
+    timers, notes = [], []
+    monkeypatch.setattr(
+        main_window_module.QTimer, 'singleShot',
+        staticmethod(lambda delay, callback: timers.append((delay, callback))),
+    )
+
+    class Parent(QWidget):
+        _command_log_color = '#ffffff'
+
+        def _build_process_environment(self, _overrides):
+            return QProcessEnvironment.systemEnvironment()
+
+        def _log_cmd(self, _command):
+            pass
+
+        def _filter_terminal_escapes(self, value):
+            return value
+
+        def _collapse_carriage_returns(self, value):
+            return value
+
+    parent = Parent()
+    tab = ProcessTab('gpt_demo', 'GPT Robot Demo', parent, False,
+                     notify_parent_finished=False)
+    harness = SimpleNamespace(
+        _append_gui_html=lambda key, message: notes.append(message),
+    )
+    try:
+        tab.start_program(sys.executable, ['-u', '-c', 'print("old output")'])
+        assert tab.proc.waitForFinished(3000)
+        MainWindow._reap_detached_client(harness, tab)
+
+        tab.start_program(sys.executable, [
+            '-u', '-c',
+            'import time; print("new output 1"); time.sleep(0.2); '
+            'print("new output 2"); time.sleep(0.2)',
+        ])
+        assert tab.proc.waitForStarted(3000)
+        assert timers[0][0] == 3000
+        timers.pop(0)[1]()
+        assert tab.is_running()
+        assert tab.proc.waitForFinished(3000)
+        app.processEvents()
+        tab.output._flush()
+        assert 'new output 1' in tab.output.toPlainText()
+        assert 'new output 2' in tab.output.toPlainText()
+        assert notes == []
+    finally:
+        if tab.is_running():
+            tab.kill()
+            tab.proc.waitForFinished(3000)
+        parent.close()
 
 
 def test_config_button_stays_stopping_until_container_is_gone(monkeypatch):
