@@ -752,5 +752,9 @@ exit within the grace period, the GUI stops the container, and a docker client
 that stays attached after that is killed a few seconds later, so a stop never
 leaves a button busy.
 
+If a configured command's Docker client exits while its container is still
+running, its button stays on **Stop**. Press it to stop that container before
+starting another copy. The button returns to **Start** after the stop finishes.
+
 The main window remembers its last normal size, position, and maximized state
 and restores them the next time the GUI opens.

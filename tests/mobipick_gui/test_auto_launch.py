@@ -1439,6 +1439,84 @@ def test_container_stop_keeps_client_attached_for_shutdown_logs(monkeypatch):
     assert events == [('container_stop', 'mpcmd-0acb687be6'), 'reap']
 
 
+@pytest.mark.parametrize('container_ids', [['live-container'], []])
+def test_config_client_exit_checks_container_before_allowing_restart(
+    container_ids,
+):
+    visuals, releases, queries, stopped = [], [], [], []
+    tab = SimpleNamespace(
+        key='gpt_demo', container_name='mpcmd-first', exec_id='first',
+    )
+    config = {
+        'key': 'gpt_demo', 'label': 'GPT Robot Demo', 'kind': 'command',
+    }
+    harness = SimpleNamespace(
+        _exit_in_progress=False,
+        _terminal_stream_tab_key=None,
+        _config_buttons={'gpt_demo': config},
+        _stopping_tab_keys=set(),
+        tasks={'gpt_demo': tab},
+        _append_gui_html=lambda *args: None,
+        _release_xhost=lambda *args, **kwargs: releases.append(True),
+        _set_config_visual=lambda cfg, state, text, enabled: visuals.append(
+            (state, enabled)
+        ),
+        _resolve_container_ids_async=lambda **kwargs: queries.append(kwargs),
+        _mark_config_button_stopped=lambda key: stopped.append(key),
+    )
+    harness._config_label = MethodType(MainWindow._config_label, harness)
+    harness._reconcile_config_container_exit = MethodType(
+        MainWindow._reconcile_config_container_exit, harness,
+    )
+
+    MainWindow.on_task_finished(
+        harness, 'gpt_demo', 9, QProcess.CrashExit,
+    )
+
+    assert visuals == [('yellow', False)]
+    assert tab.exec_id == 'first'
+    assert queries[0]['name'] == 'mpcmd-first'
+    assert queries[0]['exec_id'] == 'first'
+    queries[0]['on_finished'](container_ids)
+    if container_ids:
+        assert visuals[-1] == ('green', True)
+        assert tab.exec_id == 'first'
+        assert releases == stopped == []
+    else:
+        assert tab.exec_id is None
+        assert tab.container_name is None
+        assert releases == [True]
+        assert stopped == ['gpt_demo']
+
+
+def test_detached_config_container_button_stops_existing_run():
+    stopped = []
+    tab = SimpleNamespace(
+        key='gpt_demo', container_name='mpcmd-first', exec_id='first',
+        is_running=lambda: False,
+    )
+    config = {
+        'key': 'gpt_demo', 'label': 'GPT Robot Demo',
+        'kind': 'command', 'command': 'roslaunch gpt demo.launch',
+    }
+    harness = SimpleNamespace(
+        _config_buttons={'gpt_demo': config},
+        tasks={'gpt_demo': tab},
+        _get_button_widget=lambda _key: None,
+        _guard_toggle_action=lambda *_args: True,
+        _ensure_tab=lambda *_args, **_kwargs: tab,
+        _set_config_visual=lambda *_args: None,
+        _stop_custom_tab=lambda stopped_tab, **kwargs: stopped.append(stopped_tab),
+        _config_runs_on_host=MainWindow._config_runs_on_host,
+    )
+    harness._config_label = MethodType(MainWindow._config_label, harness)
+
+    assert MainWindow._is_button_running(harness, 'gpt_demo')
+    MainWindow._run_config_command(harness, config)
+
+    assert stopped == [tab]
+
+
 def test_host_command_stop_still_interrupts_the_client(monkeypatch):
     events, delays, kills = [], [], []
     _run_timers(monkeypatch, delays)

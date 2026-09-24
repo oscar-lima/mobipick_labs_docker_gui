@@ -8340,7 +8340,7 @@ CMD ["bash"]
         pass_master = bool(config.get('pass_ros_master_uri'))
         label = self._config_label(config)
         tab = self._ensure_tab(key, label, closable=False)
-        if tab.is_running():
+        if tab.is_running() or (not run_on_host and bool(tab.exec_id)):
             self._set_config_visual(config, 'yellow', f'Stopping {label}...', False)
             running_config = getattr(
                 self,
@@ -12066,7 +12066,9 @@ CMD ["bash"]
             return self.is_sim_running()
         tab = self.tasks.get(key)
         if tab:
-            return tab.is_running()
+            return tab.is_running() or bool(
+                key in self._config_buttons and tab.exec_id
+            )
         return False
 
     def _docker_ps_ids(self, filters: list[str]) -> list[str]:
@@ -12103,9 +12105,16 @@ CMD ["bash"]
         name: str | None = None,
         exec_id: str | None = None,
         on_finished: Callable[[list[str]], None],
+        on_error: Callable[[Exception], None] | None = None,
     ) -> None:
         """Resolve live containers without querying Docker on the GUI thread."""
         def parsed(cp: subprocess.CompletedProcess) -> None:
+            if cp.returncode != 0:
+                if on_error is not None:
+                    on_error(RuntimeError('docker ps failed'))
+                else:
+                    on_finished([])
+                return
             ids: list[str] = []
             for line in (cp.stdout or '').splitlines():
                 parts = line.split('|', 2)
@@ -12136,7 +12145,7 @@ CMD ["bash"]
             log_stdout=False,
             log_stderr=False,
             on_finished=parsed,
-            on_error=lambda _exc: on_finished([]),
+            on_error=on_error or (lambda _exc: on_finished([])),
         )
 
     def _extract_widget_html(self, widget: QTextEdit) -> str | None:
@@ -15424,6 +15433,47 @@ CMD ["bash"]
 
     # ---------- Process completion callback ----------
 
+    def _reconcile_config_container_exit(
+        self, key: str, tab: ProcessTab
+    ) -> None:
+        """Keep a command button attached when its Docker client exits first."""
+        exec_id = tab.exec_id
+        name = tab.container_name
+        config = self._config_buttons[key]
+        label = self._config_label(config)
+        self._set_config_visual(config, 'yellow', f'Checking {label}...', False)
+
+        def resolved(ids: list[str]) -> None:
+            if tab.exec_id != exec_id or key in self._stopping_tab_keys:
+                return
+            if ids:
+                self._append_gui_html(
+                    key,
+                    '<i>Docker client exited, but its container is still '
+                    'running. Use the button to stop it.</i>',
+                )
+                self._set_config_visual(config, 'green', f'Stop {label}', True)
+                return
+            self._release_xhost(tab, log_key=key)
+            tab.container_name = None
+            tab.exec_id = None
+            self._mark_config_button_stopped(key)
+
+        def query_failed(exc: Exception) -> None:
+            if tab.exec_id != exec_id or key in self._stopping_tab_keys:
+                return
+            self._append_gui_html(
+                key,
+                '<i>Could not verify whether the container is running: '
+                f'{html.escape(str(exc))}. Use the button to stop it.</i>',
+            )
+            self._set_config_visual(config, 'green', f'Stop {label}', True)
+
+        self._resolve_container_ids_async(
+            name=name, exec_id=exec_id,
+            on_finished=resolved, on_error=query_failed,
+        )
+
     def on_task_finished(self, key: str, exit_code: int, exit_status):
         # Exit cleanup owns process teardown. Do not enqueue GUI updates while
         # Qt is in the process of destroying child widgets and timers.
@@ -15441,8 +15491,15 @@ CMD ["bash"]
         )
         tab = self.tasks.get(key)
         if tab:
-            self._release_xhost(tab, log_key=key)
             self._append_gui_html(key, f'<i>Process finished with code {exit_code} [{status_name}]</i>')
+            if (
+                self._config_buttons.get(key, {}).get('kind') == 'command'
+                and tab.exec_id
+            ):
+                if key not in self._stopping_tab_keys:
+                    self._reconcile_config_container_exit(key, tab)
+                return
+            self._release_xhost(tab, log_key=key)
             tab.container_name = None
             tab.exec_id = None
         if key == 'roscore':
