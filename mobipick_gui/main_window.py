@@ -3217,6 +3217,8 @@ class MainWindow(QMainWindow):
         self._restore_window_state(window_cfg)
 
         self._killing = False
+        # tabs whose container is still being stopped after the client exited
+        self._stopping_tab_keys: set[str] = set()
         self._last_search = ''
         self._yaml_path = None
         self._custom_counter = 0
@@ -8228,6 +8230,20 @@ CMD ["bash"]
             self.set_toggle_visual(state, text, enabled)
             return
         self._set_toggle_state(key, self._get_button_widget(key), state, text, enabled)
+
+    def _mark_config_button_stopped(self, key: str) -> None:
+        cfg = self._config_buttons.get(key)
+        if cfg is None:
+            return
+        label = self._config_label(cfg)
+        self._set_config_visual(cfg, 'red', f'Start {label}', True)
+        getattr(
+            self,
+            '_active_config_button_configs',
+            {},
+        ).pop(key, None)
+        if key in getattr(self, '_retired_config_button_keys', set()):
+            self._remove_retired_config_button(key)
 
     def _reset_config_button_visuals(
         self,
@@ -14587,14 +14603,20 @@ CMD ["bash"]
         container_name = tab.container_name
 
         exec_id = getattr(tab, 'exec_id', None)
+        if not hasattr(self, '_stopping_tab_keys'):
+            self._stopping_tab_keys = set()
+        self._stopping_tab_keys.add(tab.key)
 
         def finalize():
+            self._stopping_tab_keys.discard(tab.key)
             if container_name:
                 tab.container_name = None
             tab.exec_id = None
             self._release_xhost(tab, log_key=tab.key)
             if on_stopped:
                 on_stopped()
+            if tab.key in getattr(self, '_config_buttons', {}) and not tab.is_running():
+                self._mark_config_button_stopped(tab.key)
             self._update_stop_custom_enabled()
 
         def _container_sigint_then_stop():
@@ -15418,16 +15440,12 @@ CMD ["bash"]
             self.set_toggle_visual('red', 'Start Sim', enabled=True)
             return
         if key in self._config_buttons:
-            cfg = self._config_buttons[key]
-            label = self._config_label(cfg)
-            self._set_config_visual(cfg, 'red', f'Start {label}', True)
-            getattr(
-                self,
-                '_active_config_button_configs',
-                {},
-            ).pop(key, None)
-            if key in getattr(self, '_retired_config_button_keys', set()):
-                self._remove_retired_config_button(key)
+            if key in getattr(self, '_stopping_tab_keys', set()):
+                # the docker client exited, but the container may still be
+                # shutting down; _stop_custom_tab turns the button red once
+                # it is gone, so a restart cannot overlap the old nodes
+                return
+            self._mark_config_button_stopped(key)
             return
         if key == 'tables':
             if self._roscore_stopping or self._toggle_states.get('tables') == 'yellow':

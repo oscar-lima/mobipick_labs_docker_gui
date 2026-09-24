@@ -1389,3 +1389,50 @@ def test_dependency_schedule_does_not_wait_for_a_dropped_dependency():
     )
 
     assert schedule['anygrasp'] == (0.0, 10.0, False)
+
+
+def test_config_button_stays_stopping_until_container_is_gone(monkeypatch):
+    monkeypatch.setattr(
+        main_window_module.QTimer,
+        'singleShot',
+        staticmethod(lambda _ms, callback: callback()),
+    )
+    visuals = []
+    container_stops = []
+    tab = SimpleNamespace(
+        key='tables',
+        pid=lambda: None,
+        is_running=lambda: False,
+        container_name=None,
+        exec_id='abc',
+    )
+    harness = SimpleNamespace(
+        _config_buttons={'tables': {'key': 'tables', 'label': 'Tables', 'kind': 'command'}},
+        _active_config_button_configs={'tables': {}},
+        _retired_config_button_keys=set(),
+        _stopping_tab_keys=set(),
+        _timers_cfg={'custom_tab_sigint_delay_ms': 0},
+        _release_xhost=lambda _tab, log_key=None: None,
+        _update_stop_custom_enabled=lambda: None,
+        _set_config_visual=lambda cfg, state, text, enabled: visuals.append(state),
+        _graceful_stop_container=lambda name, tab, exec_id=None, on_finished=None: (
+            container_stops.append(on_finished)
+        ),
+    )
+    harness._config_label = MethodType(MainWindow._config_label, harness)
+    harness._mark_config_button_stopped = MethodType(
+        MainWindow._mark_config_button_stopped,
+        harness,
+    )
+
+    MainWindow._stop_custom_tab(harness, tab)
+
+    # the docker client is gone, the container stop is still running
+    assert harness._stopping_tab_keys == {'tables'}
+    assert visuals == []
+
+    container_stops[0]()
+
+    assert harness._stopping_tab_keys == set()
+    assert visuals == ['red']
+    assert 'tables' not in harness._active_config_button_configs
