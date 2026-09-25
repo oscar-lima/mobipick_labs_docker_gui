@@ -610,9 +610,13 @@ travel with loaded or exported profiles.
 ### Option rules
 
 A profile can make dropdown options invalid under conditions without any
-workspace-specific GUI code. `mobipick_gui/option_rules.py` loads
-`<profile stem>_rules.yaml` beside the button profile, or `option_rules.yaml`
-in the same directory, whenever the profile is loaded:
+workspace-specific GUI code. `mobipick_gui/option_rules.py` always loads
+`resources/config/option_rules.yaml`, then loads `<profile stem>_rules.yaml`
+beside the button profile or `option_rules.yaml` in the same directory.
+The shared rules keep remote-master mode on `cic_tables`, `disc_mode=cpu`,
+and `anygrasp_mode=real` when those selectors are present. All invalid
+selections are switched automatically and reported in one warning. For
+example, profile-specific rules can add other conditions:
 
 ```yaml
 rules:

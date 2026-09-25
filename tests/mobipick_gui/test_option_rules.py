@@ -6,6 +6,7 @@ import yaml
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
 from mobipick_gui.main_window import MainWindow
+from PyQt5.QtWidgets import QComboBox
 from mobipick_gui.option_rules import (
     load_option_rules,
     option_rules_path,
@@ -109,7 +110,7 @@ def test_rules_file_is_found_beside_the_button_profile(tmp_path):
     profile = tmp_path / 'profile.yaml'
     profile.write_text('buttons: []\n')
     assert option_rules_path(profile) is None
-    assert load_option_rules(profile).rules == []
+    assert len(load_option_rules(profile).rules) == 1
 
     shared = tmp_path / 'option_rules.yaml'
     shared.write_text(yaml.safe_dump(REAL_ROBOT_RULES))
@@ -118,7 +119,44 @@ def test_rules_file_is_found_beside_the_button_profile(tmp_path):
     specific = tmp_path / 'profile_rules.yaml'
     specific.write_text(yaml.safe_dump(REAL_ROBOT_RULES))
     assert option_rules_path(profile) == specific
-    assert len(load_option_rules(profile).rules) == 1
+    assert len(load_option_rules(profile).rules) == 2
+
+
+def test_remote_master_switches_all_robot_options_in_one_warning(
+    monkeypatch, tmp_path
+):
+    popups = _record_popups(monkeypatch)
+    app, window = _create_window(monkeypatch, tmp_path)
+    try:
+        window._option_rules = load_option_rules(None)
+        disc = QComboBox(window)
+        disc.addItems(['mockup', 'cpu'])
+        anygrasp = QComboBox(window)
+        anygrasp.addItems(['mockup', 'real'])
+        window._generic_arg_inputs = {2: disc, 3: anygrasp}
+        window._generic_arg_names_by_slot = {
+            2: 'disc_mode', 3: 'anygrasp_mode'
+        }
+        window.world_combo.setCurrentText('moelk_tables')
+
+        window.remote_master_checkbox.setChecked(True)
+
+        assert window._current_world() == 'cic_tables'
+        assert disc.currentText() == 'cpu'
+        assert anygrasp.currentText() == 'real'
+        assert len(popups) == 1
+        assert all(
+            value in popups[0][1]
+            for value in ('world=moelk_tables', 'disc_mode=mockup',
+                          'anygrasp_mode=mockup')
+        )
+        assert not disc.model().item(0).isEnabled()
+        assert not anygrasp.model().item(0).isEnabled()
+        with pytest.raises(ValueError, match='invalid'):
+            window.set_generic_args({'disc_mode': 'mockup'})
+    finally:
+        window.close()
+        app.processEvents()
 
 
 def test_remote_master_makes_moelk_tables_invalid(monkeypatch, tmp_path):
@@ -415,4 +453,3 @@ def test_start_reminders_share_one_window(monkeypatch, tmp_path):
     finally:
         window.close()
         app.processEvents()
-

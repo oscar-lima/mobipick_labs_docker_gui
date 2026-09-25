@@ -65,6 +65,9 @@ import yaml
 RULES_FILE_SUFFIX = '_rules.yaml'
 RUNNING_PREFIX = 'running.'
 SHARED_RULES_FILE = 'option_rules.yaml'
+DEFAULT_RULES_FILE = (
+    Path(__file__).resolve().parent / 'resources' / 'config' / SHARED_RULES_FILE
+)
 
 
 @dataclass(frozen=True)
@@ -293,13 +296,20 @@ def option_rules_path(button_config: str | Path | None) -> Path | None:
 
 
 def load_option_rules(button_config: str | Path | None) -> OptionRules:
-    """Load the rules file next to ``button_config``; empty when absent."""
-    path = option_rules_path(button_config)
-    if path is None:
-        return OptionRules()
-    try:
-        with path.open('r', encoding='utf-8') as handle:
-            data = yaml.safe_load(handle)
-    except (OSError, yaml.YAMLError) as exc:
-        return OptionRules(path=path, errors=[str(exc)])
-    return parse_option_rules(data, path)
+    """Load shared rules and any rules beside ``button_config``."""
+    loaded = OptionRules()
+    profile_path = option_rules_path(button_config)
+    for path in dict.fromkeys((DEFAULT_RULES_FILE, profile_path)):
+        if path is None or not path.is_file():
+            continue
+        try:
+            with path.open('r', encoding='utf-8') as handle:
+                data = yaml.safe_load(handle)
+        except (OSError, yaml.YAMLError) as exc:
+            loaded.errors.append(f'{path}: {exc}')
+            continue
+        parsed = parse_option_rules(data, path)
+        loaded.rules.extend(parsed.rules)
+        loaded.errors.extend(f'{path}: {error}' for error in parsed.errors)
+        loaded.path = path
+    return loaded

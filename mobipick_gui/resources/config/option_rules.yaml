@@ -1,0 +1,8 @@
+rules:
+  - when:
+      remote_master: true
+    only:
+      world: [cic_tables]
+      disc_mode: [cpu]
+      anygrasp_mode: [real]
+    reason: the real robot requires cic_tables, CPU DISC, and real AnyGrasp

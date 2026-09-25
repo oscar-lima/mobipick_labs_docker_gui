@@ -324,12 +324,12 @@ workspace selection is likewise retained in the workspace registry.
 The **world_config** selector chooses the Gazebo world setting passed to the
 simulation and RQt tables launch.
 
-A workspace can ship option rules beside its button profile that make some
-choices invalid in certain situations, for example allowing only
-`cic_tables` while **Use remote ROS master** is on because the real robot
-supports no other world. Invalid options are greyed out and their tooltip
-says why; when a selection becomes invalid the GUI switches to the first
-valid option and a popup tells you. Rules can also require a button to run
+A shared option rule selects `cic_tables`, `disc_mode=cpu`, and
+`anygrasp_mode=real` while **Use remote ROS master** is on, when those
+selectors are available. Invalid options are greyed out and their tooltip
+says why; the GUI switches any invalid selections automatically and lists
+all changes in one warning. A workspace can also ship option rules beside
+its button profile. Rules can require a button to run
 first: with the real robot, for example, every other button refuses to start
 with a popup until **tables_demo_bringup** is running. **Auto Launch**
 checks the whole sequence before starting: if a step would be refused and
