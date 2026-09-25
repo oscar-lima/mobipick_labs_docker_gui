@@ -1449,6 +1449,43 @@ def test_remote_glow_icon_honours_colour():
     assert blue.blue() > blue.green() and green.green() > green.blue()
 
 
+@pytest.mark.parametrize('desktop_session', ['x11', 'wayland'])
+def test_gnome_app_glow_clear_waits_for_pending_halo(
+    monkeypatch, desktop_session
+):
+    from mobipick_gui.window_control import GnomeAppGlow
+
+    monkeypatch.setenv('XDG_SESSION_TYPE', desktop_session)
+    glow = GnomeAppGlow('app', probe=False)
+    glow._available = True
+    started = threading.Event()
+    release = threading.Event()
+    calls = []
+
+    def fake_call(self, method, *args):
+        calls.append((method, args))
+        if method == 'SetAppGlow' and args[1] > 0:
+            started.set()
+            assert release.wait(5)
+        return (1,)
+
+    monkeypatch.setattr(GnomeAppGlow, '_call', fake_call)
+    glow.set_level(0.5)
+    assert started.wait(5)
+
+    cleared = threading.Event()
+    clearer = threading.Thread(target=lambda: (glow.clear(), cleared.set()))
+    clearer.start()
+    assert not cleared.wait(0.05)
+    release.set()
+    clearer.join(5)
+
+    assert cleared.is_set()
+    assert [args[1] for method, args in calls if method == 'SetAppGlow'] == [
+        0.5, 0.0
+    ]
+
+
 def test_gnome_app_glow_sends_colour_changes(monkeypatch):
     from mobipick_gui.window_control import GnomeAppGlow
 

@@ -702,12 +702,20 @@ class GnomeAppGlow:
                 self._start_worker_locked()
 
     def clear(self, timeout: float = 3.0) -> None:
-        """Request restoration of the plain icon without joining the worker."""
+        """Restore the plain icon before the GUI exits, within ``timeout``."""
+        deadline = time.monotonic() + max(0.0, timeout)
         with self._cond:
             self._level = 0.0
             self._stopping = True
             if self._available:
                 self._start_worker_locked()
+            probe = self._probe_thread
+        if probe is not None and probe is not threading.current_thread():
+            probe.join(max(0.0, deadline - time.monotonic()))
+        with self._cond:
+            worker = self._thread
+        if worker is not None and worker is not threading.current_thread():
+            worker.join(max(0.0, deadline - time.monotonic()))
 
     def _run(self) -> None:
         while True:
