@@ -593,7 +593,25 @@ Command entries can declare:
 - `pass_ros_master_uri`;
 - `service`, for choosing the compose service used by Docker command buttons.
   Leave it empty for the normal tool service, or use `mobipick` for launch
-  files that start Gazebo themselves and need the simulator service identity.
+  files that start Gazebo themselves and need the simulator service identity;
+- `opens_window`, `true` for a button whose process exists to show a window
+  (viewers, rqt tools). Headless mode's Auto Launch skips it. Unset, only the
+  builtin RViz and RQt buttons count as windows;
+- `headless_args`, a mapping of ROS arguments the button gets while headless
+  mode is on, e.g. `{gui: 'false'}` for the simulator. A name that is also a
+  generic argument slot replaces the selected value; the others are appended.
+
+### Headless mode
+
+The **Headless** switch next to Auto Launch (remote: `POST /headless`) starts
+nothing that opens a window: Auto Launch skips the `opens_window` buttons (a
+process that depended on a skipped one inherits that one's dependency),
+does not replay the window layout (`window_layout_applied` still fires at the
+same moment, with `skipped: headless`), and every button start receives its
+`headless_args`. It applies to the next launches, not to running processes,
+and a window button pressed by hand still opens its window. The choice is
+remembered across restarts; `headless.enabled_by_default` in
+`gui_settings.yaml` sets it for a fresh configuration.
 
 Profiles can also define as many as 24 generic ROS arguments on each button.
 For slot 1, set `arg_1_name` to the argument name, provide the dropdown values
@@ -871,6 +889,7 @@ click with a wait without missing events.
 | `GET /presence`, `POST /presence`, `DELETE /presence` | Declare that a client is using the GUI (`{"name": "<agent>", "ttl_s": 600, "note": ""}`; the name is chosen by the client, so any agent can use its own, and several may be present at once) or withdraw it. The first `POST` for a name returns a `token` that the `DELETE` must carry (`{"name": ..., "token": ...}`); a refresh by a namesake gets no token and its bye is refused with 409, so two agents that picked the same name cannot withdraw and clean up after each other. While a client is present the window icon glows bright and the GUI log records who is working. Presence is kept alive by activity, not by heartbeats: every request the client sends refreshes it (with several clients present, name yourself with the `X-Client-Name` header or a `client` field; an anonymous request refreshes the client present the longest, the one that also owns new processes), and so does a shell command it started that is still running or an `follow=1` stream it keeps open. Only `ttl_s` (default 10 min, max 30 min) of complete idleness lapses it. The server remembers every button, custom command, and shell the client started; when the client withdraws (without `"keep": true`) or lapses, the GUI stops those and logs the cleanup, so a crashed agent cannot leave the simulator running. Clients should not run a separate presence-refresh process: one that outlives its owner keeps a dead agent "present" for hours. |
 | `POST /reload` | Re-read `gui_settings.yaml` and the workspace button profile without restarting the GUI. Button commands, labels, tooltips and argument slots are picked up for the next press; running processes and their tabs are preserved. |
 | `GET /recording`, `POST /recording/{start\|pause\|resume\|stop}` | Screen recording state (`active`, `paused`, `segments`, `recorded_s`, `video_path`, `video_speedup_path`) and its control without Auto Launch. A recording started by a client is stopped when that client leaves. |
+| `GET /headless`, `POST /headless` | Headless mode (see above): `enabled`, the window buttons Auto Launch skips (`skipped_by_auto_launch`) and each button's `headless_args`. `POST {"enabled": true}` switches it for the next launches and emits `headless_changed`. |
 | `POST /tabs/{key}/stop` | Stop the process behind a log tab: a button process (same as `/buttons/{key}/stop`), a `customN` command started with `/command`, or a remote shell. |
 | `GET /events?since=N&names=a,b` | Event history; add `follow=1&timeout=s` to stream NDJSON. |
 | `POST /wait` | Block until one of `events` arrives after `since` (default: now) or `timeout`; `key` restricts keyed events to one button or tab. |

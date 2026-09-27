@@ -60,6 +60,7 @@ class MainWindowRemoteAdapter(GuiAdapter):
             'auto_launch_running': bool(getattr(window, '_auto_launch_running', False)),
             'auto_launch_active': list(getattr(window, '_auto_launch_active_keys', []) or []),
             'auto_launch_ready': sorted(getattr(window, '_auto_launch_ready_keys', set()) or []),
+            'headless': bool(getattr(window, '_headless_mode', False)),
             'exit_in_progress': bool(getattr(window, '_exit_in_progress', False)),
             'buttons': self.buttons(),
             'tabs': self.tabs(),
@@ -139,6 +140,14 @@ class MainWindowRemoteAdapter(GuiAdapter):
         else:
             raise NotFound(f'unknown recording action {action!r}')
         return {'accepted': accepted, 'reason': reason, **window.recording_status()}
+
+    # -- headless mode ---------------------------------------------------
+
+    def headless(self) -> dict:
+        return self.window.headless_status()
+
+    def set_headless(self, enabled: bool) -> dict:
+        return self.window.set_headless(enabled)
 
     # -- buttons -------------------------------------------------------
 

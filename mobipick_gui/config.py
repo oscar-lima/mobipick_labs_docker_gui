@@ -22,6 +22,8 @@ except ImportError:  # pragma: no cover - Windows safety
 
 import yaml
 
+from .headless import normalize_headless_args
+
 try:  # Python 3.9+
     from importlib import resources as importlib_resources
 except ImportError:  # pragma: no cover - fallback for Python 3.8
@@ -209,6 +211,10 @@ CONFIG_DEFAULTS: Dict[str, Dict] = {
         ),
         'auto_apply': True,
         'apply_delay_ms': 'auto',
+    },
+    'headless': {
+        # start with the Headless switch on (a remembered choice wins)
+        'enabled_by_default': False,
     },
     'recording': {
         'enabled_by_default': False,
@@ -659,6 +665,12 @@ def _normalize_button_entry(item: dict) -> dict | None:
         'log_command': item.get('log_command'),
         'pass_ros_master_uri': item.get('pass_ros_master_uri', False),
         'service': item.get('service') or '',
+        # None = unset: builtin RViz/RQt count as windows (headless.py)
+        'opens_window': (
+            bool(item['opens_window'])
+            if item.get('opens_window') is not None else None
+        ),
+        'headless_args': normalize_headless_args(item.get('headless_args')),
     }
     for slot in GENERIC_BUTTON_ARG_SLOTS:
         normalized[f'arg_{slot}_name'] = str(
@@ -824,6 +836,11 @@ def _button_entry_for_save(entry: dict) -> dict:
         saved['host'] = True
     if bool(entry.get('pass_ros_master_uri')):
         saved['pass_ros_master_uri'] = True
+    if entry.get('opens_window') is not None:
+        saved['opens_window'] = bool(entry['opens_window'])
+    headless_args = normalize_headless_args(entry.get('headless_args'))
+    if headless_args:
+        saved['headless_args'] = headless_args
     for slot in GENERIC_BUTTON_ARG_SLOTS:
         arg_name = str(entry.get(f'arg_{slot}_name') or '').strip()
         if arg_name:

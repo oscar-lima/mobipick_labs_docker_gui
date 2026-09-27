@@ -797,6 +797,8 @@ API_INDEX = [
     ('GET', '/events?since=N&names=a,b&follow=1&timeout=s', 'List or stream (NDJSON) events.'),
     ('POST', '/wait', 'Block until an event. Body: {"events": [names], "since": N, "timeout": s, "key": "sim"}.'),
     ('POST', '/reload', 'Re-read gui_settings.yaml and the workspace button profile without restarting the GUI.'),
+    ('GET', '/headless', 'Headless mode: enabled, the window buttons Auto Launch skips, and the headless_args each button gets.'),
+    ('POST', '/headless', 'Switch headless mode for the next launches (running processes keep their windows). Body: {"enabled": true}. On: Auto Launch skips buttons that open a window (RViz, RQt, viewers), window_layout_applied fires with skipped "headless", and every button start appends its headless_args (e.g. sim gui:=false).'),
     ('GET', '/recording', 'Screen recording state: active, paused, segments, recorded_s, video_path and the sped-up video_speedup_path.'),
     ('POST', '/recording/{start|pause|resume|stop}', 'Control the screen recording without Auto Launch. Pause ends the current segment, resume starts the next one; stop concatenates the segments and renders the sped-up copy (event recording_exported).'),
     ('POST', '/tabs/{key}/stop', 'Stop the process behind a log tab: a button process, a customN command, or a remote shell.'),
@@ -1303,7 +1305,7 @@ class RemoteControlServer:
                     'shell_exited', 'shell_closed', 'client_connected',
                     'client_disconnected', 'config_reloaded', 'gui_closing',
                     'recording_started', 'recording_paused', 'recording_resumed',
-                    'recording_stopped', 'recording_exported',
+                    'recording_stopped', 'recording_exported', 'headless_changed',
                 ],
             }
         head = parts[0]
@@ -1358,6 +1360,17 @@ class RemoteControlServer:
                 if not values:
                     raise RemoteControlError('body must map argument names to values')
                 return {'args': self._invoke(lambda: self.adapter.set_args(values))}
+            raise RemoteControlError('method not allowed', status=HTTPStatus.METHOD_NOT_ALLOWED)
+        if head == 'headless' and len(parts) == 1:
+            if method == 'GET':
+                return {'headless': self._invoke(self.adapter.headless)}
+            if method == 'POST':
+                if 'enabled' not in body:
+                    raise RemoteControlError('body must be {"enabled": true|false}')
+                enabled = _bool_param(body.get('enabled'), False)
+                result = self._invoke(lambda: self.adapter.set_headless(enabled))
+                self.emit('headless_changed', enabled=bool(result.get('enabled')))
+                return {'headless': result}
             raise RemoteControlError('method not allowed', status=HTTPStatus.METHOD_NOT_ALLOWED)
         if head == 'recording':
             if method == 'GET' and len(parts) == 1:
@@ -1831,6 +1844,12 @@ class GuiAdapter:
 
     def reload_configuration(self) -> dict:
         raise NotImplementedError
+
+    def headless(self) -> dict:
+        return {'enabled': False, 'skipped_by_auto_launch': [], 'headless_args': {}}
+
+    def set_headless(self, enabled: bool) -> dict:
+        raise RemoteControlError('this GUI has no headless mode')
 
     def recording(self) -> dict:
         return {'active': False, 'paused': False, 'armed': False}

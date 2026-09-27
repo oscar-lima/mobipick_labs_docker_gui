@@ -137,6 +137,11 @@ from .display_runtime import (
 )
 from .external_links import open_external_url
 from .flow_layout import FlowLayout
+from .headless import (
+    button_opens_window,
+    headless_launch_entries,
+    normalize_headless_args,
+)
 from .option_rules import load_option_rules
 from .settings_transfer import export_settings, import_settings
 
@@ -3566,6 +3571,12 @@ class MainWindow(QMainWindow):
             self._suppress_managed_window_attention
         )
         self._window_layout_dialog: QDialog | None = None
+        headless_cfg = CONFIG.get('headless', {})
+        saved_headless = self._saved_selections.get('headless')
+        self._headless_mode = bool(
+            saved_headless if isinstance(saved_headless, bool)
+            else (headless_cfg or {}).get('enabled_by_default', False)
+        )
         self._recording_cfg = CONFIG.get('recording', {})
         self._recording_default_checked = bool(
             self._recording_cfg.get('enabled_by_default', False)
@@ -3764,6 +3775,18 @@ class MainWindow(QMainWindow):
             self.auto_launch_button.setToolTip(auto_launch_tooltip)
         actions.addWidget(self.auto_launch_button)
         self._button_widgets['auto_launch'] = self.auto_launch_button
+
+        self.headless_checkbox = QCheckBox('Headless')
+        self.headless_checkbox.setToolTip(
+            'Open no windows: Auto Launch skips the buttons that open one '
+            '(RViz, RQt, viewers) and does not arrange windows, and every '
+            'button starts with its headless arguments (e.g. the simulator '
+            'without the Gazebo window). Buttons pressed by hand still open '
+            'their window.'
+        )
+        self.headless_checkbox.setChecked(self._headless_mode)
+        self.headless_checkbox.toggled.connect(self._on_headless_toggled)
+        actions.addWidget(self.headless_checkbox)
 
         self.recording_controls = QWidget()
         recording_row = FlowLayout(self.recording_controls)
@@ -8351,14 +8374,22 @@ CMD ["bash"]
         if not full_command:
             return ''
         inputs = getattr(self, '_generic_arg_inputs', {})
+        headless_args = (
+            dict(config.get('headless_args') or {})
+            if getattr(self, '_headless_mode', False) else {}
+        )
         for slot in GENERIC_BUTTON_ARG_SLOTS:
             if not config.get(f'arg_{slot}_applies'):
                 continue
             name = str(config.get(f'arg_{slot}_name') or '').strip()
             widget = inputs.get(slot)
             value = widget.currentText().strip() if widget is not None else ''
+            if name in headless_args:
+                value = headless_args.pop(name)
             if name and value:
                 full_command += f' {name}:={self._sh_quote(value)}'
+        for name, value in headless_args.items():
+            full_command += f' {name}:={self._sh_quote(value)}'
         rules = getattr(self, '_option_rules', None)
         key = str(config.get('key') or '').strip()
         if rules is not None and rules.rules and key:
@@ -8368,6 +8399,48 @@ CMD ["bash"]
             for name, value in rules.start_args(state, key):
                 full_command += f' {name}:={self._sh_quote(value)}'
         return full_command
+
+    def _window_button_keys(self) -> set[str]:
+        """Keys of the profile buttons whose process opens a window."""
+        return {
+            key
+            for key, config in getattr(self, '_config_buttons', {}).items()
+            if button_opens_window(config)
+        }
+
+    def _on_headless_toggled(self, checked: bool) -> None:
+        MainWindow.set_headless(self, checked)
+
+    def set_headless(self, enabled: bool) -> dict:
+        """Switch headless mode; applies to the next launches, not running ones."""
+        enabled = bool(enabled)
+        checkbox = getattr(self, 'headless_checkbox', None)
+        if checkbox is not None and checkbox.isChecked() != enabled:
+            checkbox.blockSignals(True)
+            checkbox.setChecked(enabled)
+            checkbox.blockSignals(False)
+        if enabled != getattr(self, '_headless_mode', False):
+            self._headless_mode = enabled
+            self._log_info(
+                'headless mode on: no windows from the next launches'
+                if enabled else 'headless mode off'
+            )
+        return MainWindow.headless_status(self)
+
+    def headless_status(self) -> dict:
+        """Headless state, the buttons Auto Launch skips and the args added."""
+        configs = getattr(self, '_config_buttons', {})
+        return {
+            'enabled': bool(getattr(self, '_headless_mode', False)),
+            'skipped_by_auto_launch': sorted(
+                MainWindow._window_button_keys(self)
+            ),
+            'headless_args': {
+                key: dict(config.get('headless_args') or {})
+                for key, config in configs.items()
+                if config.get('headless_args')
+            },
+        }
 
     def _get_button_widget(self, key: str) -> QPushButton | None:
         return self._button_widgets.get(key)
@@ -8419,6 +8492,10 @@ CMD ["bash"]
                 'log_command': entry.get('log_command'),
                 'pass_ros_master_uri': entry.get('pass_ros_master_uri', False),
                 'service': entry.get('service') or '',
+                'opens_window': entry.get('opens_window'),
+                'headless_args': normalize_headless_args(
+                    entry.get('headless_args')
+                ),
             }
             for slot in GENERIC_BUTTON_ARG_SLOTS:
                 normalized[f'arg_{slot}_name'] = str(
@@ -11727,6 +11804,18 @@ CMD ["bash"]
 
         processes = self._launch_entries_for_master(processes)
         remaining_timeline = self._launch_entries_for_master(timeline)
+        if getattr(self, '_headless_mode', False):
+            window_keys = MainWindow._window_button_keys(self)
+            processes, skipped = headless_launch_entries(processes, window_keys)
+            remaining_timeline, skipped_timeline = headless_launch_entries(
+                remaining_timeline, window_keys
+            )
+            skipped = sorted(set(skipped) | set(skipped_timeline))
+            if skipped:
+                self._log_info(
+                    'auto launch: headless, skipping window buttons: '
+                    + ', '.join(skipped)
+                )
         if len(remaining_timeline) != len(timeline):
             remaining_timeline = self._rebased_timeline(remaining_timeline)
         timeline = remaining_timeline
@@ -11944,7 +12033,7 @@ CMD ["bash"]
             self._window_layout_auto_apply
             and manager
             and manager.has_saved_layout()
-        ):
+        ) or getattr(self, '_headless_mode', False):
             return total_seconds
         layout_at = max(0.0, self._window_layout_delay_ms / 1000.0)
         processes.append(
@@ -11971,9 +12060,18 @@ CMD ["bash"]
         timer.setSingleShot(True)
         timer.setTimerType(Qt.PreciseTimer)
 
+        headless = bool(getattr(self, '_headless_mode', False))
+
         def _apply_layout():
             try:
-                if self._auto_launch_running:
+                if self._auto_launch_running and headless:
+                    # same moment as a real layout, so clients waiting for
+                    # window_layout_applied keep their timing
+                    self._log_info('auto launch: headless, windows not arranged')
+                    self._remote_emit(
+                        'window_layout_applied', windows=0, skipped='headless'
+                    )
+                elif self._auto_launch_running:
                     manager.maybe_apply_saved_layout()
             finally:
                 if timer in self._auto_launch_timers:
@@ -16107,6 +16205,9 @@ CMD ["bash"]
             resolution = resolution_combo.currentText().strip()
             if resolution:
                 selections['recording_resolution'] = resolution
+
+        if getattr(self, 'headless_checkbox', None) is not None:
+            selections['headless'] = bool(getattr(self, '_headless_mode', False))
 
         generic_args = {}
         names = getattr(self, '_generic_arg_names_by_slot', {})

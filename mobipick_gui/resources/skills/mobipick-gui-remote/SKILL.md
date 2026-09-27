@@ -201,6 +201,22 @@ the simulator running while waiting for visual confirmation; stop it first,
 then ask what the user saw. Never stop a process that was already running
 unless the user explicitly requests it.
 
+Open no windows unless your task needs one: switch **headless mode** on
+before you start anything (`POST /headless {"enabled": true}`, CLI
+`headless on`). Then Auto Launch skips RViz, RQt and every button the profile
+marks `opens_window`, the simulator starts without gzclient and its rqt window
+(`gui:=false` from the profile's `headless_args`; about 1 GB less GPU memory),
+and the window layout is not replayed. `GET /headless` lists what is skipped
+and which args are added. It affects the next launches only: a process that
+already runs keeps its window until it is restarted. Need to look at
+something? Press that one window button, and stop it afterwards. Leave the
+switch as you found it when you hand over unless the user wants it on.
+
+```bash
+curl -s $GUI/headless                         # enabled, skipped_by_auto_launch, headless_args
+curl -s -X POST $GUI/headless -H 'Content-Type: application/json' -d '{"enabled": true}'
+```
+
 Wait exactly as long as the GUI's own estimate, no longer. Every button
 carries the startup time the user configured for it (`startup_seconds`), and
 `button_ready` fires for that button when the time has elapsed (immediately
@@ -224,7 +240,8 @@ button press: that event only follows an Auto Launch. Prefer
 for a "ready" line; read the tab only afterwards, to confirm the last
 lines look healthy. When you pressed **Auto Launch**, the equivalent
 signals are `auto_launch_complete` (every step reached its ready time) and
-`window_layout_applied` (the saved layout was replayed):
+`window_layout_applied` (the saved layout was replayed; in headless mode it
+fires at the same moment with `skipped: "headless"`):
 
 ```bash
 curl -s -X POST $GUI/buttons/auto_launch/start -H 'Content-Type: application/json' \
@@ -375,6 +392,7 @@ the mockups (`disc_mode: mockup`, `anygrasp_mode: mockup`) unless the user
 asks for the real modules.
 
 ```bash
+curl -s -X POST $GUI/headless -H 'Content-Type: application/json' -d '{"enabled": true}'
 curl -s -X POST $GUI/args -H 'Content-Type: application/json' \
      -d '{"model_profile":"deepseek-v4.1-flash","disc_mode":"mockup","anygrasp_mode":"mockup"}'
 curl -s -X POST $GUI/buttons/auto_launch/start -H 'Content-Type: application/json' \
@@ -382,8 +400,9 @@ curl -s -X POST $GUI/buttons/auto_launch/start -H 'Content-Type: application/jso
 ```
 
 **Auto Launch brings up everything the agents need** (roscore, sim, RViz,
-DISC, LiteLLM, AnyGrasp, GPT Robot Demo, ...); afterwards check `/buttons`
-for anything still red and the `gpt_robot_demo`, `disc`, `anygrasp` and
+DISC, LiteLLM, AnyGrasp, GPT Robot Demo, ...; in headless mode without the
+window buttons); afterwards check `/buttons` for anything still red (the
+skipped window buttons stay red on purpose) and the `gpt_robot_demo`, `disc`, `anygrasp` and
 `litellm` tabs for `ready`/`ERROR` lines before sending a goal.
 
 The goal is a `std_msgs/String` on `/recognized_speech` (what the GUI's
@@ -435,7 +454,9 @@ thinking are cut) and both producing a 4x version:
    `/data/experiment_recordings/<timestamp>_<experiment>/` with
    `<topic>.mp4`, `<topic>_4x.mp4`, `snapshots/NNN_<label>_<topic>.jpg`,
    `events.jsonl` (host and container see the same path).
-2. **Screen recording** of the GUI/RViz/Gazebo windows through the API,
+2. **Screen recording** (skip it in headless mode: there are no windows to
+   film; the camera videos above are the evidence) of the GUI/RViz/Gazebo
+   windows through the API,
    started paused and resumed by `agent_experiment.py` whenever the camera
    recorder reports motion:
 
@@ -468,8 +489,9 @@ send every snapshot; four to six tell the story.
    history.
 3. `start` only what is missing, with the `args` it needs, and wait for
    `button_ready` (plus `process_finished` to catch a crash); after an
-   Auto Launch wait for `window_layout_applied`. For an experiment: mockups
-   + `deepseek-v4.1-flash`, Auto Launch (section 7).
+   Auto Launch wait for `window_layout_applied`. Switch headless mode on
+   first (section 3). For an experiment: mockups + `deepseek-v4.1-flash`,
+   Auto Launch (section 7).
 4. Open shells (section 5; the container unless the robot machine itself is
    the question, one per background process: a `wait:false` command keeps
    its shell busy, HTTP 409 for anything else), run checks with

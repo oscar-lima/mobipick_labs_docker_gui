@@ -185,6 +185,8 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument('key', help='tab key as listed by "tabs", e.g. custom1, sim, terminal-remote1')
     sub.add_parser('clients', help='List clients that declared presence')
     sub.add_parser('reload', help='Re-read config and button profile without restarting the GUI')
+    p = sub.add_parser('headless', help='Show headless mode, or switch it on/off for the next launches (no windows)')
+    p.add_argument('state', nargs='?', choices=('on', 'off'), help='omit to only show the state')
 
     for name, help_text in (
         ('click', 'Press a toolbar button'),
@@ -312,6 +314,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             payload = client.call('GET', '/presence')
         elif cmd == 'reload':
             payload = client.call('POST', '/reload', body={})
+        elif cmd == 'headless':
+            if args.state:
+                payload = client.call('POST', '/headless', body={'enabled': args.state == 'on'})
+            else:
+                payload = client.call('GET', '/headless')
         elif cmd in {'click', 'start', 'stop'}:
             body: dict = {}
             if args.wait_for:

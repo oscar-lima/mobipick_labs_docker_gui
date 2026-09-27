@@ -23,6 +23,9 @@ window_layout:
   auto_apply: true                                      # when true, apply saved sizes/positions to matching windows after they appear
   apply_delay_ms: "auto"                                # "auto" applies the layout 1 second after all auto-launch processes are ready
 
+headless:
+  enabled_by_default: false             # start with the "Headless" switch on (the last choice is remembered and wins)
+
 recording:
   enabled_by_default: false             # leave "Record Auto Launch" unchecked on startup
   workspace_name: "workspace"           # replaced by the active workspace name when one is selected
