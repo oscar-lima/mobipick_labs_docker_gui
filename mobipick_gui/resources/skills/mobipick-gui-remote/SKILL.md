@@ -150,8 +150,12 @@ curl -s -X POST $GUI/buttons/rviz/stop -H 'Content-Type: application/json' -d '{
 `accepted:false` with `reason` means already running / not running / busy /
 disabled; read the reason and move on.
 
-Buttons that take a toolbar argument (a dropdown next to the toolbar, e.g.
+Buttons that take a launch argument (a dropdown in the main window or Advanced
+Launch Options dialog, e.g.
 `anygrasp_mode: real|mockup`, or the world selector) get it from `GET /args`.
+Each entry includes an argument `description` and optional
+`option_descriptions` for individual values. Read them before changing an
+unfamiliar launch option.
 Select a value over the API instead of editing the profile YAML: either
 `POST /args` or `args` in the press body, which is applied before the click.
 Unknown names or values are rejected with HTTP 400 and nothing is pressed.
@@ -163,7 +167,7 @@ until it runs): the press returns `accepted:false` with a reason beginning
 `blocked by option rules:`. Start the named prerequisite, then retry.
 
 ```bash
-curl -s $GUI/args | python3 -c 'import json,sys; [print(a["name"], a["value"], a["options"], a["buttons"]) for a in json.load(sys.stdin)["args"]]'
+curl -s $GUI/args | python3 -c 'import json,sys; [print(a["name"], a["value"], a["options"], a.get("description", ""), a["buttons"]) for a in json.load(sys.stdin)["args"]]'
 curl -s -X POST $GUI/buttons/anygrasp/start -H 'Content-Type: application/json' \
      -d '{"args":{"anygrasp_mode":"real"},"wait_for":["button_ready"],"timeout":60}'
 curl -s -X POST $GUI/args -H 'Content-Type: application/json' -d '{"world":"moelk_tables"}'

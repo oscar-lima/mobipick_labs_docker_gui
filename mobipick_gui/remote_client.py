@@ -170,7 +170,7 @@ def _build_parser() -> argparse.ArgumentParser:
     sub.add_parser('api', help='List API endpoints')
     sub.add_parser('status', help='GUI status summary')
     sub.add_parser('buttons', help='List toolbar buttons with their states, arguments and readiness estimates')
-    sub.add_parser('args', help='List toolbar argument dropdowns (name, value, options) and the world selector')
+    sub.add_parser('args', help='List launch arguments, values, choices, descriptions, and world')
     p = sub.add_parser('set-args', help='Select toolbar argument values, e.g. anygrasp_mode=real world=moelk_tables')
     p.add_argument('values', nargs='+', metavar='NAME=VALUE')
 

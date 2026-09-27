@@ -65,6 +65,7 @@ from PyQt5.QtWidgets import (
     QMainWindow,
     QMenu,
     QMessageBox,
+    QPlainTextEdit,
     QProgressBar,
     QPushButton,
     QScrollArea,
@@ -81,6 +82,7 @@ from PyQt5.QtWidgets import (
 )
 
 from .start_reminders import StartReminderDialog
+from .launch_arguments_dialog import LaunchArgumentsDialog
 
 from .ansi import CSI_SEQ_RE, OSC_SEQ_RE, ansi_to_html
 from .async_tasks import AsyncTaskRunner
@@ -89,6 +91,7 @@ from .config import (
     BUTTON_CONFIG_FILE,
     CONFIG,
     DEFAULT_BUTTON_COMMANDS,
+    DEFAULT_ADVANCED_ARG_NAMES,
     DEFAULT_YAML_PATH,
     GENERIC_BUTTON_ARG_SLOTS,
     PROJECT_ROOT,
@@ -296,7 +299,11 @@ def _mark_invalid_combo_items(
             continue
         reason = invalid.get(combo.itemText(index).strip())
         item.setEnabled(reason is None)
-        item.setToolTip(f'Invalid: {reason}' if reason else '')
+        description = str(item.data(Qt.UserRole + 1) or '')
+        tooltip = '\n'.join(filter(None, (
+            description, f'Invalid: {reason}' if reason else '',
+        )))
+        item.setToolTip(tooltip)
 
 
 def _configure_shrinkable_combo(
@@ -739,6 +746,8 @@ class ButtonArgumentsDialog(QDialog):
         self._options_inputs: dict[int, QLineEdit] = {}
         self._applies_checks: dict[int, QCheckBox] = {}
         self._advanced_checks: dict[int, QCheckBox] = {}
+        self._description_inputs: dict[int, QPlainTextEdit] = {}
+        self._option_description_inputs: dict[int, QPlainTextEdit] = {}
 
         root = QVBoxLayout(self)
         note = QLabel(
@@ -791,12 +800,33 @@ class ButtonArgumentsDialog(QDialog):
             options_row.addWidget(QLabel('Combo options:'))
             options_row.addWidget(options_input, 1)
             row.addLayout(options_row)
+            description_input = QPlainTextEdit(
+                str(entry.get(f'arg_{slot}_description') or '')
+            )
+            description_input.setPlaceholderText('What does this option do?')
+            description_input.setMaximumHeight(65)
+            row.addWidget(QLabel('Description:'))
+            row.addWidget(description_input)
+            value_descriptions = entry.get(
+                f'arg_{slot}_option_descriptions') or {}
+            option_description_input = QPlainTextEdit('\n'.join(
+                f'{value} | {text}'
+                for value, text in value_descriptions.items()
+            ))
+            option_description_input.setPlaceholderText(
+                'One per line: true | Enable this feature'
+            )
+            option_description_input.setMaximumHeight(75)
+            row.addWidget(QLabel('Value descriptions:'))
+            row.addWidget(option_description_input)
             row.addWidget(advanced)
             form.addRow(f'Argument {slot}:', row_widget)
             self._name_inputs[slot] = name_input
             self._options_inputs[slot] = options_input
             self._applies_checks[slot] = applies
             self._advanced_checks[slot] = advanced
+            self._description_inputs[slot] = description_input
+            self._option_description_inputs[slot] = option_description_input
         scroll.setWidget(form_widget)
         root.addWidget(scroll, 1)
 
@@ -830,9 +860,27 @@ class ButtonArgumentsDialog(QDialog):
                     f'arg_{slot}_advanced',
                     self._advanced_checks[slot].isChecked(),
                 ),
+                (
+                    f'arg_{slot}_description',
+                    self._description_inputs[slot].toPlainText().strip(),
+                ),
+                (
+                    f'arg_{slot}_option_descriptions',
+                    self._value_descriptions(slot),
+                ),
             )
         }
         return result
+
+    def _value_descriptions(self, slot: int) -> dict[str, str]:
+        descriptions = {}
+        for line in self._option_description_inputs[
+            slot
+        ].toPlainText().splitlines():
+            value, separator, text = line.partition('|')
+            if separator and value.strip() and text.strip():
+                descriptions[value.strip()] = text.strip()
+        return descriptions
 
     def accept(self) -> None:
         for slot in GENERIC_BUTTON_ARG_SLOTS:
@@ -859,6 +907,24 @@ class ButtonArgumentsDialog(QDialog):
                     f'Argument {slot} needs at least one combo option.',
                 )
                 return
+            options = {
+                value.strip()
+                for value in self._options_inputs[slot].text().split(',')
+                if value.strip()
+            }
+            for line in self._option_description_inputs[
+                slot
+            ].toPlainText().splitlines():
+                if not line.strip():
+                    continue
+                value, separator, text = line.partition('|')
+                if not separator or value.strip() not in options or not text.strip():
+                    QMessageBox.warning(
+                        self, 'Toolbar Button Arguments',
+                        f'Argument {slot}: use "value | description" '
+                        'with one of its selectable values.',
+                    )
+                    return
         super().accept()
 
 
@@ -1248,10 +1314,21 @@ class ButtonProfileDialog(QDialog):
                     [],
                 )
             entry[f'arg_{slot}_advanced'] = next(
-                (bool(candidate.get(f'arg_{slot}_advanced'))
-                 for candidate in entries if candidate.get(name_field)),
-                False,
+                (bool(candidate[f'arg_{slot}_advanced'])
+                 for candidate in entries
+                 if candidate.get(name_field)
+                 and candidate.get(f'arg_{slot}_advanced') is not None),
+                entry[name_field] in DEFAULT_ADVANCED_ARG_NAMES,
             )
+            for suffix, default in (
+                ('description', ''), ('option_descriptions', {}),
+            ):
+                field = f'arg_{slot}_{suffix}'
+                if not entry.get(field):
+                    entry[field] = next(
+                        (candidate.get(field) for candidate in entries
+                         if candidate.get(field)), default,
+                    )
         dialog = ButtonArgumentsDialog(entry, self)
         if dialog.exec_() != QDialog.Accepted:
             return
@@ -1265,6 +1342,12 @@ class ButtonProfileDialog(QDialog):
                 target[name_field] = configured.get(name_field, '')
                 target[options_field] = configured.get(options_field, [])
                 target[advanced_field] = configured.get(advanced_field, False)
+                target[f'arg_{slot}_description'] = configured.get(
+                    f'arg_{slot}_description', ''
+                )
+                target[f'arg_{slot}_option_descriptions'] = configured.get(
+                    f'arg_{slot}_option_descriptions', {}
+                )
                 if target_row == row:
                     target[applies_field] = configured.get(applies_field, False)
                 elif not configured.get(name_field):
@@ -1510,6 +1593,7 @@ class ButtonProfileDialog(QDialog):
         keys: list[str] = []
         slot_names: dict[int, str] = {}
         slot_options: dict[int, list[str]] = {}
+        slot_placement: dict[int, bool] = {}
         for entry in entries:
             key = str(entry.get('key') or '').strip()
             if not key:
@@ -1543,6 +1627,9 @@ class ButtonProfileDialog(QDialog):
                             f'Argument slot {slot} must use one name across '
                             f'the profile ("{previous}" or "{name}").'
                         )
+                    placement = entry.get(f'arg_{slot}_advanced')
+                    if placement is not None:
+                        slot_placement[slot] = bool(placement)
                 options = list(entry.get(f'arg_{slot}_options') or [])
                 if options:
                     previous_options = slot_options.setdefault(slot, options)
@@ -1563,6 +1650,17 @@ class ButtonProfileDialog(QDialog):
         missing = sorted(self.REQUIRED_KEYS - set(keys))
         if missing:
             return f'Missing required button(s): {", ".join(missing)}.'
+        main_count = sum(
+            not slot_placement.get(
+                slot, name in DEFAULT_ADVANCED_ARG_NAMES
+            )
+            for slot, name in slot_names.items()
+        )
+        if main_count > 6:
+            return (
+                'The main window can hold at most six arguments plus world. '
+                'Move another argument to Advanced Launch Options.'
+            )
         return ''
 
     def accept(self) -> None:
@@ -3718,6 +3816,12 @@ class MainWindow(QMainWindow):
             'world_config:',
             self.world_combo,
         )
+        world_description = (
+            'World configuration passed to the simulation and world-aware '
+            'launch buttons.'
+        )
+        self.world_combo.setToolTip(world_description)
+        self.world_label.setToolTip(world_description)
         actions.addWidget(world_controls)
         self.world_combo.currentIndexChanged.connect(self._on_world_changed)
         self.world_combo.activated.connect(
@@ -3733,9 +3837,20 @@ class MainWindow(QMainWindow):
         self.advanced_launch_dialog.setWindowTitle('Advanced Launch Options')
         self.advanced_launch_dialog.setMinimumWidth(400)
         advanced_root = QVBoxLayout(self.advanced_launch_dialog)
+        self._advanced_empty_label = QLabel(
+            'No advanced options are configured. Choose Edit... to add one.'
+        )
+        self._advanced_empty_label.setWordWrap(True)
+        advanced_root.addWidget(self._advanced_empty_label)
         self._advanced_arg_layout = QFormLayout()
         advanced_root.addLayout(self._advanced_arg_layout)
         advanced_buttons = QDialogButtonBox(QDialogButtonBox.Close)
+        edit_advanced_button = advanced_buttons.addButton(
+            'Edit...', QDialogButtonBox.ActionRole
+        )
+        edit_advanced_button.clicked.connect(
+            self._open_launch_arguments_dialog
+        )
         advanced_buttons.rejected.connect(self.advanced_launch_dialog.close)
         advanced_root.addWidget(advanced_buttons)
         actions.addWidget(self.generic_arg_controls)
@@ -5074,6 +5189,32 @@ class MainWindow(QMainWindow):
             return writable_docker_cp_config_path()
         return writable_workspace_docker_cp_config_path(workspace.name)
 
+    def _open_launch_arguments_dialog(self) -> None:
+        """Edit all profile argument selectors and reload the saved profile."""
+        source_path = self._resolved_button_config_path()
+        save_path = self._button_profile_save_path(source_path)
+        dialog = LaunchArgumentsDialog(
+            self._button_layout_for_editor(), self
+        )
+        if dialog.exec_() != QDialog.Accepted:
+            return
+        button_layout = dialog.button_layout()
+        try:
+            saved_path = save_button_layout(save_path, button_layout)
+            self._remember_button_profile_path(
+                saved_path, source_path, button_layout,
+            )
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(
+                self, 'Launch Options',
+                f'Failed to save launch options:\n{exc}',
+            )
+            return
+        self._reload_workspace_profile(preserve_processes=True)
+        self._create_workspace_tabs()
+        self._apply_env_to_all_tabs()
+        self._log_info(f'saved launch options to {saved_path}')
+
     def _open_button_profile_dialog(self) -> None:
         source_path = self._resolved_button_config_path()
         save_path = self._button_profile_save_path(source_path)
@@ -5143,18 +5284,17 @@ class MainWindow(QMainWindow):
         return ''
 
     def _button_layout_for_editor(self) -> list[dict]:
+        """Copy profile definitions without baking selected arguments into commands."""
         entries = copy.deepcopy(self._button_layout)
-        effective_commands = {
-            'sim': self._workspace_sim_command(),
-            'tables': self._tables_demo_command(),
-            'rviz': self._rviz_command(),
-            'rqt': self._rqt_tables_command(),
-        }
+        workspace = self._workspace_registry.active_workspace()
         for entry in entries:
-            key = str(entry.get('key') or '').strip()
-            command = effective_commands.get(key)
-            if command:
-                entry['command'] = command
+            if (
+                entry.get('key') == 'sim'
+                and entry.get('command_is_default')
+                and workspace is not None
+                and workspace.sim_command
+            ):
+                entry['command'] = workspace.sim_command
         return entries
 
     def _workspace_runtime_env(
@@ -8089,16 +8229,32 @@ CMD ["bash"]
             )
             for slot in GENERIC_BUTTON_ARG_SLOTS
         }
-        advanced = {
-            slot: any(
-                bool(entry.get(f'arg_{slot}_advanced'))
+        descriptions = {
+            slot: next((
+                str(entry.get(f'arg_{slot}_description') or '').strip()
                 for entry in self._button_layout
                 if isinstance(entry, dict)
-            ) or names[slot] in {
-                'gui', 'gzclient', 'gazebo_gui', 'gazebo_client',
-                'use_mtc',
-                'jev_min_confidence', 'voice_languages',
-            }
+                and entry.get(f'arg_{slot}_description')
+            ), '')
+            for slot in GENERIC_BUTTON_ARG_SLOTS
+        }
+        value_descriptions = {
+            slot: next((
+                dict(entry.get(f'arg_{slot}_option_descriptions') or {})
+                for entry in self._button_layout
+                if isinstance(entry, dict)
+                and entry.get(f'arg_{slot}_option_descriptions')
+            ), {})
+            for slot in GENERIC_BUTTON_ARG_SLOTS
+        }
+        advanced = {
+            slot: next((
+                bool(entry[f'arg_{slot}_advanced'])
+                for entry in self._button_layout
+                if isinstance(entry, dict)
+                and entry.get(f'arg_{slot}_name')
+                and entry.get(f'arg_{slot}_advanced') is not None
+            ), names[slot] in DEFAULT_ADVANCED_ARG_NAMES)
             for slot in GENERIC_BUTTON_ARG_SLOTS
         }
         while layout.count():
@@ -8135,6 +8291,16 @@ CMD ["bash"]
                     previous_value = str(saved_entry.get('value') or '')
             value_input = QComboBox()
             value_input.addItems(options[slot])
+            description = descriptions[slot]
+            value_input.setToolTip(description)
+            for index, value in enumerate(options[slot]):
+                item = value_input.model().item(index)
+                if item is not None:
+                    value_description = str(
+                        value_descriptions[slot].get(value) or ''
+                    )
+                    item.setData(value_description, Qt.UserRole + 1)
+                    item.setToolTip(value_description)
             if previous_value in options[slot]:
                 value_input.setCurrentIndex(options[slot].index(previous_value))
             _configure_shrinkable_combo(value_input)
@@ -8142,12 +8308,25 @@ CMD ["bash"]
                 lambda _index: MainWindow._apply_option_rules(self, True)
             )
             if advanced_layout is not None and (advanced[slot] or main_count >= 6):
-                advanced_layout.addRow(f'{name}:', value_input)
+                field = QWidget()
+                field_layout = QVBoxLayout(field)
+                field_layout.setContentsMargins(0, 0, 0, 0)
+                field_layout.addWidget(value_input)
+                if description:
+                    help_line = QLabel(description.splitlines()[0])
+                    help_line.setWordWrap(True)
+                    help_line.setStyleSheet('color: #777;')
+                    help_line.setToolTip(description)
+                    field_layout.addWidget(help_line)
+                label = QLabel(f'{name}:')
+                label.setToolTip(description)
+                advanced_layout.addRow(label, field)
                 advanced_count += 1
             else:
                 slot_controls, _slot_label = _labeled_control(
                     f'{name}:', value_input,
                 )
+                _slot_label.setToolTip(description)
                 layout.addWidget(slot_controls)
                 main_count += 1
             inputs[slot] = value_input
@@ -8155,10 +8334,15 @@ CMD ["bash"]
         self._generic_arg_names_by_slot = {
             slot: names[slot] for slot in inputs
         }
+        self._generic_arg_descriptions = descriptions
+        self._generic_arg_value_descriptions = value_descriptions
         controls.setVisible(bool(main_count))
+        empty_label = getattr(self, '_advanced_empty_label', None)
+        if empty_label is not None:
+            empty_label.setVisible(advanced_count == 0)
         advanced_button = getattr(self, 'advanced_launch_button', None)
         if advanced_button is not None:
-            advanced_button.setVisible(bool(advanced_count))
+            advanced_button.setVisible(True)
         MainWindow._apply_option_rules(self)
 
     def _command_with_generic_args(self, command: str, config: dict) -> str:
@@ -14081,6 +14265,10 @@ CMD ["bash"]
         """Toolbar argument dropdowns: name, current value, options, buttons they apply to."""
         inputs = getattr(self, '_generic_arg_inputs', {})
         names = getattr(self, '_generic_arg_names_by_slot', {})
+        descriptions = getattr(self, '_generic_arg_descriptions', {})
+        value_descriptions = getattr(
+            self, '_generic_arg_value_descriptions', {}
+        )
         invalid = MainWindow._invalid_options(self)
         entries: list[dict] = []
         for slot in GENERIC_BUTTON_ARG_SLOTS:
@@ -14092,6 +14280,8 @@ CMD ["bash"]
                 {
                     'slot': slot,
                     'name': name,
+                    'description': descriptions.get(slot, ''),
+                    'option_descriptions': value_descriptions.get(slot, {}),
                     'value': widget.currentText().strip(),
                     'options': [widget.itemText(i) for i in range(widget.count())],
                     'invalid': invalid.get(name, {}),
@@ -14109,6 +14299,7 @@ CMD ["bash"]
                 {
                     'slot': 'world',
                     'name': 'world',
+                    'description': world_combo.toolTip(),
                     'value': self._current_world(),
                     'options': [world_combo.itemText(i) for i in range(world_combo.count())],
                     'invalid': invalid.get('world', {}),

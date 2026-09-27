@@ -41,6 +41,7 @@ resource and is rendered in the application from **Help > Documentation**.
 |   |-- remote_adapter.py          # MainWindow bridge used by the remote-control server
 |   |-- remote_client.py           # mobipick-labs-docker-gui-remote CLI client
 |   |-- config.py                  # Bundled/user config loading and defaults
+|   |-- launch_arguments_dialog.py # Profile-wide launch option editor
 |   `-- resources/
 |       |-- docker-compose.yml
 |       |-- custom_entrypoint.sh
@@ -594,10 +595,10 @@ Command entries can declare:
   Leave it empty for the normal tool service, or use `mobipick` for launch
   files that start Gazebo themselves and need the simulator service identity.
 
-Profiles can also define as many as ten generic ROS arguments on each button.
+Profiles can also define as many as 24 generic ROS arguments on each button.
 For slot 1, set `arg_1_name` to the argument name, provide the dropdown values
 in `arg_1_options`, and set `arg_1_applies: true` on every button that should
-receive it; slots 2 to 10 use the corresponding `arg_2_*` to `arg_10_*` fields.
+receive it; slots 2 to 24 use the corresponding `arg_2_*` to `arg_24_*` fields.
 A slot must use the same name and option list throughout one profile. Named
 slots appear as combo boxes in the main GUI or Advanced Launch Options dialog,
 and an enabled button command receives the selected `name:=value`. If no slot
@@ -607,6 +608,19 @@ names, comma-separated combo options, advanced placement, and per-button flags
 in a separate dialog. Argument details remain out of the main profile table
 and travel with loaded or exported profiles.
 Set `arg_N_advanced: true` to place a selector in the advanced dialog.
+Set `arg_N_advanced: false` to keep a selector on the main window, including
+one that defaults to advanced placement. `arg_N_description` is optional
+multi-line help text; `arg_N_option_descriptions` maps selectable values to
+their tooltips. A profile can omit either field. The description appears on
+the selector and its label, and its first line appears below advanced options.
+The remote `GET /args` response includes `description` and
+`option_descriptions`.
+The Advanced Launch Options dialog has **Edit...**, which opens one editor for
+every argument in the loaded button profile. It edits names, choices, help
+text, placement, and the buttons each argument applies to, and can add or
+remove arguments. Save uses the same workspace profile path and reload as
+**Configure Toolbar Buttons**. The editor enforces the six argument selectors
+plus world limit on the main window.
 The Gazebo client (`gui`), `use_mtc`, `jev_min_confidence`, and
 `voice_languages` selectors use that dialog by default. The main window
 shows at most six generic arguments alongside the world selector; additional
@@ -853,7 +867,7 @@ click with a wait without missing events.
 | `GET /status` | Workspace, image, world, cached roscore/sim state, buttons, tabs, shells, active dialog. |
 | `GET /buttons` | Toolbar buttons with `state` (`red` stopped, `green` running, `yellow` busy, `grey` unavailable), `tooltip`, `runs_on` (`host` or `container`), the log `tab` key, the toolbar `args` the button receives and the resulting `full_command`, plus readiness from the auto-launch estimates: `startup_seconds` (the plan's `duration_seconds`, `null` when the button has none), `started_at`, `ready_at`, `ready_in_s` and `ready` (running and past the estimate). |
 | `POST /buttons/{key}/click`, `/start`, `/stop` | Press a button. `start`/`stop` are idempotent. Body may contain `args` (`{"anygrasp_mode": "real"}`, selected before the press), `wait_for` (event names) and `timeout`. Keyed events (`button_state`, `button_ready`, `process_finished`) only match this button; waiting for `button_ready` on a button that is already running and past its estimate returns at once with `already_ready: true`. |
-| `GET /args`, `POST /args` | The toolbar argument dropdowns (generic `arg_N` slots from the button profile) and the world selector: `name`, current `value`, `options` and the `buttons` each applies to. `POST` selects values by name (`{"anygrasp_mode": "real", "world": "moelk_tables"}`) exactly like choosing them in the toolbar, so no profile edit or reload is needed; unknown names or values are rejected. `invalid` maps options the profile's option rules currently forbid to the reason, and `POST` rejects them too. |
+| `GET /args`, `POST /args` | The launch argument selectors (generic `arg_N` slots from the button profile) and world: `name`, current `value`, `options`, `description`, `option_descriptions`, and applicable `buttons`. `POST` selects values by name (`{"anygrasp_mode": "real", "world": "moelk_tables"}`); unknown names or values are rejected. `invalid` maps choices forbidden by option rules to their reasons, and `POST` rejects them too. |
 | `GET /presence`, `POST /presence`, `DELETE /presence` | Declare that a client is using the GUI (`{"name": "<agent>", "ttl_s": 600, "note": ""}`; the name is chosen by the client, so any agent can use its own, and several may be present at once) or withdraw it. The first `POST` for a name returns a `token` that the `DELETE` must carry (`{"name": ..., "token": ...}`); a refresh by a namesake gets no token and its bye is refused with 409, so two agents that picked the same name cannot withdraw and clean up after each other. While a client is present the window icon glows bright and the GUI log records who is working. Presence is kept alive by activity, not by heartbeats: every request the client sends refreshes it (with several clients present, name yourself with the `X-Client-Name` header or a `client` field; an anonymous request refreshes the client present the longest, the one that also owns new processes), and so does a shell command it started that is still running or an `follow=1` stream it keeps open. Only `ttl_s` (default 10 min, max 30 min) of complete idleness lapses it. The server remembers every button, custom command, and shell the client started; when the client withdraws (without `"keep": true`) or lapses, the GUI stops those and logs the cleanup, so a crashed agent cannot leave the simulator running. Clients should not run a separate presence-refresh process: one that outlives its owner keeps a dead agent "present" for hours. |
 | `POST /reload` | Re-read `gui_settings.yaml` and the workspace button profile without restarting the GUI. Button commands, labels, tooltips and argument slots are picked up for the next press; running processes and their tabs are preserved. |
 | `GET /recording`, `POST /recording/{start\|pause\|resume\|stop}` | Screen recording state (`active`, `paused`, `segments`, `recorded_s`, `video_path`, `video_speedup_path`) and its control without Auto Launch. A recording started by a client is stopped when that client leaves. |

@@ -469,7 +469,18 @@ BUTTON_CONFIG_DEFAULTS = [
     },
 ]
 
-GENERIC_BUTTON_ARG_SLOTS = range(1, 11)
+GENERIC_BUTTON_ARG_SLOTS = range(1, 25)
+DEFAULT_ADVANCED_ARG_NAMES = frozenset({
+    'gui', 'gzclient', 'gazebo_gui', 'gazebo_client', 'use_mtc',
+    'jev_min_confidence', 'voice_languages',
+})
+
+
+def _option_description_key(value: object) -> str:
+    """Keep YAML boolean keys aligned with string combo values."""
+    if isinstance(value, bool):
+        return str(value).lower()
+    return str(value)
 
 REQUIRED_BUTTON_KEYS = ('sim', 'rviz')
 
@@ -666,9 +677,22 @@ def _normalize_button_entry(item: dict) -> dict | None:
         normalized[f'arg_{slot}_applies'] = bool(
             item.get(f'arg_{slot}_applies', False)
         )
-        normalized[f'arg_{slot}_advanced'] = bool(
-            item.get(f'arg_{slot}_advanced', False)
+        advanced_field = f'arg_{slot}_advanced'
+        normalized[advanced_field] = (
+            bool(item[advanced_field]) if advanced_field in item else None
         )
+        normalized[f'arg_{slot}_description'] = str(
+            item.get(f'arg_{slot}_description') or ''
+        ).strip()
+        descriptions = item.get(f'arg_{slot}_option_descriptions') or {}
+        if not isinstance(descriptions, dict):
+            descriptions = {}
+        normalized[f'arg_{slot}_option_descriptions'] = {
+            _option_description_key(value): str(description).strip()
+            for value, description in descriptions.items()
+            if _option_description_key(value) in normalized[f'arg_{slot}_options']
+            and str(description).strip()
+        }
     return normalized
 
 
@@ -816,8 +840,26 @@ def _button_entry_for_save(entry: dict) -> dict:
                 saved[f'arg_{slot}_options'] = normalized_options
         if bool(entry.get(f'arg_{slot}_applies')):
             saved[f'arg_{slot}_applies'] = True
-        if bool(entry.get(f'arg_{slot}_advanced')):
-            saved[f'arg_{slot}_advanced'] = True
+        if arg_name and entry.get(f'arg_{slot}_advanced') is not None:
+            saved[f'arg_{slot}_advanced'] = bool(
+                entry[f'arg_{slot}_advanced']
+            )
+        description = str(entry.get(f'arg_{slot}_description') or '').strip()
+        if description:
+            saved[f'arg_{slot}_description'] = description
+        option_descriptions = entry.get(
+            f'arg_{slot}_option_descriptions') or {}
+        if isinstance(option_descriptions, dict):
+            filtered = {
+                _option_description_key(value): str(text).strip()
+                for value, text in option_descriptions.items()
+                if _option_description_key(value) in saved.get(
+                    f'arg_{slot}_options', []
+                )
+                and str(text).strip()
+            }
+            if filtered:
+                saved[f'arg_{slot}_option_descriptions'] = filtered
     return saved
 
 
@@ -844,6 +886,8 @@ def _strip_unused_arg_definitions(saved: list[dict]) -> list[dict]:
                 entry.pop(name_field, None)
                 entry.pop(options_field, None)
                 entry.pop(advanced_field, None)
+                entry.pop(f'arg_{slot}_description', None)
+                entry.pop(f'arg_{slot}_option_descriptions', None)
     return saved
 
 

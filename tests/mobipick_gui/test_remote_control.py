@@ -1013,6 +1013,11 @@ def test_main_window_generic_args_over_remote_api(tmp_path, monkeypatch):
         }
         anygrasp = next(b for b in adapter.buttons() if b['key'] == 'anygrasp')
         assert anygrasp['full_command'] == "launch_anygrasp.sh anygrasp_mode:='mockup'"
+        editor_entry = next(
+            entry for entry in window._button_layout_for_editor()
+            if entry['key'] == 'anygrasp'
+        )
+        assert editor_entry['command'] == 'launch_anygrasp.sh'
 
         from mobipick_gui.remote_control import RemoteControlError
 
@@ -1024,6 +1029,126 @@ def test_main_window_generic_args_over_remote_api(tmp_path, monkeypatch):
         world = args['world']['options'][-1]
         adapter.set_args({'world': world})
         assert window._current_world() == world
+    finally:
+        window._stop_remote_control()
+        window.deleteLater()
+        app.processEvents()
+
+
+def test_argument_descriptions_reach_tooltips_and_remote_args(
+    tmp_path, monkeypatch
+):
+    from PyQt5.QtWidgets import QFormLayout, QLabel
+    from mobipick_gui import main_window as mw
+
+    original = mw.load_button_layout
+
+    def described_layout(*args, **kwargs):
+        entries = list(original(*args, **kwargs))
+        sim = next(entry for entry in entries if entry['key'] == 'sim')
+        sim.update({
+            'arg_1_name': 'use_mtc',
+            'arg_1_options': ['true', 'false'],
+            'arg_1_applies': True,
+            'arg_1_advanced': True,
+            'arg_1_description': 'Choose the motion planner.',
+            'arg_1_option_descriptions': {
+                'true': 'Use MTC', 'false': 'Use MoveIt actions',
+            },
+            'arg_2_name': 'model_profile',
+            'arg_2_options': ['small', 'large'],
+            'arg_2_applies': True,
+            'arg_2_description': 'Select the language model.',
+        })
+        return entries
+
+    monkeypatch.setattr(mw, 'load_button_layout', described_layout)
+    app, window = _make_window(tmp_path, monkeypatch)
+    try:
+        advanced = window._generic_arg_inputs[1]
+        main = window._generic_arg_inputs[2]
+        assert advanced.toolTip() == 'Choose the motion planner.'
+        assert advanced.model().item(0).toolTip() == 'Use MTC'
+        assert main.toolTip() == 'Select the language model.'
+        row_label = window._advanced_arg_layout.itemAt(
+            0, QFormLayout.LabelRole
+        ).widget()
+        assert isinstance(row_label, QLabel)
+        assert row_label.toolTip() == 'Choose the motion planner.'
+        help_label = window._advanced_arg_layout.itemAt(
+            0, QFormLayout.FieldRole
+        ).widget().findChildren(QLabel)[0]
+        assert help_label.text() == 'Choose the motion planner.'
+        main_label = window.generic_arg_controls.findChildren(QLabel)[0]
+        assert main_label.toolTip() == 'Select the language model.'
+        args = {
+            arg['name']: arg for arg in window.remote_control.adapter.args()
+        }
+        assert args['use_mtc']['description'] == 'Choose the motion planner.'
+        assert args['use_mtc']['option_descriptions']['true'] == 'Use MTC'
+        assert args['model_profile']['description'] == (
+            'Select the language model.'
+        )
+    finally:
+        window._stop_remote_control()
+        window.deleteLater()
+        app.processEvents()
+
+
+@pytest.mark.parametrize('session_type', ['x11', 'wayland'])
+def test_advanced_edit_button_saves_and_reloads_profile(
+    tmp_path, monkeypatch, session_type
+):
+    from PyQt5.QtWidgets import QDialog
+    from mobipick_gui import main_window as mw
+    from mobipick_gui.config import load_button_layout, save_button_layout
+
+    monkeypatch.setenv('XDG_SESSION_TYPE', session_type)
+    profile_path = tmp_path / 'buttons.yaml'
+    save_button_layout(profile_path, [
+        {
+            'key': 'sim', 'label': 'Sim', 'kind': 'builtin',
+            'action': 'sim', 'command': 'roslaunch demo_sim.launch',
+            'arg_1_name': 'gui', 'arg_1_options': ['true', 'false'],
+            'arg_1_applies': True, 'arg_1_advanced': True,
+        },
+        {
+            'key': 'rviz', 'label': 'RViz', 'kind': 'builtin',
+            'action': 'rviz', 'command': 'rviz',
+        },
+    ])
+    app, window = _make_window(tmp_path, monkeypatch)
+    try:
+        window._button_layout = load_button_layout(profile_path)
+        monkeypatch.setattr(
+            window, '_resolved_button_config_path', lambda: profile_path
+        )
+        monkeypatch.setattr(
+            window, '_button_profile_save_path', lambda _source: profile_path
+        )
+        monkeypatch.setattr(
+            window, '_workspace_button_config_path', lambda: str(profile_path)
+        )
+        monkeypatch.setattr(
+            window, '_remember_button_profile_path', lambda *_args: None
+        )
+        monkeypatch.setattr(window, '_create_workspace_tabs', lambda: None)
+        monkeypatch.setattr(window, '_apply_env_to_all_tabs', lambda: None)
+
+        def edit_and_accept(dialog):
+            dialog._arguments[0]['description'] = 'Open the Gazebo client.'
+            dialog.accept()
+            return QDialog.Accepted
+
+        monkeypatch.setattr(mw.LaunchArgumentsDialog, 'exec_', edit_and_accept)
+        window._open_launch_arguments_dialog()
+
+        assert load_button_layout(profile_path)[0][
+            'arg_1_description'
+        ] == 'Open the Gazebo client.'
+        assert window._generic_arg_inputs[1].toolTip() == (
+            'Open the Gazebo client.'
+        )
     finally:
         window._stop_remote_control()
         window.deleteLater()

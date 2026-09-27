@@ -352,6 +352,15 @@ Use **Tools > Configure Toolbar Buttons**, select a button, and click
 **Configure Arguments...** to edit each slot's argument name, comma-separated
 combo options, and per-button applicability checkbox in a separate dialog.
 Check **Advanced launch option** there to place a selector in the pop-up.
+The **Edit...** button in Advanced Launch Options opens one editor for all
+launch arguments in the loaded button profile. Select an argument to edit its
+name, selectable values, description, value descriptions, placement, and the
+buttons it applies to. You can add and remove arguments there. Save writes the
+workspace button profile and refreshes the GUI. At most six arguments may be
+placed beside **world_config** on the main window.
+Descriptions appear when you hover over a selector, its label, or a value in
+the dropdown. The advanced dialog also shows a short description below each
+selector. Profiles without descriptions continue to work.
 The Gazebo client, `use_mtc`, `jev_min_confidence`, and `voice_languages`
 selectors appear there automatically when the profile defines them.
 This keeps the normal button table focused on commonly edited settings.

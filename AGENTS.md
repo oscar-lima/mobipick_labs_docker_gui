@@ -17,6 +17,9 @@ Follow PEP 8 with four-space indents and keep functions under 80 columns where p
 The main window holds at most seven launch options, including world selection.
 Put new or rarely used launch options in the Advanced Launch Options dialog;
 never add an eighth main-window launch option.
+Give launch arguments a plain-language description and describe choices when
+their effect is not obvious. Keep those fields editable through the Advanced
+Launch Options editor and visible as selector tooltips and remote API help.
 
 Dialogs and tool windows must use responsive horizontal sizing for long user-editable values such as file paths, commands, Docker image tags, and workspace paths. Form rows with `QLineEdit` path or command fields must give those fields an expanding horizontal size policy and a sensible initial/minimum width based on realistic content, not a narrow default dialog width. For `QTableWidget` and `QTreeWidget` views, assign at least one content-heavy column a `QHeaderView.Stretch` resize mode instead of leaving important fields at fixed widths; resize-to-contents columns should be limited to compact labels, buttons, status, and short identifiers. When adding or adjusting a window, verify that widening the window makes the relevant path or command fields wider without requiring the user to drag column separators manually.
 

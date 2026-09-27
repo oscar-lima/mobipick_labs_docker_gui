@@ -789,7 +789,7 @@ API_INDEX = [
     ('POST', '/buttons/{key}/click', 'Press a button. Body: {"args": {"name": "value"}, "wait_for": [events], "timeout": s}. Events with a key only match this button; "button_ready" returns at once when it is already ready.'),
     ('POST', '/buttons/{key}/start', 'Press only when the button is not running.'),
     ('POST', '/buttons/{key}/stop', 'Press only when the button is running.'),
-    ('GET', '/args', 'Toolbar argument dropdowns (name, value, options, buttons they apply to) plus the world selector.'),
+    ('GET', '/args', 'Launch arguments and world with values, choices, descriptions, invalid choices, and applicable buttons.'),
     ('POST', '/args', 'Select argument values without touching the profile. Body: {"anygrasp_mode": "real", "world": "moelk_tables"}.'),
     ('GET', '/presence', 'Clients that declared they are using the GUI (lights the window icon). Any number of differently named agents may be present at once.'),
     ('POST', '/presence', 'Declare that you are using the GUI. Body: {"name": "<agent>", "ttl_s": 600, "note": ""}. Every later request refreshes it (name yourself with the X-Client-Name header or a "client" field when several agents are present), as does a running shell command or an open stream; ttl_s (max 1800) idle time without any of those lapses it and the GUI stops what you started.'),
