@@ -245,8 +245,9 @@ dialog.
 **Headless**, next to Auto Launch, keeps windows closed. While it is checked,
 Auto Launch skips the buttons that only open a window (RViz, RQt and any
 button the profile marks with `opens_window: true`) and does not arrange
-windows, and every button starts with its headless arguments from the profile
-(`headless_args`, for example the simulator without the Gazebo window). It
+windows or show Auto Launch progress, and every button starts with its
+headless arguments from the profile (`headless_args`, for example the
+simulator without the Gazebo window). It
 changes the next launches only; stop and start a process to apply it. A
 window button you press yourself still opens its window. The GUI remembers
 the setting.

@@ -195,6 +195,42 @@ def test_auto_launch_recreates_progress_after_robot_race_toggle(monkeypatch):
     app.processEvents()
 
 
+def test_headless_auto_launch_does_not_show_progress():
+    app = QApplication.instance() or QApplication([])
+    harness = QWidget()
+    harness._headless_mode = True
+    harness._auto_launch_progress = None
+    harness._robot_race_enabled = False
+    harness.bring_window_to_front = lambda _window: pytest.fail(
+        'headless launch brought a progress window to front'
+    )
+    harness.keep_window_above = lambda _window: pytest.fail(
+        'headless launch raised a progress window'
+    )
+
+    MainWindow._show_auto_launch_progress(harness, 1.0)
+
+    assert harness._auto_launch_progress is None
+    harness.deleteLater()
+    app.processEvents()
+
+
+def test_headless_auto_launch_dismisses_previous_progress():
+    app = QApplication.instance() or QApplication([])
+    harness = QWidget()
+    progress = AutoLaunchProgressWindow(harness, robot_race_enabled=False)
+    progress.start_countdown(5.0)
+    harness._headless_mode = True
+    harness._auto_launch_progress = progress
+
+    MainWindow._show_auto_launch_progress(harness, 1.0)
+
+    assert not progress.isVisible()
+    assert not progress._update_timer.isActive()
+    harness.deleteLater()
+    app.processEvents()
+
+
 def test_auto_launch_progress_includes_window_layout_milestone():
     app = QApplication.instance() or QApplication([])
     now = {'ns': 0}

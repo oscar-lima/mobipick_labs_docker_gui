@@ -12087,7 +12087,11 @@ CMD ["bash"]
         total_seconds: float,
         processes: list[dict] | None = None,
     ) -> None:
-        """Show the always-on-top readiness countdown."""
+        """Show the readiness countdown only for launches with windows."""
+        if getattr(self, '_headless_mode', False):
+            if self._auto_launch_progress is not None:
+                self._auto_launch_progress.dismiss()
+            return
         if (
             self._auto_launch_progress is not None
             and self._auto_launch_progress._robot_race_enabled

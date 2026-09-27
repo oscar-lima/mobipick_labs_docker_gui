@@ -607,8 +607,9 @@ The **Headless** switch next to Auto Launch (remote: `POST /headless`) starts
 nothing that opens a window: Auto Launch skips the `opens_window` buttons (a
 process that depended on a skipped one inherits that one's dependency),
 does not replay the window layout (`window_layout_applied` still fires at the
-same moment, with `skipped: headless`), and every button start receives its
-`headless_args`. It applies to the next launches, not to running processes,
+same moment, with `skipped: headless`), omits the Auto Launch progress window,
+and every button start receives its `headless_args`. It applies to the next
+launches, not to running processes,
 and a window button pressed by hand still opens its window. The choice is
 remembered across restarts; `headless.enabled_by_default` in
 `gui_settings.yaml` sets it for a fresh configuration.
