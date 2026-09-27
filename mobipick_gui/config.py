@@ -679,7 +679,8 @@ def _normalize_button_entry(item: dict) -> dict | None:
         )
         advanced_field = f'arg_{slot}_advanced'
         normalized[advanced_field] = (
-            bool(item[advanced_field]) if advanced_field in item else None
+            # None = unset (DEFAULT_ADVANCED_ARG_NAMES decide), also when an entry is normalized twice
+            bool(item[advanced_field]) if item.get(advanced_field) is not None else None
         )
         normalized[f'arg_{slot}_description'] = str(
             item.get(f'arg_{slot}_description') or ''

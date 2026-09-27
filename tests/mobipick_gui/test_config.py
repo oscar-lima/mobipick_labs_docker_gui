@@ -321,6 +321,19 @@ def test_button_layout_save_load_round_trip_single_file(tmp_path):
     assert by_key['rviz']['command'] == 'rviz -d /tmp/custom.rviz'
 
 
+def test_unset_advanced_flag_stays_unset_after_loading(tmp_path):
+    target = tmp_path / 'profile.yaml'
+    target.write_text(yaml.safe_dump({'buttons': [{
+        'key': 'demo', 'label': 'Demo', 'kind': 'command', 'command': 'roslaunch demo demo.launch',
+        'arg_4_name': 'jev_min_confidence', 'arg_4_options': ['0.6', '0.4'], 'arg_4_applies': True,
+    }]}))
+
+    loaded = {entry['key']: entry for entry in load_button_layout(target)}
+
+    # None lets DEFAULT_ADVANCED_ARG_NAMES place it in the advanced dialog; False would pin it to the main window
+    assert loaded['demo']['arg_4_advanced'] is None
+
+
 def test_button_layout_round_trips_advanced_generic_args(tmp_path):
     target = tmp_path / 'generic_args.yaml'
     save_button_layout(
