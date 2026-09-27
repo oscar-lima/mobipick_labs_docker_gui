@@ -983,6 +983,7 @@ def test_main_window_generic_args_over_remote_api(tmp_path, monkeypatch):
                 'arg_3_name': 'anygrasp_mode',
                 'arg_3_options': ['real', 'mockup'],
                 'arg_3_applies': True,
+                'arg_3_advanced': True,
             }
         )
         return entries
@@ -995,6 +996,8 @@ def test_main_window_generic_args_over_remote_api(tmp_path, monkeypatch):
         assert args['anygrasp_mode']['options'] == ['real', 'mockup']
         assert args['anygrasp_mode']['value'] == 'real'
         assert args['anygrasp_mode']['buttons'] == ['anygrasp']
+        assert window._advanced_arg_layout.rowCount() == 1
+        assert not window.advanced_launch_button.isHidden()
         assert 'world' in args and window._current_world() in args['world']['options']
 
         anygrasp = next(b for b in adapter.buttons() if b['key'] == 'anygrasp')
@@ -1005,6 +1008,9 @@ def test_main_window_generic_args_over_remote_api(tmp_path, monkeypatch):
 
         adapter.set_args({'anygrasp_mode': 'mockup'})
         assert window._generic_arg_inputs[3].currentText() == 'mockup'
+        assert window._ui_selection_state()['generic_args']['3'] == {
+            'name': 'anygrasp_mode', 'value': 'mockup'
+        }
         anygrasp = next(b for b in adapter.buttons() if b['key'] == 'anygrasp')
         assert anygrasp['full_command'] == "launch_anygrasp.sh anygrasp_mode:='mockup'"
 
@@ -1019,6 +1025,52 @@ def test_main_window_generic_args_over_remote_api(tmp_path, monkeypatch):
         adapter.set_args({'world': world})
         assert window._current_world() == world
     finally:
+        window._stop_remote_control()
+        window.deleteLater()
+        app.processEvents()
+
+
+@pytest.mark.parametrize('session_type', ['x11', 'wayland'])
+def test_advanced_use_mtc_reaches_sim_and_bringup_commands(
+    tmp_path, monkeypatch, session_type
+):
+    from mobipick_gui import main_window as mw
+
+    monkeypatch.setenv('XDG_SESSION_TYPE', session_type)
+    original = mw.load_button_layout
+
+    def layout_with_mtc(*args, **kwargs):
+        entries = list(original(*args, **kwargs))
+        entries.append({
+            'key': 'tables_demo_bringup',
+            'label': 'Tables Demo Bringup',
+            'kind': 'command',
+            'command': 'roslaunch tables_demo_bringup demo_real.launch',
+        })
+        for entry in entries:
+            if entry['key'] in {'sim', 'tables_demo_bringup'}:
+                entry.update({
+                    'arg_7_name': 'use_mtc',
+                    'arg_7_options': ['true', 'false'],
+                    'arg_7_applies': True,
+                    'arg_7_advanced': True,
+                })
+        return entries
+
+    monkeypatch.setattr(mw, 'load_button_layout', layout_with_mtc)
+    app, window = _make_window(tmp_path, monkeypatch)
+    try:
+        assert not window.advanced_launch_button.isHidden()
+        window.advanced_launch_button.click()
+        app.processEvents()
+        assert window.advanced_launch_dialog.isVisible()
+        adapter = window.remote_control.adapter
+        adapter.set_args({'use_mtc': 'false'})
+        for key in ('sim', 'tables_demo_bringup'):
+            button = next(item for item in adapter.buttons() if item['key'] == key)
+            assert "use_mtc:='false'" in button['full_command']
+    finally:
+        window.advanced_launch_dialog.close()
         window._stop_remote_control()
         window.deleteLater()
         app.processEvents()

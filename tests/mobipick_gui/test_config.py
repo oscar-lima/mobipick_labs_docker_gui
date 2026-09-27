@@ -321,7 +321,7 @@ def test_button_layout_save_load_round_trip_single_file(tmp_path):
     assert by_key['rviz']['command'] == 'rviz -d /tmp/custom.rviz'
 
 
-def test_button_layout_round_trips_three_optional_generic_args(tmp_path):
+def test_button_layout_round_trips_advanced_generic_args(tmp_path):
     target = tmp_path / 'generic_args.yaml'
     save_button_layout(
         target,
@@ -341,6 +341,10 @@ def test_button_layout_round_trips_three_optional_generic_args(tmp_path):
                 'arg_3_name': 'mode',
                 'arg_3_options': ['demo', 'live'],
                 'arg_3_applies': True,
+                'arg_7_name': 'use_mtc',
+                'arg_7_options': ['true', 'false'],
+                'arg_7_applies': True,
+                'arg_7_advanced': True,
             },
             {
                 'key': 'rviz',
@@ -366,6 +370,8 @@ def test_button_layout_round_trips_three_optional_generic_args(tmp_path):
     assert loaded['sim']['arg_3_name'] == 'mode'
     assert loaded['sim']['arg_3_options'] == ['demo', 'live']
     assert loaded['sim']['arg_3_applies'] is True
+    assert loaded['sim']['arg_7_name'] == 'use_mtc'
+    assert loaded['sim']['arg_7_advanced'] is True
 
 
 def test_button_layout_saves_generic_arg_definition_only_where_it_applies(tmp_path):

@@ -594,18 +594,24 @@ Command entries can declare:
   Leave it empty for the normal tool service, or use `mobipick` for launch
   files that start Gazebo themselves and need the simulator service identity.
 
-Profiles can also define as many as five generic ROS arguments on each button.
+Profiles can also define as many as ten generic ROS arguments on each button.
 For slot 1, set `arg_1_name` to the argument name, provide the dropdown values
 in `arg_1_options`, and set `arg_1_applies: true` on every button that should
-receive it; slots 2 to 5 use the corresponding `arg_2_*` to `arg_5_*` fields.
+receive it; slots 2 to 10 use the corresponding `arg_2_*` to `arg_10_*` fields.
 A slot must use the same name and option list throughout one profile. Named
-slots appear as combo boxes in the main GUI, and an enabled button command
-receives the selected `name:=value`. If no slot has a name, no generic argument
-controls are shown. Select a
-button in **Configure Toolbar Buttons**, then use **Configure Arguments...** to
-edit the names, comma-separated combo options, and per-button flags in a
-separate dialog. Argument details remain out of the main profile table and
-travel with loaded or exported profiles.
+slots appear as combo boxes in the main GUI or Advanced Launch Options dialog,
+and an enabled button command receives the selected `name:=value`. If no slot
+has a name, no generic argument controls are shown. Select a button in
+**Configure Toolbar Buttons**, then use **Configure Arguments...** to edit the
+names, comma-separated combo options, advanced placement, and per-button flags
+in a separate dialog. Argument details remain out of the main profile table
+and travel with loaded or exported profiles.
+Set `arg_N_advanced: true` to place a selector in the advanced dialog.
+The Gazebo client (`gui`), `use_mtc`, `jev_min_confidence`, and
+`voice_languages` selectors use that dialog by default. The main window
+shows at most six generic arguments alongside the world selector; additional
+ones appear in the advanced dialog. Their selected values still use the
+normal command, option-rule, saved-selection, and remote API paths.
 
 ### Option rules
 

@@ -469,7 +469,7 @@ BUTTON_CONFIG_DEFAULTS = [
     },
 ]
 
-GENERIC_BUTTON_ARG_SLOTS = range(1, 7)
+GENERIC_BUTTON_ARG_SLOTS = range(1, 11)
 
 REQUIRED_BUTTON_KEYS = ('sim', 'rviz')
 
@@ -666,6 +666,9 @@ def _normalize_button_entry(item: dict) -> dict | None:
         normalized[f'arg_{slot}_applies'] = bool(
             item.get(f'arg_{slot}_applies', False)
         )
+        normalized[f'arg_{slot}_advanced'] = bool(
+            item.get(f'arg_{slot}_advanced', False)
+        )
     return normalized
 
 
@@ -813,6 +816,8 @@ def _button_entry_for_save(entry: dict) -> dict:
                 saved[f'arg_{slot}_options'] = normalized_options
         if bool(entry.get(f'arg_{slot}_applies')):
             saved[f'arg_{slot}_applies'] = True
+        if bool(entry.get(f'arg_{slot}_advanced')):
+            saved[f'arg_{slot}_advanced'] = True
     return saved
 
 
@@ -829,6 +834,7 @@ def _strip_unused_arg_definitions(saved: list[dict]) -> list[dict]:
         name_field = f'arg_{slot}_name'
         options_field = f'arg_{slot}_options'
         applies_field = f'arg_{slot}_applies'
+        advanced_field = f'arg_{slot}_advanced'
         defining = [entry for entry in saved if entry.get(name_field)]
         if not defining:
             continue
@@ -837,6 +843,7 @@ def _strip_unused_arg_definitions(saved: list[dict]) -> list[dict]:
             if entry not in keep:
                 entry.pop(name_field, None)
                 entry.pop(options_field, None)
+                entry.pop(advanced_field, None)
     return saved
 
 

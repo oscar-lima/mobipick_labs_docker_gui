@@ -9,6 +9,7 @@ from PyQt5.QtWidgets import (
     QApplication,
     QDialog,
     QDialogButtonBox,
+    QFormLayout,
     QHBoxLayout,
     QHeaderView,
     QLineEdit,
@@ -610,6 +611,74 @@ def test_generic_arg_controls_are_hidden_without_config_and_append_values():
     assert not harness.generic_arg_controls.isHidden()
     assert command == "roslaunch demo run.launch robot:='mobipick 1'"
 
+    harness.deleteLater()
+    app.processEvents()
+
+
+def test_advanced_arguments_keep_command_and_saved_values():
+    app = QApplication.instance() or QApplication([])
+    harness = QWidget()
+    harness.generic_arg_controls = QWidget(harness)
+    harness._generic_arg_controls_layout = QHBoxLayout(
+        harness.generic_arg_controls
+    )
+    harness.advanced_launch_dialog = QDialog(harness)
+    harness._advanced_arg_layout = QFormLayout(harness.advanced_launch_dialog)
+    harness.advanced_launch_button = QPushButton(harness)
+    harness._generic_arg_inputs = {}
+    harness._saved_selections = {
+        'generic_args': {'2': {'name': 'use_mtc', 'value': 'false'}}
+    }
+    harness._button_layout = [{
+        'arg_1_name': 'model_profile',
+        'arg_1_options': ['default'],
+        'arg_2_name': 'use_mtc',
+        'arg_2_options': ['true', 'false'],
+        'arg_2_applies': True,
+    }]
+    main_window_module.MainWindow._refresh_generic_arg_controls(harness)
+
+    assert harness._generic_arg_controls_layout.count() == 1
+    assert harness._advanced_arg_layout.rowCount() == 1
+    assert not harness.advanced_launch_button.isHidden()
+    assert harness._generic_arg_inputs[2].currentText() == 'false'
+    harness._sh_quote = main_window_module.MainWindow._sh_quote
+    for launch in ('demo_sim.launch', 'tables_demo_bringup.launch'):
+        command = main_window_module.MainWindow._command_with_generic_args(
+            harness, f'roslaunch tables_demo_bringup {launch}',
+            harness._button_layout[0],
+        )
+        assert command.endswith("use_mtc:='false'")
+    harness.deleteLater()
+    app.processEvents()
+
+
+def test_seventh_generic_argument_moves_to_advanced_dialog():
+    app = QApplication.instance() or QApplication([])
+    harness = QWidget()
+    harness.generic_arg_controls = QWidget(harness)
+    harness._generic_arg_controls_layout = QHBoxLayout(
+        harness.generic_arg_controls
+    )
+    harness.advanced_launch_dialog = QDialog(harness)
+    harness._advanced_arg_layout = QFormLayout(harness.advanced_launch_dialog)
+    harness.advanced_launch_button = QPushButton(harness)
+    harness._generic_arg_inputs = {}
+    harness._saved_selections = {}
+    harness._button_layout = [{
+        field: value
+        for slot in range(1, 9)
+        for field, value in (
+            (f'arg_{slot}_name', f'option_{slot}'),
+            (f'arg_{slot}_options', ['on', 'off']),
+        )
+    }]
+
+    main_window_module.MainWindow._refresh_generic_arg_controls(harness)
+
+    assert harness._generic_arg_controls_layout.count() == 6
+    assert harness._advanced_arg_layout.rowCount() == 2
+    assert set(harness._generic_arg_inputs) == set(range(1, 9))
     harness.deleteLater()
     app.processEvents()
 

@@ -734,20 +734,25 @@ class ButtonArgumentsDialog(QDialog):
         label = str(entry.get('label') or entry.get('key') or 'button')
         self.setWindowTitle(f'Configure Arguments — {label}')
         self.setMinimumWidth(720)
+        self.resize(760, 620)
         self._name_inputs: dict[int, QLineEdit] = {}
         self._options_inputs: dict[int, QLineEdit] = {}
         self._applies_checks: dict[int, QCheckBox] = {}
+        self._advanced_checks: dict[int, QCheckBox] = {}
 
         root = QVBoxLayout(self)
         note = QLabel(
             f'Configure up to {len(GENERIC_BUTTON_ARG_SLOTS)} optional ROS arguments. The same slot must '
             'use the same name on every toolbar button. Enable a slot to append '
-            'its non-empty main-window value to this button as name:=value.'
+            'its selected value to this button as name:=value.'
         )
         note.setWordWrap(True)
         root.addWidget(note)
 
-        form = QFormLayout()
+        scroll = QScrollArea(self)
+        scroll.setWidgetResizable(True)
+        form_widget = QWidget()
+        form = QFormLayout(form_widget)
         for slot in GENERIC_BUTTON_ARG_SLOTS:
             row_widget = QWidget()
             row = QVBoxLayout(row_widget)
@@ -764,6 +769,8 @@ class ButtonArgumentsDialog(QDialog):
             )
             applies = QCheckBox('Apply to this button')
             applies.setChecked(bool(entry.get(f'arg_{slot}_applies')))
+            advanced = QCheckBox('Advanced launch option')
+            advanced.setChecked(bool(entry.get(f'arg_{slot}_advanced')))
             name_row.addWidget(QLabel('Name:'))
             name_row.addWidget(name_input, 1)
             name_row.addWidget(applies)
@@ -784,11 +791,14 @@ class ButtonArgumentsDialog(QDialog):
             options_row.addWidget(QLabel('Combo options:'))
             options_row.addWidget(options_input, 1)
             row.addLayout(options_row)
+            row.addWidget(advanced)
             form.addRow(f'Argument {slot}:', row_widget)
             self._name_inputs[slot] = name_input
             self._options_inputs[slot] = options_input
             self._applies_checks[slot] = applies
-        root.addLayout(form)
+            self._advanced_checks[slot] = advanced
+        scroll.setWidget(form_widget)
+        root.addWidget(scroll, 1)
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.Save | QDialogButtonBox.Cancel
@@ -815,6 +825,10 @@ class ButtonArgumentsDialog(QDialog):
                 (
                     f'arg_{slot}_applies',
                     self._applies_checks[slot].isChecked(),
+                ),
+                (
+                    f'arg_{slot}_advanced',
+                    self._advanced_checks[slot].isChecked(),
                 ),
             )
         }
@@ -1172,6 +1186,7 @@ class ButtonProfileDialog(QDialog):
                         (f'arg_{slot}_name', ''),
                         (f'arg_{slot}_options', []),
                         (f'arg_{slot}_applies', False),
+                        (f'arg_{slot}_advanced', False),
                     )
                 },
             }
@@ -1232,6 +1247,11 @@ class ButtonProfileDialog(QDialog):
                     ),
                     [],
                 )
+            entry[f'arg_{slot}_advanced'] = next(
+                (bool(candidate.get(f'arg_{slot}_advanced'))
+                 for candidate in entries if candidate.get(name_field)),
+                False,
+            )
         dialog = ButtonArgumentsDialog(entry, self)
         if dialog.exec_() != QDialog.Accepted:
             return
@@ -1241,11 +1261,13 @@ class ButtonProfileDialog(QDialog):
                 name_field = f'arg_{slot}_name'
                 options_field = f'arg_{slot}_options'
                 applies_field = f'arg_{slot}_applies'
-                target[name_field] = configured[name_field]
-                target[options_field] = configured[options_field]
+                advanced_field = f'arg_{slot}_advanced'
+                target[name_field] = configured.get(name_field, '')
+                target[options_field] = configured.get(options_field, [])
+                target[advanced_field] = configured.get(advanced_field, False)
                 if target_row == row:
-                    target[applies_field] = configured[applies_field]
-                elif not configured[name_field]:
+                    target[applies_field] = configured.get(applies_field, False)
+                elif not configured.get(name_field):
                     target[applies_field] = False
                 else:
                     target[applies_field] = bool(
@@ -3707,7 +3729,21 @@ class MainWindow(QMainWindow):
             self.generic_arg_controls
         )
         self._generic_arg_inputs: dict[int, QComboBox] = {}
+        self.advanced_launch_dialog = QDialog(self)
+        self.advanced_launch_dialog.setWindowTitle('Advanced Launch Options')
+        self.advanced_launch_dialog.setMinimumWidth(400)
+        advanced_root = QVBoxLayout(self.advanced_launch_dialog)
+        self._advanced_arg_layout = QFormLayout()
+        advanced_root.addLayout(self._advanced_arg_layout)
+        advanced_buttons = QDialogButtonBox(QDialogButtonBox.Close)
+        advanced_buttons.rejected.connect(self.advanced_launch_dialog.close)
+        advanced_root.addWidget(advanced_buttons)
         actions.addWidget(self.generic_arg_controls)
+        self.advanced_launch_button = QPushButton('Advanced Launch Options...')
+        self.advanced_launch_button.clicked.connect(
+            self.advanced_launch_dialog.show
+        )
+        actions.addWidget(self.advanced_launch_button)
         self._refresh_generic_arg_controls()
 
         self.image_combo = QComboBox()
@@ -8009,7 +8045,7 @@ CMD ["bash"]
         return MainWindow._command_with_generic_args(self, command, cfg)
 
     def _refresh_generic_arg_controls(self) -> None:
-        """Show inputs only for generic argument slots named by the profile."""
+        """Build main and advanced argument selectors from the profile."""
         controls = getattr(self, 'generic_arg_controls', None)
         layout = getattr(self, '_generic_arg_controls_layout', None)
         if controls is None or layout is None:
@@ -8053,13 +8089,34 @@ CMD ["bash"]
             )
             for slot in GENERIC_BUTTON_ARG_SLOTS
         }
+        advanced = {
+            slot: any(
+                bool(entry.get(f'arg_{slot}_advanced'))
+                for entry in self._button_layout
+                if isinstance(entry, dict)
+            ) or names[slot] in {
+                'gui', 'gzclient', 'gazebo_gui', 'gazebo_client',
+                'use_mtc',
+                'jev_min_confidence', 'voice_languages',
+            }
+            for slot in GENERIC_BUTTON_ARG_SLOTS
+        }
         while layout.count():
             item = layout.takeAt(0)
             widget = item.widget()
             if widget is not None:
                 widget.deleteLater()
+        advanced_layout = getattr(self, '_advanced_arg_layout', None)
+        if advanced_layout is not None:
+            while advanced_layout.count():
+                item = advanced_layout.takeAt(0)
+                widget = item.widget()
+                if widget is not None:
+                    widget.deleteLater()
 
         inputs: dict[int, QComboBox] = {}
+        main_count = 0
+        advanced_count = 0
         for slot in GENERIC_BUTTON_ARG_SLOTS:
             name = names[slot]
             if not name:
@@ -8084,17 +8141,24 @@ CMD ["bash"]
             value_input.activated.connect(
                 lambda _index: MainWindow._apply_option_rules(self, True)
             )
-            slot_controls, _slot_label = _labeled_control(
-                f'{name}:',
-                value_input,
-            )
-            layout.addWidget(slot_controls)
+            if advanced_layout is not None and (advanced[slot] or main_count >= 6):
+                advanced_layout.addRow(f'{name}:', value_input)
+                advanced_count += 1
+            else:
+                slot_controls, _slot_label = _labeled_control(
+                    f'{name}:', value_input,
+                )
+                layout.addWidget(slot_controls)
+                main_count += 1
             inputs[slot] = value_input
         self._generic_arg_inputs = inputs
         self._generic_arg_names_by_slot = {
             slot: names[slot] for slot in inputs
         }
-        controls.setVisible(bool(inputs))
+        controls.setVisible(bool(main_count))
+        advanced_button = getattr(self, 'advanced_launch_button', None)
+        if advanced_button is not None:
+            advanced_button.setVisible(bool(advanced_count))
         MainWindow._apply_option_rules(self)
 
     def _command_with_generic_args(self, command: str, config: dict) -> str:
@@ -8181,6 +8245,9 @@ CMD ["bash"]
                 )
                 normalized[f'arg_{slot}_applies'] = bool(
                     entry.get(f'arg_{slot}_applies', False)
+                )
+                normalized[f'arg_{slot}_advanced'] = bool(
+                    entry.get(f'arg_{slot}_advanced', False)
                 )
             self._config_buttons[key] = normalized
             self._config_button_order.append(key)
