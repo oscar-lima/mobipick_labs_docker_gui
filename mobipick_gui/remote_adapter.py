@@ -216,6 +216,21 @@ class MainWindowRemoteAdapter(GuiAdapter):
         except ValueError as exc:
             raise RemoteControlError(str(exc)) from exc
 
+    def _leftover_process(self, key: str, before: dict) -> str:
+        '''why a command button that does not show green still has a process: its tab's client or container is
+        alive (a launch that is dying, or one the GUI lost track of); '' when there is none. The click handler
+        toggles on the process, not on the colour, so a "start" would stop it (#79, #61).'''
+        if before['running'] or key not in getattr(self.window, '_config_buttons', {}):
+            return ''
+        tab = self.window.tasks.get(key)
+        if tab is None:
+            return ''
+        if tab.is_running():
+            return 'its client process is alive'
+        if getattr(tab, 'exec_id', None):
+            return f'container {tab.container_name or tab.exec_id} is still attached'
+        return ''
+
     def press_button(self, key: str, action: str = 'click') -> dict:
         widget = self._button_widget(key)
         if widget is None:
@@ -235,9 +250,17 @@ class MainWindowRemoteAdapter(GuiAdapter):
                 'reason': f'button is disabled: {before["text"]}',
                 'button': before,
             }
+        leftover = self._leftover_process(key, before)
         if action == 'start' and before['running']:
             return {'accepted': False, 'reason': 'already running', 'button': before}
-        if action == 'stop' and not before['running']:
+        if action == 'start' and leftover:
+            # the click would toggle this half-alive run off instead of starting it (#79, #61)
+            return {
+                'accepted': False,
+                'reason': f'busy: the previous process of {key} is still running ({leftover}); stop it first',
+                'button': before,
+            }
+        if action == 'stop' and not before['running'] and not leftover:
             return {'accepted': False, 'reason': 'not running', 'button': before}
         if not before['running']:
             blocked = self.window._start_blocked_reason(key)
