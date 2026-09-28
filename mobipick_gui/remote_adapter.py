@@ -7,6 +7,7 @@ threads can read without depending on the Qt event thread.
 from __future__ import annotations
 
 import html
+import subprocess
 import threading
 import uuid
 from typing import TYPE_CHECKING
@@ -27,6 +28,40 @@ if TYPE_CHECKING:  # pragma: no cover
 
 REMOTE_SHELL_TAB_PREFIX = 'terminal-remote'
 REMOTE_SHELL_XHOST_SOURCE = 'remote-shell'
+
+
+def tab_process_alive(window, key: str) -> bool:
+    '''True when the GUI itself tracks a process of the tab (client alive or a container attached)'''
+    tab = window.tasks.get(key)
+    return tab is not None and (bool(tab.is_running()) or bool(getattr(tab, 'exec_id', None)))
+
+
+def _running_containers_with_tab(key: str) -> list[str]:
+    '''names of the running containers labelled mobipick.tab=<key>; [] when docker cannot be asked'''
+    try:
+        result = subprocess.run(
+            ['docker', 'ps', '--filter', f'label=mobipick.tab={key}', '--format', '{{.Names}}'],
+            capture_output=True, text=True, timeout=5.0,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    if result.returncode != 0:
+        return []
+    return [name for name in result.stdout.split() if name]
+
+
+def _stop_containers(names: list[str]) -> list[str]:
+    '''docker stop each container (10 s grace); returns the names that could not be stopped'''
+    failed = []
+    for name in names:
+        try:
+            result = subprocess.run(['docker', 'stop', '-t', '10', name], capture_output=True, text=True, timeout=30.0)
+        except (OSError, subprocess.SubprocessError):
+            failed.append(name)
+            continue
+        if result.returncode != 0:
+            failed.append(name)
+    return failed
 
 
 class MainWindowRemoteAdapter(GuiAdapter):
@@ -229,7 +264,16 @@ class MainWindowRemoteAdapter(GuiAdapter):
             return 'its client process is alive'
         if getattr(tab, 'exec_id', None):
             return f'container {tab.container_name or tab.exec_id} is still attached'
+        lost = self._lost_containers(key)
+        if lost:
+            return f'container {", ".join(lost)} still runs (the GUI lost track of it)'
         return ''
+
+    def _lost_containers(self, key: str) -> list[str]:
+        '''running containers labelled mobipick.tab=<key> that no tab process or exec id of the GUI tracks (#79)'''
+        if key not in getattr(self.window, '_config_buttons', {}):
+            return []
+        return _running_containers_with_tab(key)
 
     def press_button(self, key: str, action: str = 'click') -> dict:
         widget = self._button_widget(key)
@@ -262,6 +306,19 @@ class MainWindowRemoteAdapter(GuiAdapter):
             }
         if action == 'stop' and not before['running'] and not leftover:
             return {'accepted': False, 'reason': 'not running', 'button': before}
+        if action == 'stop' and not before['running'] and not tab_process_alive(self.window, key):
+            # a container the GUI lost: a click would start a new run next to it, so stop it with docker (#79)
+            lost = self._lost_containers(key)
+            self.window._log_info(f'remote control: stop {key}: docker stop {" ".join(lost)}')
+            failed = _stop_containers(lost)
+            return {
+                'accepted': not failed,
+                'action': action,
+                'was_running': False,
+                'stopped_containers': [name for name in lost if name not in failed],
+                'reason': f'docker stop failed for {", ".join(failed)}' if failed else '',
+                'button': self._describe_button(key),
+            }
         if not before['running']:
             blocked = self.window._start_blocked_reason(key)
             if blocked:

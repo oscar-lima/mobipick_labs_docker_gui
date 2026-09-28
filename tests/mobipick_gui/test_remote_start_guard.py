@@ -5,7 +5,17 @@ os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
 from PyQt5.QtWidgets import QApplication, QPushButton
 
+import pytest
+
+from mobipick_gui import remote_adapter
 from mobipick_gui.remote_adapter import MainWindowRemoteAdapter
+
+
+@pytest.fixture(autouse=True)
+def no_docker(monkeypatch):
+    '''the adapter asks docker ps for lost containers (#79): none by default, and never the real daemon'''
+    monkeypatch.setattr(remote_adapter, '_running_containers_with_tab', lambda key: [])
+    monkeypatch.setattr(remote_adapter, '_stop_containers', lambda names: [])
 
 
 class FakeTab:
@@ -86,4 +96,33 @@ def test_green_button_unchanged():
     result, clicks = _press('green', FakeTab(running=True), 'start')
     assert not result['accepted'] and result['reason'] == 'already running'
     result, clicks = _press('green', FakeTab(running=True), 'stop')
+    assert result['accepted'] and clicks == ['click']
+
+
+def _with_docker(monkeypatch, running, stopped):
+    monkeypatch.setattr(remote_adapter, '_running_containers_with_tab', lambda key: list(running))
+    monkeypatch.setattr(remote_adapter, '_stop_containers', lambda names: stopped.extend(names) or [])
+
+
+def test_start_refused_while_a_lost_container_still_runs(monkeypatch):
+    stopped = []
+    _with_docker(monkeypatch, ['mpcmd-lost123'], stopped)
+    result, clicks = _press('red', FakeTab(), 'start')
+    assert not result['accepted'] and 'mpcmd-lost123' in result['reason'] and 'lost track' in result['reason']
+    assert clicks == [] and stopped == []
+
+
+def test_stop_of_a_lost_container_uses_docker_not_the_click(monkeypatch):
+    stopped = []
+    _with_docker(monkeypatch, ['mpcmd-lost123'], stopped)
+    result, clicks = _press('red', FakeTab(), 'stop')
+    assert result['accepted'] and result['stopped_containers'] == ['mpcmd-lost123']
+    assert clicks == [] and stopped == ['mpcmd-lost123']        # a click would have started a second run
+
+
+def test_docker_is_not_asked_for_a_tracked_run(monkeypatch):
+    def boom(key):
+        raise AssertionError('docker ps must not run while the GUI tracks the process')
+    monkeypatch.setattr(remote_adapter, '_running_containers_with_tab', boom)
+    result, clicks = _press('red', FakeTab(running=True), 'stop')
     assert result['accepted'] and clicks == ['click']
