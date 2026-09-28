@@ -27,8 +27,10 @@ import re
 import secrets
 import shlex
 import subprocess
+import sys
 import threading
 import time
+import traceback
 import uuid
 from collections import deque
 from dataclasses import dataclass
@@ -199,14 +201,31 @@ class _Job:
             return True
 
 
+def thread_stack(ident: int | None, limit: int = 12) -> str:
+    """Innermost ``limit`` Python frames of thread ``ident``, outermost first, as ``file:line func`` > ...
+
+    Read from another thread with ``sys._current_frames()``, so it works while that thread is stuck (no
+    ptrace or debugger needed). Empty when the thread is gone or runs no Python code.
+    """
+    frame = sys._current_frames().get(ident) if ident is not None else None
+    if frame is None:
+        return ''
+    frames = traceback.extract_stack(frame)[-max(1, int(limit)):]
+    return ' > '.join(f'{os.path.basename(f.filename)}:{f.lineno} {f.name}' for f in frames)
+
+
 class GuiInvoker(QObject):
     """Run callables on the Qt GUI thread from any other thread."""
 
     _job_signal = pyqtSignal(object)
+    # a GUI thread that stays busy is reported on stderr (the journal) at most this often, with its stack
+    stack_report_interval_s = 30.0
 
     def __init__(self, parent: QObject | None = None):
         super().__init__(parent)
         self._job_signal.connect(self._run_job, Qt.QueuedConnection)
+        self._gui_thread_ident = threading.get_ident()   # created on the GUI thread
+        self._last_stack_report = 0.0
 
     def invoke(self, fn: Callable[[], Any], *, timeout: float = 1.0) -> Any:
         if QThread.currentThread() is self.thread():
@@ -220,10 +239,19 @@ class GuiInvoker(QObject):
                 if cancelled else
                 'the action had already begun; its outcome is unknown'
             )
-            raise GuiTimeout(
+            message = (
                 f'GUI action failed: the GUI thread was unavailable for '
                 f'{timeout:g}s ({outcome})'
             )
+            stack = thread_stack(self._gui_thread_ident)
+            if stack:
+                # names the loop that blocks it (#157: it spun for hours and nothing could attach to see where)
+                message += f'; GUI thread busy in: {stack}'
+                now = time.monotonic()
+                if now - self._last_stack_report >= self.stack_report_interval_s:
+                    self._last_stack_report = now
+                    print(f'mobipick GUI remote control: {message}', file=sys.stderr, flush=True)
+            raise GuiTimeout(message)
         if job.error is not None:
             raise job.error
         return job.result

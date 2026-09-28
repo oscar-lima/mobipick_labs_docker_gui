@@ -892,6 +892,38 @@ def test_timed_out_gui_action_is_cancelled_before_late_delivery():
     assert called == []
 
 
+def test_gui_timeout_names_where_the_busy_gui_thread_is(capsys):
+    """#157: a GUI thread stuck in a loop is named in the timeout error and on stderr."""
+    from PyQt5.QtWidgets import QApplication
+
+    app = QApplication.instance() or QApplication([])
+    invoker = GuiInvoker()
+    stop = threading.Event()
+    result = {}
+
+    def invoke() -> None:
+        try:
+            invoker.invoke(lambda: None, timeout=0.2)
+        except GuiTimeout as exc:
+            result['error'] = str(exc)
+        finally:
+            stop.set()
+
+    def _spin_like_157() -> None:
+        while not stop.is_set():  # busy GUI thread, as in #157
+            pass
+
+    worker = threading.Thread(target=invoke)
+    worker.start()
+    _spin_like_157()
+    worker.join(timeout=2)
+    app.processEvents()
+    assert 'queued action was cancelled' in result['error']
+    assert 'GUI thread busy in:' in result['error']
+    assert '_spin_like_157' in result['error']
+    assert '_spin_like_157' in capsys.readouterr().err
+
+
 def test_main_window_layout_apply_and_ready_emit_remote_events(tmp_path, monkeypatch):
     app, window = _make_window(tmp_path, monkeypatch)
     try:
