@@ -221,9 +221,11 @@ class _Api:
         self.base_url = base_url
         self.token = token
 
-    def __call__(self, method, path, body=None, token=None, timeout=30):
+    def __call__(self, method, path, body=None, token=None, timeout=30, client=None):
         data = json.dumps(body).encode() if body is not None else None
         headers = {'Content-Type': 'application/json'}
+        if client:
+            headers['X-Client-Name'] = client
         use_token = self.token if token is None else token
         if use_token:
             headers['Authorization'] = f'Bearer {use_token}'
@@ -1820,6 +1822,35 @@ def test_presence_supports_several_named_agents():
         api('DELETE', '/presence', {'name': 'codex', 'token': codex})
         assert not server.in_use
         assert {e['key'] for e in server.take_owned('codex')} == {'roscore'}
+    finally:
+        server.stop()
+
+
+def test_started_button_belongs_to_the_named_client_not_the_oldest():
+    """#206: a request with X-Client-Name owns what it starts; the oldest client's bye keeps it."""
+    adapter = FakeAdapter()
+    server = RemoteControlServer(adapter, host='127.0.0.1', port=0)
+    adapter.server = server
+    host, port = server.start()
+    try:
+        api = _Api(f'http://{host}:{port}')
+        old = api('POST', '/presence', {'name': 'old-agent'})[1]['client']['token']
+        api('POST', '/presence', {'name': 'young-agent'})
+        api('POST', '/buttons/roscore/start', {}, client='young-agent')
+        assert {e['key'] for e in server.owned_by('young-agent')} == {'roscore'}
+        assert server.owned_by('old-agent') == []
+        # the client field in the body names the owner too
+        api('POST', '/buttons/sim/start', {'client': 'young-agent'})
+        assert {e['key'] for e in server.owned_by('young-agent')} == {'roscore', 'sim'}
+        # an anonymous request still goes to the longest present client
+        api('POST', '/buttons/sim/stop', {})
+        api('POST', '/buttons/sim/start', {})
+        assert {e['key'] for e in server.owned_by('old-agent')} == {'sim'}
+        server.take_owned('old-agent')
+        # the oldest client leaves: nothing of the younger one is taken
+        api('DELETE', '/presence', {'name': 'old-agent', 'token': old})
+        assert server.take_owned('old-agent') == []
+        assert {e['key'] for e in server.owned_by('young-agent')} == {'roscore'}
     finally:
         server.stop()
 

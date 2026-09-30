@@ -887,6 +887,8 @@ class RemoteControlServer:
         # (kind, key) of processes each client started and has not stopped yet
         self._owned: dict[str, list[dict]] = {}
         self._leave_reasons: dict[str, str] = {}
+        # the client named by the request this thread is handling (#206)
+        self._request = threading.local()
         self.started = time.time()
 
     # -- lifecycle ---------------------------------------------------------
@@ -1004,8 +1006,19 @@ class RemoteControlServer:
                 return None
             return min(self._clients.values(), key=lambda entry: entry['since'])['name']
 
+    def _request_client(self) -> str | None:
+        """The present client the current request names, else None (anonymous)."""
+        name = str(getattr(self._request, 'client', None) or '').strip()
+        if not name:
+            return None
+        with self._clients_lock:
+            self._expire_clients_locked(time.time())
+            return name if name in self._clients else None
+
     def _record_owned(self, kind: str, key: Any) -> None:
-        name = self._current_client()
+        # what a request starts belongs to the client that sent it; only an
+        # anonymous request falls back to the longest present client
+        name = self._request_client() or self._current_client()
         if name is None:
             return
         with self._clients_lock:
@@ -1293,8 +1306,10 @@ class RemoteControlServer:
         request refreshes; ``client`` in the body or query does the same.
         """
         parts = [unquote(part) for part in path.strip('/').split('/') if part]
+        named = client or body.get('client') or query.get('client')
         if parts and parts != ['presence']:
-            self.touch_presence(client or body.get('client') or query.get('client'))
+            self.touch_presence(named)
+        self._request.client = named
         try:
             payload = self._dispatch(method, parts, query, body)
         except GuiTimeout as exc:
@@ -1315,6 +1330,8 @@ class RemoteControlServer:
                 'ok': False,
                 'error': f'{type(exc).__name__}: {exc}',
             }
+        finally:
+            self._request.client = None
         return int(HTTPStatus.OK), self._envelope(payload)
 
     def _dispatch(self, method: str, parts: list[str], query: dict[str, str], body: dict) -> dict:
