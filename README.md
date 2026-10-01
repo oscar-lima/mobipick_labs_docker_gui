@@ -634,6 +634,8 @@ their tooltips. A profile can omit either field. The description appears on
 the selector and its label, and its first line appears below advanced options.
 The remote `GET /args` response includes `description` and
 `option_descriptions`.
+The Advanced Launch Options dialog lays its options out in columns, each filled from top to bottom before the next
+(one column up to 4 options, two up to 16, three above) and scrolls when the screen is smaller than the options.
 The Advanced Launch Options dialog has **Edit...**, which opens one editor for
 every argument in the loaded button profile. It edits names, choices, help
 text, placement, and the buttons each argument applies to, and can add or

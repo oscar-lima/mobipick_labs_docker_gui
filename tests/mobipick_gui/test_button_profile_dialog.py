@@ -10,6 +10,7 @@ from PyQt5.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QFormLayout,
+    QGridLayout,
     QHBoxLayout,
     QHeaderView,
     QLineEdit,
@@ -623,7 +624,7 @@ def test_advanced_arguments_keep_command_and_saved_values():
         harness.generic_arg_controls
     )
     harness.advanced_launch_dialog = QDialog(harness)
-    harness._advanced_arg_layout = QFormLayout(harness.advanced_launch_dialog)
+    harness._advanced_arg_layout = QGridLayout(harness.advanced_launch_dialog)
     harness.advanced_launch_button = QPushButton(harness)
     harness._generic_arg_inputs = {}
     harness._saved_selections = {
@@ -661,7 +662,7 @@ def test_seventh_generic_argument_moves_to_advanced_dialog():
         harness.generic_arg_controls
     )
     harness.advanced_launch_dialog = QDialog(harness)
-    harness._advanced_arg_layout = QFormLayout(harness.advanced_launch_dialog)
+    harness._advanced_arg_layout = QGridLayout(harness.advanced_launch_dialog)
     harness.advanced_launch_button = QPushButton(harness)
     harness._generic_arg_inputs = {}
     harness._saved_selections = {}
@@ -993,4 +994,43 @@ def test_container_path_browser_accepts_nonexistent_manual_path():
     )
 
     browser.deleteLater()
+    app.processEvents()
+
+
+def test_advanced_options_use_columns_filled_top_to_bottom():
+    assert [main_window_module.advanced_option_columns(n) for n in (0, 1, 4, 5, 16, 17, 30)] == [1, 1, 1, 2, 2, 3, 3]
+    app = QApplication.instance() or QApplication([])
+    harness = QWidget()
+    harness.generic_arg_controls = QWidget(harness)
+    harness._generic_arg_controls_layout = QHBoxLayout(harness.generic_arg_controls)
+    harness.advanced_launch_dialog = QDialog(harness)
+    harness._advanced_arg_layout = QGridLayout(harness.advanced_launch_dialog)
+    harness.advanced_launch_button = QPushButton(harness)
+    harness._generic_arg_inputs = {}
+    harness._saved_selections = {}
+    harness._button_layout = [{
+        field: value
+        for slot in range(1, 21)
+        for field, value in (
+            (f'arg_{slot}_name', f'option_{slot}'),
+            (f'arg_{slot}_options', ['on', 'off']),
+            (f'arg_{slot}_advanced', True),
+        )
+    }]
+    harness._fill_advanced_columns = main_window_module.MainWindow._fill_advanced_columns.__get__(harness)
+
+    main_window_module.MainWindow._refresh_generic_arg_controls(harness)
+
+    layout = harness._advanced_arg_layout
+    assert layout.rowCount() == 7   # 20 options in 3 columns: 7 + 7 + 6
+    names = {}
+    for row in range(layout.rowCount()):
+        for column in range(3):
+            item = layout.itemAtPosition(row, column * 3)
+            if item is not None:
+                names[(row, column)] = item.widget().text()
+    assert names[(0, 0)] == 'option_1:' and names[(6, 0)] == 'option_7:'
+    assert names[(0, 1)] == 'option_8:' and names[(0, 2)] == 'option_15:'
+    assert (6, 2) not in names and names[(5, 2)] == 'option_20:'
+    harness.deleteLater()
     app.processEvents()

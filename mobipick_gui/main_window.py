@@ -54,6 +54,8 @@ from PyQt5.QtWidgets import (
     QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
+    QFrame,
+    QGridLayout,
     QHBoxLayout,
     QHeaderView,
     QInputDialog,
@@ -309,6 +311,16 @@ def _mark_invalid_combo_items(
             description, f'Invalid: {reason}' if reason else '',
         )))
         item.setToolTip(tooltip)
+
+
+ADVANCED_COLUMN_WIDTH = 560   # px per option column of the Advanced Launch Options dialog (#264)
+
+
+def advanced_option_columns(count: int) -> int:
+    """Columns of the Advanced Launch Options dialog: one for a few options, two up to 16, three above (#264)."""
+    if count <= 4:
+        return 1
+    return 2 if count <= 16 else 3
 
 
 def _configure_shrinkable_combo(
@@ -3865,8 +3877,16 @@ class MainWindow(QMainWindow):
         )
         self._advanced_empty_label.setWordWrap(True)
         advanced_root.addWidget(self._advanced_empty_label)
-        self._advanced_arg_layout = QFormLayout()
-        advanced_root.addLayout(self._advanced_arg_layout)
+        self._advanced_arg_layout = QGridLayout()
+        self._advanced_arg_layout.setHorizontalSpacing(8)
+        self._advanced_arg_layout.setVerticalSpacing(6)
+        advanced_content = QWidget()
+        advanced_content.setLayout(self._advanced_arg_layout)
+        self._advanced_scroll = QScrollArea()
+        self._advanced_scroll.setWidgetResizable(True)
+        self._advanced_scroll.setFrameShape(QFrame.NoFrame)
+        self._advanced_scroll.setWidget(advanced_content)
+        advanced_root.addWidget(self._advanced_scroll, 1)
         advanced_buttons = QDialogButtonBox(QDialogButtonBox.Close)
         edit_advanced_button = advanced_buttons.addButton(
             'Edit...', QDialogButtonBox.ActionRole
@@ -3879,7 +3899,7 @@ class MainWindow(QMainWindow):
         actions.addWidget(self.generic_arg_controls)
         self.advanced_launch_button = QPushButton('Advanced Launch Options...')
         self.advanced_launch_button.clicked.connect(
-            self.advanced_launch_dialog.show
+            lambda: MainWindow._show_advanced_launch_dialog(self)
         )
         actions.addWidget(self.advanced_launch_button)
         self._refresh_generic_arg_controls()
@@ -8295,7 +8315,7 @@ CMD ["bash"]
 
         inputs: dict[int, QComboBox] = {}
         main_count = 0
-        advanced_count = 0
+        advanced_rows: list[tuple[QLabel, QWidget]] = []
         for slot in GENERIC_BUTTON_ARG_SLOTS:
             name = names[slot]
             if not name:
@@ -8341,10 +8361,10 @@ CMD ["bash"]
                     help_line.setStyleSheet('color: #777;')
                     help_line.setToolTip(description)
                     field_layout.addWidget(help_line)
+                field_layout.addStretch(1)   # spare height of the row goes below the help line, not into the selector
                 label = QLabel(f'{name}:')
                 label.setToolTip(description)
-                advanced_layout.addRow(label, field)
-                advanced_count += 1
+                advanced_rows.append((label, field))
             else:
                 slot_controls, _slot_label = _labeled_control(
                     f'{name}:', value_input,
@@ -8353,6 +8373,9 @@ CMD ["bash"]
                 layout.addWidget(slot_controls)
                 main_count += 1
             inputs[slot] = value_input
+        advanced_count = len(advanced_rows)
+        if advanced_layout is not None:
+            MainWindow._fill_advanced_columns(self, advanced_layout, advanced_rows)
         self._generic_arg_inputs = inputs
         self._generic_arg_names_by_slot = {
             slot: names[slot] for slot in inputs
@@ -8367,6 +8390,36 @@ CMD ["bash"]
         if advanced_button is not None:
             advanced_button.setVisible(True)
         MainWindow._apply_option_rules(self)
+
+    def _fill_advanced_columns(self, layout, rows) -> None:
+        """Lay the Advanced Launch Options out in columns, the first column filled top to bottom before the next (#264)."""
+        columns = advanced_option_columns(len(rows))
+        per_column = -(-len(rows) // columns) if rows else 0
+        for index, (label, field) in enumerate(rows):
+            column, row = divmod(index, per_column)
+            layout.addWidget(label, row, column * 3, Qt.AlignTop | Qt.AlignRight)
+            layout.addWidget(field, row, column * 3 + 1)
+        for column in range(columns):
+            layout.setColumnStretch(column * 3 + 1, 1)
+            if column:
+                layout.setColumnMinimumWidth(column * 3 - 1, 16)
+        self._advanced_columns = columns
+
+    def _show_advanced_launch_dialog(self) -> None:
+        """Show the Advanced Launch Options dialog as wide as its columns need (at most the screen), as tall as the
+        options need (at most the screen, then it scrolls)."""
+        dialog = self.advanced_launch_dialog
+        if not dialog.isVisible():
+            columns = getattr(self, '_advanced_columns', 1)
+            screen = dialog.screen().availableGeometry() if dialog.screen() else None
+            width = ADVANCED_COLUMN_WIDTH * columns
+            height = self._advanced_scroll.widget().sizeHint().height() + 80
+            if screen is not None:
+                width = min(width, int(screen.width() * 0.95))
+                height = min(max(height, 300), int(screen.height() * 0.9))
+            dialog.resize(max(400, width), height)
+        dialog.show()
+        dialog.raise_()
 
     def _command_with_generic_args(self, command: str, config: dict) -> str:
         """Append configured, non-empty generic ROS arguments to a command."""

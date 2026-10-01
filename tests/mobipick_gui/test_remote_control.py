@@ -1104,13 +1104,11 @@ def test_argument_descriptions_reach_tooltips_and_remote_args(
         assert advanced.toolTip() == 'Choose the motion planner.'
         assert advanced.model().item(0).toolTip() == 'Use MTC'
         assert main.toolTip() == 'Select the language model.'
-        row_label = window._advanced_arg_layout.itemAt(
-            0, QFormLayout.LabelRole
-        ).widget()
+        row_label = window._advanced_arg_layout.itemAtPosition(0, 0).widget()
         assert isinstance(row_label, QLabel)
         assert row_label.toolTip() == 'Choose the motion planner.'
-        help_label = window._advanced_arg_layout.itemAt(
-            0, QFormLayout.FieldRole
+        help_label = window._advanced_arg_layout.itemAtPosition(
+            0, 1
         ).widget().findChildren(QLabel)[0]
         assert help_label.text() == 'Choose the motion planner.'
         main_label = window.generic_arg_controls.findChildren(QLabel)[0]
