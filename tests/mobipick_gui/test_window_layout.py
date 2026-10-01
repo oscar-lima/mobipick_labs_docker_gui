@@ -574,3 +574,47 @@ def test_window_backends_activate_without_qt_request(monkeypatch):
         'org.gnome.Shell.Extensions.MobipickWinCtl.Activate',
         "'42'",
     ]
+
+
+def test_layout_corrects_a_window_that_lands_off_its_saved_position(tmp_path, monkeypatch):
+    calls: list[tuple] = []
+    landed = {'x': 10, 'y': 20}
+
+    class FakeBackend:
+        available = True
+        name = 'fake'
+
+        def list_windows(self, **_kwargs):
+            return [WindowInfo('1', 'First', 0, 1, landed['x'], landed['y'], 300, 400, ['first'])]
+
+        def unmaximize(self, wid):
+            return True
+
+        def move_resize(self, wid, x, y, width, height):
+            calls.append((wid, x, y, width, height))
+            landed['x'], landed['y'] = x - 2, y + 37  # the window manager shifts it by its frame
+
+        def set_desktop(self, wid, desktop):
+            pass
+
+        def restack(self, wids):
+            pass
+
+    clock = {'now': 100.0}
+    monkeypatch.setattr('mobipick_gui.window_layout.time.monotonic', lambda: clock['now'])
+    manager = WindowLayoutManager(tmp_path / 'layout.yaml', backend=FakeBackend())
+    manager._layout = {'windows': [{'title': 'First', 'geometry': {'x': 10, 'y': 20, 'width': 300, 'height': 400}}]}
+    manager._auto_apply_done = False
+
+    manager.maybe_apply_saved_layout()
+    assert calls == [('1', 10, 20, 300, 400)]
+    assert (landed['x'], landed['y']) == (8, 57)
+
+    clock['now'] += 1.0
+    manager.maybe_apply_saved_layout()
+    assert calls[-1] == ('1', 12, -17, 300, 400)
+    assert (landed['x'], landed['y']) == (10, 20)
+
+    clock['now'] += 1.0
+    manager.maybe_apply_saved_layout()
+    assert len(calls) == 2  # corrected once, then left alone

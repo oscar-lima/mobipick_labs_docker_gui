@@ -64,6 +64,8 @@ class WindowLayoutManager:
         self._attention_ignored_ids: set[str] = set()
         self._attention_cleared_ids: set[str] = set()
         self._start_ts = time.monotonic()
+        # wid -> (x, y, width, height, due): windows to check once after a move (see _correct_frame_offsets)
+        self._offset_checks: dict[str, tuple[int, int, int, int, float]] = {}
 
     def record_baseline(self, *, exclude_titles: Iterable[str] | None = None):
         if not self._backend.available:
@@ -225,7 +227,37 @@ class WindowLayoutManager:
             self._log_warning(f'Failed to write window layout to {self.state_file}: {exc}')
             return False
 
+    # A window that lands this far from where it was asked to go was moved by the user or the window manager on
+    # purpose (e.g. kept on screen), not shifted by a frame: leave it.
+    FRAME_OFFSET_LIMIT = 200
+    FRAME_OFFSET_CHECK_DELAY_S = 0.5
+
+    def _correct_frame_offsets(self) -> None:
+        """Move each restored window once more by the offset it landed off its saved position.
+
+        ``wmctrl -e`` places some windows (with a window-manager frame, or with client-side decorations and
+        shadows) a frame's width or a title bar's height away from the position ``wmctrl -lG`` reports, so they
+        creep a little on every save and restore. Measuring where the window really is and moving it by the
+        difference, with the same tool that captures the layout, puts it back exactly once.
+        """
+        now = time.monotonic()
+        due = {wid: c for wid, c in self._offset_checks.items() if c[4] <= now}
+        if not due:
+            return
+        for wid in due:
+            self._offset_checks.pop(wid, None)
+        landed = {win.wid: win for win in self._enumerate_windows(include_classes=False, include_stack=False)}
+        for wid, (x, y, width, height, _due) in due.items():
+            win = landed.get(wid)
+            if win is None:
+                continue
+            dx, dy = win.x - x, win.y - y
+            if (dx or dy) and abs(dx) <= self.FRAME_OFFSET_LIMIT and abs(dy) <= self.FRAME_OFFSET_LIMIT:
+                self._backend.move_resize(wid, x - dx, y - dy, width, height)
+                self._log_debug(f'window layout: corrected {win.title!r} by {-dx},{-dy} (frame offset)')
+
     def maybe_apply_saved_layout(self):
+        self._correct_frame_offsets()
         if self._auto_apply_done:
             return
         windows_cfg = self._layout.get('windows') if isinstance(self._layout, dict) else []
@@ -386,6 +418,7 @@ class WindowLayoutManager:
             coords = []
         if len(coords) == 4:
             self._backend.move_resize(window.wid, *coords)
+            self._offset_checks[window.wid] = (*coords, time.monotonic() + self.FRAME_OFFSET_CHECK_DELAY_S)
 
         desktop = entry.get('desktop')
         try:
