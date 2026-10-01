@@ -57,6 +57,25 @@ def test_profile_round_trip_preserves_argument_and_value_descriptions(tmp_path):
     assert loaded['sim']['arg_24_description'] == 'Check arm cable stretch.'
 
 
+def test_slots_above_24_are_kept_by_the_profile_round_trip(tmp_path):
+    # the tables demo profile has 26 named slots (#236): arg_25 and arg_26 were silently dropped at 24 slots
+    target = tmp_path / 'profile.yaml'
+    entries = _profile()
+    entries[0].update({
+        'arg_26_name': 'reset_cache_mrad',
+        'arg_26_options': ['5', '0'],
+        'arg_26_applies': True,
+        'arg_26_advanced': True,
+        'arg_26_description': 'Start-pose cache.',
+    })
+    save_button_layout(target, entries)
+
+    loaded = {entry['key']: entry for entry in load_button_layout(target)}
+
+    assert loaded['sim']['arg_26_name'] == 'reset_cache_mrad'
+    assert loaded['sim']['arg_26_options'] == ['5', '0']
+
+
 def test_explicit_main_placement_overrides_advanced_name_default(tmp_path):
     entries = _profile()
     entries[0]['arg_1_advanced'] = False

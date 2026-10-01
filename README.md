@@ -614,10 +614,10 @@ and a window button pressed by hand still opens its window. The choice is
 remembered across restarts; `headless.enabled_by_default` in
 `gui_settings.yaml` sets it for a fresh configuration.
 
-Profiles can also define as many as 24 generic ROS arguments on each button.
+Profiles can also define as many as 32 generic ROS arguments on each button.
 For slot 1, set `arg_1_name` to the argument name, provide the dropdown values
 in `arg_1_options`, and set `arg_1_applies: true` on every button that should
-receive it; slots 2 to 24 use the corresponding `arg_2_*` to `arg_24_*` fields.
+receive it; slots 2 to 32 use the corresponding `arg_2_*` to `arg_32_*` fields.
 A slot must use the same name and option list throughout one profile. Named
 slots appear as combo boxes in the main GUI or Advanced Launch Options dialog,
 and an enabled button command receives the selected `name:=value`. If no slot
