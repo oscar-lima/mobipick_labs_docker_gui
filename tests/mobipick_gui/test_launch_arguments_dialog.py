@@ -76,6 +76,53 @@ def test_slots_above_24_are_kept_by_the_profile_round_trip(tmp_path):
     assert loaded['sim']['arg_26_options'] == ['5', '0']
 
 
+def test_slots_33_to_64_are_kept_listed_and_reach_the_command_line(tmp_path):
+    # the tables demo profile grew past 32 slots (arg_33..45): the GUI read slots 1..32 only (#328)
+    from types import SimpleNamespace
+    from mobipick_gui.main_window import MainWindow
+
+    class _Combo:
+        def __init__(self, value):
+            self._value = value
+
+        def currentText(self):
+            return self._value
+
+    target = tmp_path / 'profile.yaml'
+    entries = _profile()
+    for slot, name in ((33, 'drop_floating_boxes_at_target'), (45, 'use_mesh_object_heights'), (64, 'last_slot')):
+        entries[0].update({
+            f'arg_{slot}_name': name,
+            f'arg_{slot}_options': ['true', 'false'],
+            f'arg_{slot}_applies': True,
+            f'arg_{slot}_advanced': True,
+            f'arg_{slot}_description': f'Slot {slot}.',
+        })
+    entries[0].update({'arg_65_name': 'beyond', 'arg_65_options': ['a'], 'arg_65_applies': True})
+    save_button_layout(target, entries)
+
+    loaded = load_button_layout(target)
+    sim = {entry['key']: entry for entry in loaded}['sim']
+    for slot, name in ((33, 'drop_floating_boxes_at_target'), (45, 'use_mesh_object_heights'), (64, 'last_slot')):
+        assert sim[f'arg_{slot}_name'] == name
+        assert sim[f'arg_{slot}_options'] == ['true', 'false']
+        assert sim[f'arg_{slot}_description'] == f'Slot {slot}.'
+    assert 'arg_65_name' not in sim
+    listed = {argument['slot']: argument['name'] for argument in profile_arguments(loaded)}
+    assert listed[33] == 'drop_floating_boxes_at_target'
+    assert listed[45] == 'use_mesh_object_heights'
+    assert 65 not in listed
+
+    window = SimpleNamespace(
+        _generic_arg_inputs={33: _Combo('true'), 45: _Combo('false')},
+        _headless_mode=False,
+        _option_rules=None,
+        _sh_quote=MainWindow._sh_quote,
+    )
+    command = MainWindow._command_with_generic_args(window, 'roslaunch demo_sim.launch', sim)
+    assert command.endswith("drop_floating_boxes_at_target:='true' use_mesh_object_heights:='false'")
+
+
 def test_explicit_main_placement_overrides_advanced_name_default(tmp_path):
     entries = _profile()
     entries[0]['arg_1_advanced'] = False
