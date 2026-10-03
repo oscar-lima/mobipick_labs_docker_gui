@@ -30,6 +30,7 @@ def _harness(owned_names=()):
         _console_log=lambda *args, **kwargs: None,
     )
     harness._gui_owns_container = MethodType(MainWindow._gui_owns_container, harness)
+    harness._interrupt_container_cmds = lambda cid: [['docker', 'kill', '-s', 'INT', cid]]   # #273
     return harness
 
 

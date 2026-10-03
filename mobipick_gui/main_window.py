@@ -9331,6 +9331,80 @@ CMD ["bash"]
         shell_cmd += ' || true'
         return ['bash', '-lc', shell_cmd]
 
+    def _interrupt_container_cmds(self, container_id: str) -> list[list[str]]:
+        """The SIGINT that starts a container's clean ROS shutdown (#273).
+
+        The GUI's containers run ``bash -lc "...; roslaunch ..."``, so a
+        ``docker kill -s INT`` reaches bash as PID 1, which waits for its
+        foreground roslaunch and forwards nothing: the stop then ends in
+        SIGKILL and no node unregisters from the master. At the next start
+        the master sends "new node registered with same name" shutdown calls
+        to the dead nodes' addresses, which the recreated container reuses,
+        and about one restart in five loses a random node of the fresh sim.
+        So the roslaunch processes inside get the SIGINT themselves first;
+        the container's own SIGINT follows as before (a container without
+        roslaunch is unchanged).
+        """
+        return [
+            self._safe_docker_cmd('exec', container_id, 'pkill', '-INT', '-x', 'roslaunch'),
+            self._safe_docker_cmd('kill', '-s', 'INT', container_id),
+        ]
+
+    # one pass over the local master's nodes (#273): ping all of them at once
+    # (rosnode cleanup pings one by one, 3 s each when a dead node's address is
+    # gone, minutes for a killed sim's ~70 nodes) and unregister the ones that
+    # do not answer, as rosnode cleanup does
+    _LOCAL_MASTER_CLEANUP_PY = (
+        'import concurrent.futures as cf, rosgraph, rosnode\n'
+        "master = rosgraph.Master('/mobipick_gui_cleanup')\n"
+        'nodes = sorted({n for kind in master.getSystemState() for _, names in kind for n in names})\n'
+        'def alive(name):\n'
+        '    try:\n'
+        '        return rosnode.rosnode_ping(name, max_count=1)\n'
+        '    except Exception:\n'
+        '        return False\n'
+        'with cf.ThreadPoolExecutor(32) as pool:\n'
+        '    dead = [n for n, ok in zip(nodes, pool.map(alive, nodes)) if not ok]\n'
+        'if dead:\n'
+        '    rosnode.cleanup_master_blacklist(master, dead)\n'
+        "print('ROS master cleanup: %d nodes, %d unreachable unregistered%s' % "
+        "(len(nodes), len(dead), (': ' + ' '.join(dead)) if dead else ''))\n"
+    )
+
+    def _local_master_cleanup_cmd(self) -> list[str]:
+        """Unregister unreachable nodes at the local roscore (#273)."""
+        script = (
+            'source /opt/ros/noetic/setup.bash >/dev/null 2>&1; '
+            'timeout 30 python3 -c '
+            + shlex.quote(self._LOCAL_MASTER_CLEANUP_PY)
+            + ' 2>&1 | grep -v "^ERROR: connection refused\\|^cannot ping" || true'
+        )
+        return ['docker', 'exec', self._roscore_container_name, 'bash', '-lc', script]
+
+    def _cleanup_local_master(
+        self,
+        on_finished: Callable[[], None] | None = None,
+        *,
+        log_key: str = 'log',
+    ) -> None:
+        """Before each sim start and after each sim stop (#273): a killed
+        container's nodes stay registered at the local master; this removes
+        them, so no stale twin of a new node's name exists when it registers.
+        Remote masters keep their manual "Clean stale ROS nodes"."""
+        if self._remote_master_enabled() or not self.is_roscore_running():
+            if on_finished:
+                QTimer.singleShot(0, on_finished)
+            return
+        self._append_gui_html(
+            log_key,
+            '<i>Unregistering unreachable nodes from the local ROS master...</i>',
+        )
+        self._run_command_sequence(
+            [self._local_master_cleanup_cmd()],
+            log_key=log_key,
+            on_finished=on_finished,
+        )
+
     @staticmethod
     def _normalize_stop_timeout(value) -> int | None:
         try:
@@ -13630,7 +13704,7 @@ CMD ["bash"]
                 tab, 'sim', log_key=tab.key, on_finished=start
             )
 
-        self._ensure_roscore_ready(_start_sim)
+        self._ensure_roscore_ready(lambda: self._cleanup_local_master(_start_sim))
 
     def _graceful_stop_container(
         self,
@@ -13717,6 +13791,7 @@ CMD ["bash"]
                 self._killing = False
                 self.set_toggle_visual('red', 'Start Sim', enabled=True)
                 tab.exec_id = None
+                self._cleanup_local_master(log_key=tab.key)   # a forced stop leaves registrations (#273)
 
             self._graceful_stop_container(
                 self._sim_container_name,
@@ -13743,7 +13818,7 @@ CMD ["bash"]
         grace = self._ros_shutdown_grace_s if grace_s is None else grace_s
         for cid in ids:
             if include_int:
-                commands.append(self._safe_docker_cmd('kill', '-s', 'INT', cid))
+                commands.extend(self._interrupt_container_cmds(cid))
                 if grace > 0:
                     commands.append(
                         self._wait_for_container_exit_cmd(cid, grace)
@@ -13761,9 +13836,7 @@ CMD ["bash"]
         commands: list[list[str]] = []
         for container_id in ids:
             if include_int:
-                commands.append(
-                    self._safe_docker_cmd('kill', '-s', 'INT', container_id)
-                )
+                commands.extend(self._interrupt_container_cmds(container_id))
                 if grace_s > 0:
                     commands.append(
                         self._wait_for_container_exit_cmd(container_id, grace_s)
@@ -13969,7 +14042,7 @@ CMD ["bash"]
                         f'<i>Sending INT to related containers: {html.escape(" ".join(running_ids))}</i>'
                     )
                 for cid in running_ids:
-                    commands.append(self._safe_docker_cmd('kill', '-s', 'INT', cid))
+                    commands.extend(self._interrupt_container_cmds(cid))
 
             if running_ids:
                 if tab:

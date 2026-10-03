@@ -115,6 +115,7 @@ def _launch_harness(events: list) -> SimpleNamespace:
         _wrap_line_buffered=lambda command: command,
         _schedule_host_to_container_copy=lambda _tab: None,
         _focus_tab=lambda key: events.append(('focus', key)),
+        _cleanup_local_master=lambda then, **_kwargs: then(),   # #273: the stale-node cleanup runs first
         _ensure_roscore_ready=lambda callback: callback(),
         set_rqt_visual=lambda *args: events.append(('rqt_visual', *args)),
         set_rviz_visual=lambda *args: events.append(('rviz_visual', *args)),
@@ -190,6 +191,7 @@ def _config_command_harness(events: list) -> SimpleNamespace:
         _focus_tab=lambda key: None,
         _update_stop_custom_enabled=lambda: None,
         _set_config_visual=lambda *_args: None,
+        _cleanup_local_master=lambda then, **_kwargs: then(),   # #273: the stale-node cleanup runs first
         _ensure_roscore_ready=lambda callback: callback(),
     )
     harness._config_label = MethodType(MainWindow._config_label, harness)
@@ -262,6 +264,7 @@ def test_sim_launch_keeps_alias_and_lends_rqt_identity_to_helper_panels():
         _workspace_sim_command=lambda: 'roslaunch demo demo_sim.launch',
         _schedule_host_to_container_copy=lambda _tab: None,
         _focus_tab=lambda key: None,
+        _cleanup_local_master=lambda then, **_kwargs: then(),   # #273: the stale-node cleanup runs first
         _ensure_roscore_ready=lambda callback: callback(),
     )
     harness.bring_up_sim = MethodType(MainWindow.bring_up_sim, harness)
