@@ -3387,7 +3387,6 @@ class MainWindow(QMainWindow):
             self._remembered_image or self._images_cfg.get('default', '')
         )
         self._image_choices: list[str] = []
-        self._related_patterns: list[str] = []
         self._worlds_cfg = CONFIG['worlds']
         self._default_world = self._worlds_cfg.get('default', 'moelk_tables')
         self._selected_world = str(
@@ -3934,7 +3933,6 @@ class MainWindow(QMainWindow):
 
         self._ensure_scripts_dir()
 
-        self._update_related_patterns()
         self.image_combo.addItem('Loading images...')
         self.image_combo.setEnabled(False)
         self._load_available_images()
@@ -10002,20 +10000,6 @@ CMD ["bash"]
             world = self._default_world
         return world or 'moelk_tables'
 
-    def _update_related_patterns(self):
-        images_cfg = self._images_cfg
-        patterns = list(images_cfg.get('related_container_keywords', []))
-        if self._selected_image:
-            patterns.append(self._selected_image)
-        repo, tag = self._split_image_ref(self._selected_image)
-        if repo:
-            patterns.append(repo)
-            patterns.extend(part for part in repo.split('/') if part)
-        if tag:
-            patterns.append(tag)
-        patterns.extend(images_cfg.get('related_image_keywords', []))
-        self._related_patterns = list(dict.fromkeys(p for p in patterns if p))
-
     def _reload_images(self):
         self._load_available_images(show_feedback=True)
 
@@ -10215,7 +10199,6 @@ CMD ["bash"]
         if show_feedback:
             self._console_log(2, f'Available images: {", ".join(ordered_choices)}')
 
-        self._update_related_patterns()
         self._populate_workspace_combo()
         self._apply_env_to_all_tabs()
 
@@ -10258,7 +10241,6 @@ CMD ["bash"]
         self.image_combo.setToolTip(self._image_choice_tooltip(image_ref))
         if changed and log_selection:
             self._console_log(2, f'Selected image: {image_ref}')
-        self._update_related_patterns()
         self._apply_env_to_all_tabs()
         self._populate_workspace_combo()
         return True
@@ -13541,17 +13523,15 @@ CMD ["bash"]
                 if tab.run_generation != generation:
                     return
                 commands: list[list[str]] = []
-                patterns = [value.lower() for value in self._related_patterns]
                 running_ids: list[str] = []
                 for line in (cp.stdout or '').splitlines():
                     parts = line.split('|', 4)
                     if len(parts) != 5:
                         continue
                     cid, name, image, labels, status = parts
-                    haystack = f'{name} {image} {labels}'.lower()
                     if name == self._roscore_container_name:
                         running_ids.append(cid)
-                    elif patterns and any(p in haystack for p in patterns):
+                    elif self._gui_owns_container(name, labels):
                         if status.lower().startswith('up'):
                             running_ids.append(cid)
                 commands.extend(
@@ -13885,7 +13865,6 @@ CMD ["bash"]
             callback(planned)
 
         def resolved(cp: subprocess.CompletedProcess) -> None:
-            patterns = [value.lower() for value in self._related_patterns]
             running_ids: list[str] = []
             for line in (cp.stdout or '').splitlines():
                 parts = line.split('|', 4)
@@ -13894,10 +13873,7 @@ CMD ["bash"]
                 cid, name, image, labels, status = parts
                 if not status.lower().startswith('up'):
                     continue
-                haystack = f'{name} {image} {labels}'.lower()
-                if name == self._sim_container_name or (
-                    patterns and any(value in haystack for value in patterns)
-                ):
+                if name == self._sim_container_name or self._gui_owns_container(name, labels):
                     running_ids.append(cid)
             planned = list(commands)
             planned.extend(
@@ -13926,6 +13902,24 @@ CMD ["bash"]
 
     # Stop all related containers, robust name/image/label pattern matching.
     # Sends INT first for a graceful shutdown of GUIs, then docker stop.
+    def _gui_owns_container(self, name: str, labels: str) -> bool:
+        """True for a container this GUI started (#300): it carries the GUI's own
+        ``mobipick.exec`` label, belongs to the GUI's compose project, or its
+        name is listed in ``images.owned_container_names``. A container that only
+        runs a Mobipick image or has "mobipick" in its name (an agent's or a
+        user's throwaway test container) is not the GUI's to stop."""
+        keys: dict[str, str] = {}
+        for item in (labels or '').split(','):
+            key, _, value = item.strip().partition('=')
+            if key:
+                keys[key] = value
+        if 'mobipick.exec' in keys:
+            return True
+        project = CONFIG['process']['qprocess_env'].get('COMPOSE_PROJECT_NAME', '')
+        if project and keys.get('com.docker.compose.project') == project:
+            return True
+        return name in (self._images_cfg.get('owned_container_names') or [])
+
     def _stop_all_related(
         self,
         tab: ProcessTab | None = None,
@@ -13933,7 +13927,6 @@ CMD ["bash"]
         exclude: set[str] | None = None,
         grace_s: float | None = None,
     ) -> list[list[str]]:
-        patterns = list(self._related_patterns or [])
         grace = self._ros_shutdown_grace_s if grace_s is None else grace_s
         commands: list[list[str]] = []
         try:
@@ -13941,7 +13934,6 @@ CMD ["bash"]
                 ['docker', 'ps', '-a', '--format', '{{.ID}}|{{.Names}}|{{.Image}}|{{.Labels}}|{{.Status}}'],
                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=False, text=True
             )
-            patterns_lower = [p.lower() for p in patterns]
             matches: list[tuple[str, str, str]] = []  # (id, name, status)
             for ln in cp.stdout.splitlines():
                 ln = ln.strip()
@@ -13953,8 +13945,7 @@ CMD ["bash"]
                 cid, cname, cimage, clabels, cstatus = parts
                 if exclude and cname in exclude:
                     continue
-                hay_lower = f'{cname} {cimage} {clabels}'.lower()
-                if patterns_lower and not any(p in hay_lower for p in patterns_lower):
+                if not self._gui_owns_container(cname, clabels):
                     continue
                 matches.append((cid, cname, cstatus))
 
