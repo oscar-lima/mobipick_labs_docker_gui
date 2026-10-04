@@ -437,11 +437,13 @@ thinking are cut) and both producing a 4x version:
 1. **Camera videos** (cannot be blocked by windows): the simulation has a
    fixed camera over the three tables, `/experiment_camera/image_raw`.
    Start the recorder in a remote shell *before* the goal
-   (`wait:false`; add the robot camera as a second topic):
+   (`wait:false`; the experiment camera only: gripper / robot camera videos
+   are forbidden and the recorder refuses those topics; `command` is the
+   command that runs the experiment, shown as text in every frame):
 
    ```bash
-   roslaunch experiment_camera_recorder video_recorder.launch name:=<experiment> \
-       image_topics:=/experiment_camera/image_raw,/mobipick/eef_main_cam/rgb/image_raw fps:=6
+   roslaunch experiment_camera_recorder video_recorder.launch name:=<experiment> fps:=6 \
+       command:="<the command that runs the experiment>"
    ```
 
    It writes frames only while `/mobipick/cmd_vel` or an arm joint moves
@@ -452,7 +454,9 @@ thinking are cut) and both producing a 4x version:
    sentence), and `rosservice call /experiment_video_recorder/stop` closes
    the videos and writes `summary.json`. Output:
    `/data/experiment_recordings/<timestamp>_<experiment>/` with
-   `<topic>.mp4`, `<topic>_4x.mp4`, `snapshots/NNN_<label>_<topic>.jpg`,
+   `<id>_<topic>.mp4` (`<id>` = `v<YYYYMMDD>-<HHMMSS>-<4 hex>`, the video's
+   unique id, also shown in its frames; no sped-up copy: viewers play it at
+   4x), `snapshots/NNN_<label>_<topic>.jpg`,
    `events.jsonl` (host and container see the same path).
 2. **Screen recording** (skip it in headless mode: there are no windows to
    film; the camera videos above are the evidence) of the GUI/RViz/Gazebo

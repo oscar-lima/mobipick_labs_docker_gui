@@ -3599,9 +3599,9 @@ class MainWindow(QMainWindow):
             self._recording_cfg.get('show_control_window', True)
         )
         try:
-            self._recording_speedup = max(1.0, float(self._recording_cfg.get('speedup', 4.0) or 0))
+            self._recording_speedup = max(1.0, float(self._recording_cfg.get('speedup', 1.0) or 0))
         except (TypeError, ValueError):
-            self._recording_speedup = 4.0
+            self._recording_speedup = 1.0
         self._recording_output_root = self._resolve_recording_output_root()
         self._recording_workspace_name = self._normalize_workspace_name(self._recording_cfg.get('workspace_name'))
         active_workspace = self._workspace_registry.active_workspace()
@@ -11502,16 +11502,19 @@ CMD ["bash"]
         except Exception as exc:
             self._append_gui_html('log', f'<i>Failed to create recording folder: {html.escape(str(exc))}</i>')
             return
-        video_path = base_dir / f'{base_name}.mp4'
+        # unique video id, also the file name prefix, so a video can be referenced easily (#349)
+        video_id = f'v{now:%Y%m%d-%H%M%S}-{uuid.uuid4().hex[:4]}'
+        video_path = base_dir / f'{video_id}_{base_name}.mp4'
         ffmpeg_log = base_dir / 'ffmpeg.log'
         self._log_info(f'Auto Launch recording session folder: {base_dir}')
         # The recording is a list of segments: pausing ends the running ffmpeg
         # segment, resuming starts the next one, and stopping concatenates them
-        # into video_path plus a sped-up copy, so idle time is simply never captured.
+        # into video_path (plus a sped-up copy only when recording.speedup > 1), so idle time is simply never captured.
         self._recording_session = {
             'base_dir': base_dir,
+            'video_id': video_id,
             'video_path': video_path,
-            'video_speedup_path': base_dir / f'{base_name}_{self._recording_speedup:g}x.mp4',
+            'video_speedup_path': base_dir / f'{video_id}_{base_name}_{self._recording_speedup:g}x.mp4',
             'ffmpeg_log': ffmpeg_log,
             'logs_dir': base_dir / 'logs',
             'save_logs': False,
@@ -11762,8 +11765,8 @@ CMD ["bash"]
             self._append_gui_html(
                 'log',
                 f'<i>Recording captured {len(segments)} segment(s), {recorded:.0f} s of footage; '
-                f'exporting {html.escape(str(video_path))} and the '
-                f'{self._recording_speedup:g}x version.</i>',
+                f'exporting {html.escape(str(video_path))}'
+                + (f' and the {self._recording_speedup:g}x version' if self._recording_speedup > 1.0 else '') + '.</i>',
             )
             self._export_recording(session, segments)
         if session.get('save_logs') and base_dir:
@@ -11795,7 +11798,8 @@ CMD ["bash"]
                 pass
 
     def _export_recording(self, session: dict, segments: list[Path]) -> None:
-        """Concatenate the segments into the final video, then render the sped-up copy."""
+        """Concatenate the segments into the final video, then render the sped-up copy when speedup > 1 (default 1:
+        none, viewers play the video at 4x, #349)."""
         base_dir: Path = session['base_dir']
         video_path: Path = session['video_path']
         speedup_path: Path = session['video_speedup_path']
@@ -11861,6 +11865,9 @@ CMD ["bash"]
                 return
             size_mb = video_path.stat().st_size / (1024.0 * 1024.0)
             self._append_gui_html('log', f'<i>Recording saved to {html.escape(str(video_path))} ({size_mb:.1f} MB)</i>')
+            if factor <= 1.0:
+                _emit_remote_event(self, 'recording_exported', video_path=str(video_path), video_speedup_path=None)
+                return
             _run(speedup_args, _speedup_done)
 
         _run(concat_args, _concat_done)
