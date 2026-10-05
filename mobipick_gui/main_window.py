@@ -3876,6 +3876,19 @@ class MainWindow(QMainWindow):
         )
         self._advanced_empty_label.setWordWrap(True)
         advanced_root.addWidget(self._advanced_empty_label)
+        self._advanced_filter = QLineEdit()
+        self._advanced_filter.setPlaceholderText(
+            'Search options by name, description or value (Esc clears)'
+        )
+        self._advanced_filter.setClearButtonEnabled(True)
+        self._advanced_filter.textChanged.connect(
+            lambda _text: MainWindow._apply_advanced_filter(self)
+        )
+        self._advanced_filter.installEventFilter(self)
+        advanced_root.addWidget(self._advanced_filter)
+        self._advanced_no_match_label = QLabel('No option matches the search.')
+        self._advanced_no_match_label.setVisible(False)
+        advanced_root.addWidget(self._advanced_no_match_label)
         self._advanced_arg_layout = QGridLayout()
         self._advanced_arg_layout.setHorizontalSpacing(8)
         self._advanced_arg_layout.setVerticalSpacing(6)
@@ -4564,6 +4577,14 @@ class MainWindow(QMainWindow):
         return menu
 
     def eventFilter(self, watched, event):  # noqa: N802 - Qt API
+        if (
+            event.type() == QEvent.KeyPress
+            and event.key() == Qt.Key_Escape
+            and watched is getattr(self, '_advanced_filter', None)
+            and watched.text()
+        ):
+            watched.clear()   # Esc first clears the search, a second Esc closes the dialog
+            return True
         if event.type() == QEvent.KeyPress:
             if self._handle_active_window_close_shortcut(event):
                 return True
@@ -8310,10 +8331,14 @@ CMD ["bash"]
                 widget = item.widget()
                 if widget is not None:
                     widget.deleteLater()
+            for label, field, *_rest in getattr(self, '_advanced_all_rows', []):
+                label.deleteLater()   # rows hidden by the search are not in the layout
+                field.deleteLater()
+            self._advanced_all_rows = []
 
         inputs: dict[int, QComboBox] = {}
         main_count = 0
-        advanced_rows: list[tuple[QLabel, QWidget]] = []
+        advanced_rows: list[tuple[QLabel, QWidget, QComboBox, str]] = []
         for slot in GENERIC_BUTTON_ARG_SLOTS:
             name = names[slot]
             if not name:
@@ -8362,7 +8387,7 @@ CMD ["bash"]
                 field_layout.addStretch(1)   # spare height of the row goes below the help line, not into the selector
                 label = QLabel(f'{name}:')
                 label.setToolTip(description)
-                advanced_rows.append((label, field))
+                advanced_rows.append((label, field, value_input, f'{name}\n{description}'))
             else:
                 slot_controls, _slot_label = _labeled_control(
                     f'{name}:', value_input,
@@ -8373,7 +8398,8 @@ CMD ["bash"]
             inputs[slot] = value_input
         advanced_count = len(advanced_rows)
         if advanced_layout is not None:
-            MainWindow._fill_advanced_columns(self, advanced_layout, advanced_rows)
+            self._advanced_all_rows = advanced_rows
+            MainWindow._apply_advanced_filter(self)
         self._generic_arg_inputs = inputs
         self._generic_arg_names_by_slot = {
             slot: names[slot] for slot in inputs
@@ -8388,6 +8414,34 @@ CMD ["bash"]
         if advanced_button is not None:
             advanced_button.setVisible(True)
         MainWindow._apply_option_rules(self)
+
+    def _apply_advanced_filter(self) -> None:
+        """Show only the Advanced Launch Options whose name, description or current value contain the search text
+        (case-insensitive) and lay them out in columns again; hidden rows keep their values."""
+        layout = getattr(self, '_advanced_arg_layout', None)
+        if layout is None:
+            return
+        rows = getattr(self, '_advanced_all_rows', [])
+        search = getattr(self, '_advanced_filter', None)
+        needle = search.text().strip().casefold() if search is not None else ''
+        while layout.count():
+            layout.takeAt(0)
+        for column in range(layout.columnCount()):
+            layout.setColumnStretch(column, 0)
+            layout.setColumnMinimumWidth(column, 0)
+        visible = []
+        for label, field, value_input, text in rows:
+            match = not needle or needle in f'{text}\n{value_input.currentText()}'.casefold()
+            label.setVisible(match)
+            field.setVisible(match)
+            if match:
+                visible.append((label, field))
+        MainWindow._fill_advanced_columns(self, layout, visible)
+        no_match = getattr(self, '_advanced_no_match_label', None)
+        if no_match is not None:
+            no_match.setVisible(bool(rows) and not visible)
+        if search is not None:
+            search.setVisible(bool(rows))
 
     def _fill_advanced_columns(self, layout, rows) -> None:
         """Lay the Advanced Launch Options out in columns, the first column filled top to bottom before the next (#264)."""
@@ -8418,6 +8472,10 @@ CMD ["bash"]
             dialog.resize(max(400, width), height)
         dialog.show()
         dialog.raise_()
+        search = getattr(self, '_advanced_filter', None)
+        if search is not None and not search.isHidden():
+            search.setFocus(Qt.OtherFocusReason)
+            search.selectAll()
 
     def _command_with_generic_args(self, command: str, config: dict) -> str:
         """Append configured, non-empty generic ROS arguments to a command."""

@@ -647,6 +647,9 @@ The Gazebo client (`gui`), `use_mtc`, `jev_min_confidence`, and
 shows at most six generic arguments alongside the world selector; additional
 ones appear in the advanced dialog. Their selected values still use the
 normal command, option-rule, saved-selection, and remote API paths.
+A search box at the top of the advanced dialog (focused on open) filters the
+options live by name, description or current value, case-insensitive; Esc
+clears it, and hidden options keep their selected values.
 
 ### Option rules
 
