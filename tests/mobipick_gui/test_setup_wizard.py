@@ -1797,3 +1797,55 @@ def test_host_dependency_checks_add_gnome_extension_on_wayland(monkeypatch):
     missing = dict(window._missing_optional_dependency_features())
     assert 'winctl@mobipick-labs-docker-gui' in missing
     assert 'wmctrl' not in missing
+
+
+def test_setup_wizard_auto_opens_when_image_discovery_fails(
+    tmp_path,
+    monkeypatch,
+):
+    """A fresh host without Docker must still get the first-run wizard."""
+    registry_path = tmp_path / 'workspaces.yaml'
+    monkeypatch.setenv('MOBIPICK_WORKSPACE_CONFIG', str(registry_path))
+    monkeypatch.setattr(
+        MainWindow,
+        '_discover_filtered_image_records',
+        lambda self: (
+            [],
+            "Failed to list docker images: [Errno 2] "
+            "No such file or directory: 'docker'",
+        ),
+    )
+    monkeypatch.setattr(
+        MainWindow,
+        'update_sim_status_from_poll',
+        lambda self, force=False: None,
+    )
+    monkeypatch.setattr(
+        MainWindow,
+        '_inform_no_images_and_exit',
+        lambda self: pytest.fail('the GUI must not exit on a fresh host'),
+    )
+    monkeypatch.setattr(
+        main_window_module.shutil,
+        'which',
+        lambda name, *args, **kwargs: None if name == 'docker' else '/usr/bin/' + name,
+    )
+    scheduled = []
+    monkeypatch.setattr(
+        MainWindow,
+        '_schedule_first_run_setup_wizard',
+        lambda self: scheduled.append(True),
+    )
+
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow(verbosity=1)
+    window.poll_timer.stop()
+    window._sigint_timer.stop()
+    monkeypatch.setenv('QT_QPA_PLATFORM', 'xcb')
+    _process_until(app, lambda: bool(scheduled) or not window._image_load_pending)
+
+    assert scheduled, 'image discovery failure must open the setup wizard'
+    assert not window.image_combo.isEnabled()
+
+    window.deleteLater()
+    app.processEvents()

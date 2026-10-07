@@ -10279,20 +10279,28 @@ CMD ["bash"]
             self.image_combo.setToolTip(
                 error_message or 'No image selected'
             )
-            if error_message:
-                if show_feedback:
-                    QMessageBox.warning(
-                        self,
-                        'Images',
-                        error_message,
-                    )
+            if error_message and show_feedback:
+                QMessageBox.warning(
+                    self,
+                    'Images',
+                    error_message,
+                )
+                return
+            if error_message and shutil.which('docker'):
+                # Docker is installed but unavailable right now (daemon
+                # down, socket permissions): not a first run, so no wizard.
                 return
             if self._should_auto_show_setup_wizard():
                 self._console_log(
                     1,
+                    'Docker is not installed; opening setup wizard '
+                    'to install the host dependencies'
+                    if error_message else
                     'no matching Docker images found; opening setup wizard'
                 )
                 self._schedule_first_run_setup_wizard()
+                return
+            if error_message:
                 return
             self._inform_no_images_and_exit()
             return
