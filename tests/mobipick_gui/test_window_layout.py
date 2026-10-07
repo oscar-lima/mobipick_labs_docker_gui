@@ -687,3 +687,17 @@ def test_install_gnome_extension_leaves_too_old_shell_alone(tmp_path, monkeypatc
     installed = json.loads((target / 'metadata.json').read_text())
     assert '42' not in installed['shell-version']
     assert any('older than 45' in msg for msg in messages)
+
+
+def test_gnome_extension_uses_mutter_18_maximize_api():
+    # GNOME Shell 50 (mutter 18) removed Meta.Window.get_maximized() and the
+    # flags argument of unmaximize(); the old calls made ListWindows throw
+    # "win.get_maximized is not a function" for every window.
+    source = (window_control.GNOME_EXTENSION_SOURCE / 'extension.js').read_text(
+        encoding='utf-8'
+    )
+    assert 'win.is_maximized()' in source
+    assert source.count('win.get_maximized()') == 1  # the pre-mutter-18 fallback only
+    assert 'maximized: isMaximized(win)' in source
+    assert 'win.unmaximize(Meta.MaximizeFlags.BOTH)' in source  # fallback inside unmaximize()
+    assert source.count('unmaximize(win);') == 2  # MoveResize and Unmaximize
