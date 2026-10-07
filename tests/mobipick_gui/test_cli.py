@@ -1,3 +1,4 @@
+import os
 import sys
 
 import pytest
@@ -360,3 +361,27 @@ def test_main_rejects_a_second_gui_instance(monkeypatch, capsys):
         )
     ]
     assert capsys.readouterr().err == f'{cli._SINGLE_INSTANCE_MESSAGE}\n'
+
+
+def test_select_qt_platform_pins_xcb_on_gnome_wayland(monkeypatch):
+    from mobipick_gui import cli
+
+    monkeypatch.delenv('QT_QPA_PLATFORM', raising=False)
+    monkeypatch.setenv('XDG_CURRENT_DESKTOP', 'ubuntu:GNOME')
+    assert cli._select_qt_platform('wayland') == 'xcb'
+    assert os.environ['QT_QPA_PLATFORM'] == 'xcb'
+
+
+def test_select_qt_platform_keeps_user_choice_and_other_desktops(monkeypatch):
+    from mobipick_gui import cli
+
+    monkeypatch.setenv('QT_QPA_PLATFORM', 'wayland')
+    monkeypatch.setenv('XDG_CURRENT_DESKTOP', 'ubuntu:GNOME')
+    assert cli._select_qt_platform('wayland') is None
+    assert os.environ['QT_QPA_PLATFORM'] == 'wayland'
+
+    monkeypatch.delenv('QT_QPA_PLATFORM', raising=False)
+    monkeypatch.setenv('XDG_CURRENT_DESKTOP', 'KDE')
+    assert cli._select_qt_platform('wayland') is None
+    assert 'QT_QPA_PLATFORM' not in os.environ
+    assert cli._select_qt_platform('x11') is None

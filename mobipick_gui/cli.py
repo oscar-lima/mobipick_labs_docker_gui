@@ -25,7 +25,11 @@ from .desktop_launcher import (
     install_user_desktop_entry as _install_user_desktop_entry,
 )
 from .remote_client import refresh_installed_skill
-from .window_control import install_gnome_extension, session_type
+from .window_control import (
+    install_gnome_extension,
+    is_gnome_session,
+    session_type,
+)
 
 
 _QT_SOCKET_NOTIFIER_THREAD_WARNING = (
@@ -56,6 +60,23 @@ def _acquire_single_instance_lock() -> QLockFile | None:
     if not lock.tryLock():
         return None
     return lock
+
+
+def _select_qt_platform(desktop_session: str) -> str | None:
+    """Pin Qt 5 to XWayland on a GNOME Wayland session.
+
+    Qt 5 refuses native Wayland on GNOME and falls back to xcb anyway, but
+    it prints "Ignoring XDG_SESSION_TYPE=wayland on Gnome" on every start.
+    Setting the platform explicitly keeps the same backend and silences the
+    warning.  A user who sets ``QT_QPA_PLATFORM`` themselves keeps their
+    choice.  Returns the platform that was set, or ``None``.
+    """
+    if os.environ.get('QT_QPA_PLATFORM'):
+        return None
+    if desktop_session != 'wayland' or not is_gnome_session():
+        return None
+    os.environ['QT_QPA_PLATFORM'] = 'xcb'
+    return 'xcb'
 
 
 def _create_application(
@@ -89,6 +110,7 @@ def _create_application(
     previous_handler = qInstallMessageHandler(startup_message_handler)
     application = None
     try:
+        _select_qt_platform(current_session)
         application = QApplication(arguments)
         if current_session == 'wayland':
             application.setDesktopFileName(_APPLICATION_DESKTOP_ID)
