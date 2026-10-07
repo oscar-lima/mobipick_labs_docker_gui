@@ -1427,9 +1427,13 @@ def test_setup_wizard_does_not_open_when_image_discovery_fails(
     tmp_path,
     monkeypatch,
 ):
+    """A machine the wizard already set up keeps quiet when Docker is down."""
     registry_path = tmp_path / 'workspaces.yaml'
     opened = []
     monkeypatch.setenv('MOBIPICK_WORKSPACE_CONFIG', str(registry_path))
+    setup_cfg = copy.deepcopy(CONFIG['setup_wizard'])
+    setup_cfg['completed'] = True
+    monkeypatch.setitem(CONFIG, 'setup_wizard', setup_cfg)
     monkeypatch.setenv('QT_QPA_PLATFORM', 'xcb')
     monkeypatch.setattr(
         MainWindow,
@@ -1806,16 +1810,24 @@ def test_setup_wizard_auto_opens_when_image_discovery_fails(
     tmp_path,
     monkeypatch,
 ):
-    """A fresh host without Docker must still get the first-run wizard."""
+    """A host where the wizard never completed gets it on any Docker failure.
+
+    Docker missing, or installed but not usable yet (the user joined the
+    docker group without logging in again), both mean the host setup is
+    unfinished.
+    """
     registry_path = tmp_path / 'workspaces.yaml'
     monkeypatch.setenv('MOBIPICK_WORKSPACE_CONFIG', str(registry_path))
+    setup_cfg = copy.deepcopy(CONFIG['setup_wizard'])
+    setup_cfg['completed'] = False
+    monkeypatch.setitem(CONFIG, 'setup_wizard', setup_cfg)
     monkeypatch.setattr(
         MainWindow,
         '_discover_filtered_image_records',
         lambda self: (
             [],
-            "Failed to list docker images: [Errno 2] "
-            "No such file or directory: 'docker'",
+            'docker images returned 1: permission denied while trying to '
+            'connect to the docker API at unix:///var/run/docker.sock',
         ),
     )
     monkeypatch.setattr(
@@ -1827,11 +1839,6 @@ def test_setup_wizard_auto_opens_when_image_discovery_fails(
         MainWindow,
         '_inform_no_images_and_exit',
         lambda self: pytest.fail('the GUI must not exit on a fresh host'),
-    )
-    monkeypatch.setattr(
-        main_window_module.shutil,
-        'which',
-        lambda name, *args, **kwargs: None if name == 'docker' else '/usr/bin/' + name,
     )
     scheduled = []
     monkeypatch.setattr(

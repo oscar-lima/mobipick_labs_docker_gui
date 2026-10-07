@@ -6380,6 +6380,11 @@ class MainWindow(QMainWindow):
         self._setup_wizard_auto_scheduled = True
         QTimer.singleShot(0, self._open_setup_wizard)
 
+    def _setup_wizard_completed(self) -> bool:
+        return self._bool_config_value(
+            self._setup_wizard_cfg().get('completed', False)
+        )
+
     def _should_auto_show_setup_wizard(self) -> bool:
         cfg = self._setup_wizard_cfg()
         if not self._bool_config_value(cfg.get('show_on_first_run', True)):
@@ -10192,7 +10197,10 @@ CMD ["bash"]
             return [], error_message
 
         if cp.returncode not in (0, None):
-            error_message = f'docker images returned {cp.returncode}'
+            stderr = (cp.stderr or '').strip() if isinstance(cp.stderr, str) else ''
+            error_message = f'docker images returned {cp.returncode}' + (
+                f': {stderr.splitlines()[-1]}' if stderr else ''
+            )
 
         output_lines = (cp.stdout or '').splitlines() if isinstance(cp.stdout, str) else []
         for line in output_lines:
@@ -10313,15 +10321,17 @@ CMD ["bash"]
                     error_message,
                 )
                 return
-            if error_message and shutil.which('docker'):
-                # Docker is installed but unavailable right now (daemon
-                # down, socket permissions): not a first run, so no wizard.
+            if error_message and self._setup_wizard_completed():
+                # Docker failed on a machine the wizard already set up
+                # (daemon down, socket permissions): not a first run, so
+                # the error stays in the log and the image box.
                 return
             if self._should_auto_show_setup_wizard():
                 self._console_log(
                     1,
-                    'Docker is not installed; opening setup wizard '
-                    'to install the host dependencies'
+                    'Docker is not usable yet and the setup wizard has not '
+                    'completed on this machine; opening it to finish the '
+                    'host setup'
                     if error_message else
                     'no matching Docker images found; opening setup wizard'
                 )
