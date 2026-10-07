@@ -71,6 +71,25 @@ function allWindows() {
     return global.display.sort_windows_by_stacking(windows);
 }
 
+// Mutter 18 (GNOME 50) replaced Meta.Window.get_maximized(), which returned
+// MaximizeFlags, with is_maximized() and dropped the flags argument of
+// unmaximize(); calling the old API throws "win.get_maximized is not a
+// function" and ListWindows fails for every window.
+function isMaximized(win) {
+    if (typeof win.is_maximized === 'function')
+        return win.is_maximized();
+    return win.get_maximized() !== 0;
+}
+
+function unmaximize(win) {
+    // GJS throws on a missing argument, so the flags variant is the fallback.
+    try {
+        win.unmaximize();
+    } catch (_error) {
+        win.unmaximize(Meta.MaximizeFlags.BOTH);
+    }
+}
+
 function findWindow(id) {
     const wanted = String(id);
     return allWindows().find(win => String(win.get_id()) === wanted) ?? null;
@@ -201,7 +220,7 @@ export default class MobipickWinCtl extends Extension {
                 wm_class: [win.get_wm_class_instance(), win.get_wm_class()]
                     .filter(value => value),
                 stack_index: stackIndex,
-                maximized: win.get_maximized() !== 0,
+                maximized: isMaximized(win),
                 minimized: win.minimized,
                 above: win.is_above(),
             });
@@ -213,8 +232,8 @@ export default class MobipickWinCtl extends Extension {
         const win = findWindow(id);
         if (!win)
             return false;
-        if (win.get_maximized())
-            win.unmaximize(Meta.MaximizeFlags.BOTH);
+        if (isMaximized(win))
+            unmaximize(win);
         if (win.minimized)
             win.unminimize();
         win.move_resize_frame(true, x, y, width, height);
@@ -252,7 +271,7 @@ export default class MobipickWinCtl extends Extension {
         const win = findWindow(id);
         if (!win)
             return false;
-        win.unmaximize(Meta.MaximizeFlags.BOTH);
+        unmaximize(win);
         return true;
     }
 
