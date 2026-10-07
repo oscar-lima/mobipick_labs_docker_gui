@@ -6572,6 +6572,72 @@ class MainWindow(QMainWindow):
             'login. Log out and back in, then run the checks again. '
         )
 
+    @classmethod
+    def _installable_nvidia_driver(
+        cls,
+        recommended: str,
+        candidates: list[str],
+    ) -> tuple[str, str]:
+        """Pick the driver flavour whose packages apt can actually install.
+
+        Ubuntu's archive sometimes publishes the signed kernel modules of a
+        driver series before the matching user-space packages (or the other
+        way round), and then ``ubuntu-drivers install`` of the recommended
+        flavour fails with unsatisfiable dependencies.  Dry-run each
+        candidate (recommended first, then the newest open flavours) with
+        apt and take the first that resolves.  Returns the package name
+        and a note when the recommended flavour was skipped.
+        """
+        release_ok, release = cls._host_shell_status(
+            '. /etc/os-release && echo "$VERSION_ID"'
+        )
+        release = release.strip() if release_ok else ''
+
+        def resolves(package: str) -> bool:
+            modules = (
+                package.replace('nvidia-driver-', 'linux-modules-nvidia-')
+                + (f'-generic-hwe-{release}' if release else '-generic')
+            )
+            ok, _detail = cls._host_shell_status(
+                f'apt-get -s install {shlex.quote(package)} '
+                f'{shlex.quote(modules)} >/dev/null 2>&1',
+                timeout=30.0,
+            )
+            return ok
+
+        def series(package: str) -> int:
+            match = re.search(r'nvidia-driver-(\d+)', package)
+            return int(match.group(1)) if match else 0
+
+        ordered = [recommended] if recommended else []
+        open_first = sorted(
+            (c for c in candidates if c and c != recommended),
+            key=lambda c: (not c.endswith('-open'), -series(c)),
+        )
+        ordered.extend(open_first)
+        if not ordered:
+            return '', ''
+        if not shutil.which('apt-get'):
+            return ordered[0], ''
+        for package in ordered:
+            if resolves(package):
+                if recommended and package != recommended:
+                    return package, (
+                        f'The recommended {recommended} cannot be installed '
+                        'right now: its signed kernel modules and user-space '
+                        'packages are at different versions in the Ubuntu '
+                        f'archive (apt dry run fails). {package} resolves, so '
+                        'install that one; switch to the recommended series '
+                        'later with one ubuntu-drivers call once the archive '
+                        'has caught up.'
+                    )
+                return package, ''
+        return ordered[0], (
+            'No driver flavour currently resolves in an apt dry run; run '
+            '"sudo apt update" and try again, or check the Ubuntu archive '
+            'status for nvidia-graphics-drivers.'
+        )
+
     @staticmethod
     def _ubuntu_drivers_spec(package: str) -> str:
         """Turn "nvidia-driver-595-open" into the ubuntu-drivers spec "nvidia:595-open".
@@ -6606,6 +6672,10 @@ class MainWindow(QMainWindow):
         recommended_command = (
             "ubuntu-drivers devices 2>/dev/null | awk '/recommended/ {print $3}'"
         )
+        candidates_command = (
+            "ubuntu-drivers devices 2>/dev/null "
+            "| awk '/^driver/ && /nvidia-driver-/ && !/server/ {print $3}'"
+        )
         secure_boot_command = 'mokutil --sb-state 2>/dev/null'
         check_commands = [
             gpu_command,
@@ -6622,6 +6692,8 @@ class MainWindow(QMainWindow):
         modules = set(modules_detail.split())
         _rec_ok, recommended = cls._host_shell_status(recommended_command)
         recommended = recommended.strip().splitlines()[0].strip() if recommended.strip() else ''
+        _cand_ok, candidates_detail = cls._host_shell_status(candidates_command)
+        candidates = [line.strip() for line in candidates_detail.splitlines() if line.strip()]
         _sb_ok, secure_boot = cls._host_shell_status(secure_boot_command)
         secure_boot_on = 'enabled' in secure_boot.lower()
 
@@ -6665,7 +6737,10 @@ class MainWindow(QMainWindow):
                     'installed, or the system was not rebooted after '
                     'installing it.'
                 )
-            driver_spec = cls._ubuntu_drivers_spec(recommended)
+            chosen, skew_note = cls._installable_nvidia_driver(
+                recommended, candidates
+            )
+            driver_spec = cls._ubuntu_drivers_spec(chosen)
             if recommended:
                 details.append(
                     f'Ubuntu recommends {recommended}'
@@ -6676,6 +6751,8 @@ class MainWindow(QMainWindow):
                         else '.'
                     )
                 )
+            if skew_note:
+                details.append(skew_note)
             if secure_boot_on:
                 details.append(
                     'Secure Boot is enabled: ubuntu-drivers installs '
@@ -6700,7 +6777,9 @@ class MainWindow(QMainWindow):
                 'are unsigned under Secure Boot.',
             ]
             install_commands.append(
-                '# Then reboot (sudo reboot) and run the checks again.'
+                '# Then reboot and run the checks again: sudo reboot '
+                '(over ssh, where the desktop login inhibits it: '
+                'sudo systemctl reboot -i).'
             )
         return HostDependency(
             key='nvidia_driver',

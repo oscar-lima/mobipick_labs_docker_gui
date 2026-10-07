@@ -2043,3 +2043,29 @@ def test_gnome_extension_advice_on_too_old_shell(monkeypatch):
     window = MainWindow.__new__(MainWindow)
     advice = window._gnome_extension_advice('x')
     assert 'older than 45' in advice and 'X11 session' in advice
+
+
+def test_installable_nvidia_driver_falls_back_when_recommended_has_archive_skew(monkeypatch):
+    def shell(cls, command, **_kwargs):
+        if 'os-release' in command:
+            return True, '26.04'
+        if command.startswith('apt-get -s install'):
+            return ('595' not in command), ''
+        return True, ''
+
+    monkeypatch.setattr(MainWindow, '_host_shell_status', classmethod(shell))
+    monkeypatch.setattr(main_window_module.shutil, 'which', lambda name: '/usr/bin/' + name)
+    chosen, note = MainWindow._installable_nvidia_driver(
+        'nvidia-driver-595-open',
+        ['nvidia-driver-580', 'nvidia-driver-610-open', 'nvidia-driver-580-open', 'nvidia-driver-595-open'],
+    )
+    assert chosen == 'nvidia-driver-610-open'
+    assert 'nvidia-driver-595-open cannot be installed right now' in note
+    # Recommended flavour resolves: no note.
+    monkeypatch.setattr(
+        MainWindow, '_host_shell_status',
+        classmethod(lambda cls, command, **_kw: (True, '26.04' if 'os-release' in command else '')),
+    )
+    assert MainWindow._installable_nvidia_driver('nvidia-driver-595-open', ['nvidia-driver-580-open']) == (
+        'nvidia-driver-595-open', ''
+    )
