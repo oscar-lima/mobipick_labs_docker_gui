@@ -6656,10 +6656,27 @@ class MainWindow(QMainWindow):
                 details.extend([
                     f'Current groups: {groups_detail or "(unknown)"}.',
                     f'Docker socket: {socket_detail or "(missing)"}.',
-                    'Start Docker and make sure this user is in the docker '
-                    'group; log out and back in, or run newgrp docker, after '
-                    'changing groups.',
                 ])
+                session_groups = set((groups_detail or '').split())
+                _member_ok, member_detail = self._host_shell_status(
+                    'getent group docker | cut -d: -f4 | tr , " "'
+                )
+                if (
+                    'docker' not in session_groups
+                    and os.environ.get('USER', '') in set(member_detail.split())
+                ):
+                    details.append(
+                        'This user is already in the docker group, but this '
+                        'desktop session started before that change. Log out '
+                        'and back in, then start the GUI and run the checks '
+                        'again; nothing else is missing.'
+                    )
+                else:
+                    details.append(
+                        'Start Docker and make sure this user is in the docker '
+                        'group; log out and back in, or run newgrp docker, '
+                        'after changing groups.'
+                    )
                 docker_reason = ' '.join(details)
         else:
             docker_ok = False
