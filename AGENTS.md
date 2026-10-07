@@ -108,6 +108,16 @@ XCB plus NVIDIA PRIME/GLX selection, and add the host DRI device GIDs to the
 container. Preserve that complete combination; changing one part requires the
 full runtime check above before calling the user-space behavior fixed.
 
+## Supported Hosts
+The GUI supports Ubuntu 22.04, 24.04 and 26.04 hosts (X11 and Wayland). Every
+host-facing change (setup wizard checks and install commands, dependency
+probes, desktop and display handling) must be generic and work on all three
+releases; never special-case one machine. A test PC such as `mobipick-nuc` is
+only a test bed for a fresh install: use it to find and reproduce problems,
+fix them in the code for every supported release, and verify there. Probe the
+host at runtime (`ubuntu-drivers`, `gnome-shell --version`, `lspci`,
+`mokutil`) instead of hard-coding versions, package names or hardware.
+
 ## Testing Guidelines
 Add regression tests under a top-level `tests/` package (create it if missing) and mirror the package path (e.g., `tests/mobipick_gui/test_process_tab.py`). Use `pytest` plus `pytest-qt` for widget exercises, and stub Docker subprocesses with `unittest.mock` so tests run without containers. Name tests after the scenario (`test_roscore_button_disables_when_process_stops`) and include a smoke test that launches the application headless to verify resource loading.
 
