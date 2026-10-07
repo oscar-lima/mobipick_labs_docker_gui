@@ -1986,8 +1986,10 @@ def test_nvidia_driver_check_fails_on_nouveau_with_install_advice(monkeypatch):
     assert dep.key == 'nvidia_driver' and dep.required and not dep.installed
     assert 'nouveau' in dep.reason
     assert 'nvidia-driver-595-open' in dep.reason
-    assert 'Enroll MOK' in dep.reason
-    assert 'sudo apt install -y nvidia-driver-595-open' in dep.install_commands
+    assert 'no MOK enrollment is needed' in dep.reason
+    assert 'sudo ubuntu-drivers install nvidia:595-open' in dep.install_commands
+    assert MainWindow._ubuntu_drivers_spec('nvidia-driver-580') == 'nvidia:580'
+    assert MainWindow._ubuntu_drivers_spec('') == ''
     assert any('reboot' in line for line in dep.install_commands)
     assert 'sudo reboot' not in dep.install_commands
     assert dep.package == ''

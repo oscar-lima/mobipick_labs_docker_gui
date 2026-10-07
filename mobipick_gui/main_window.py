@@ -6565,6 +6565,20 @@ class MainWindow(QMainWindow):
             'login. Log out and back in, then run the checks again. '
         )
 
+    @staticmethod
+    def _ubuntu_drivers_spec(package: str) -> str:
+        """Turn "nvidia-driver-595-open" into the ubuntu-drivers spec "nvidia:595-open".
+
+        ``ubuntu-drivers install <spec>`` picks the pre-signed
+        linux-modules-nvidia package for the running kernel, which a plain
+        ``apt install nvidia-driver-...`` does not; that matters under
+        Secure Boot.
+        """
+        prefix = 'nvidia-driver-'
+        if package.startswith(prefix) and len(package) > len(prefix):
+            return 'nvidia:' + package[len(prefix):]
+        return ''
+
     @classmethod
     def _nvidia_driver_dependency(cls) -> HostDependency:
         """Check for an NVIDIA GPU with a working proprietary driver.
@@ -6644,33 +6658,40 @@ class MainWindow(QMainWindow):
                     'installed, or the system was not rebooted after '
                     'installing it.'
                 )
+            driver_spec = cls._ubuntu_drivers_spec(recommended)
             if recommended:
                 details.append(
-                    f'Ubuntu recommends the package {recommended}.'
+                    f'Ubuntu recommends {recommended}'
+                    + (
+                        ' (the open kernel module flavour, required for '
+                        'recent GPUs).'
+                        if recommended.endswith('-open')
+                        else '.'
+                    )
                 )
             if secure_boot_on:
                 details.append(
-                    'Secure Boot is enabled: the installer asks for a MOK '
-                    'password and the next boot shows "Perform MOK '
-                    'management"; choose Enroll MOK there, or the module '
-                    'will not load.'
+                    'Secure Boot is enabled: ubuntu-drivers installs '
+                    "Canonical's pre-signed kernel modules, so no MOK "
+                    'enrollment is needed; only if the install builds a '
+                    'DKMS module instead, set the MOK password it asks for '
+                    'and choose "Enroll MOK" at the next boot.'
                 )
             details.append('Reboot after the installation.')
             reason = ' '.join(details)
             install_commands = [
-                '# Install the proprietary NVIDIA driver Ubuntu recommends '
-                'for this GPU.',
+                '# Install the NVIDIA driver Ubuntu recommends for this GPU '
+                '(pre-signed modules, nouveau gets blacklisted).',
+                'sudo apt update',
                 (
-                    f'sudo apt install -y {recommended}'
-                    if recommended
+                    f'sudo ubuntu-drivers install {driver_spec}'
+                    if driver_spec
                     else 'sudo ubuntu-drivers install'
                 ),
+                '# Do not use the NVIDIA .run installer or the CUDA '
+                'repository driver: they fight apt on kernel updates and '
+                'are unsigned under Secure Boot.',
             ]
-            if secure_boot_on:
-                install_commands.append(
-                    '# Secure Boot is on: set a MOK password when asked and '
-                    'choose "Enroll MOK" at the next boot.'
-                )
             install_commands.append(
                 '# Then reboot (sudo reboot) and run the checks again.'
             )
