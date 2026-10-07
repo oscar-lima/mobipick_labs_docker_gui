@@ -1870,3 +1870,54 @@ def test_gnome_extension_install_command_follows_the_launch(monkeypatch):
         '/usr/bin/python3 -m mobipick_gui --install-gnome-window-extension'
     )
 
+
+def test_dependency_page_scrolls_and_keeps_command_box_visible(
+    tmp_path,
+    monkeypatch,
+):
+    from PyQt5.QtWidgets import QScrollArea
+
+    app = QApplication.instance() or QApplication([])
+    deps = [
+        HostDependency(
+            key=f'dep{i}',
+            label=f'Dependency {i}',
+            package=f'pkg{i}',
+            installed=False,
+            reason='Optional; ' + 'a long explanation ' * 20,
+        )
+        for i in range(12)
+    ]
+    wizard = ImageSetupWizard(
+        public_images=['x:1'],
+        default_image='x:1',
+        host_user='u',
+        host_uid='1',
+        host_gid='1',
+        base_image='x:1',
+        target_image='x:2',
+        source_image='x:1',
+        source_repository='',
+        source_branch='',
+        source_workspace_name='ws',
+        workspace_names=['ws'],
+        active_workspace='ws',
+        host_dependencies=deps,
+    )
+    wizard.resize(700, 500)
+    wizard.show()
+    while wizard.currentId() != wizard._dependency_page_id:
+        wizard.next()
+    app.processEvents()
+
+    page = wizard.currentPage()
+    scroll = page.findChild(QScrollArea)
+    assert scroll is not None
+    command_box = wizard.dependency_command_edit
+    button = wizard.copy_dependency_command_button
+    assert command_box.isVisible() and button.isVisible()
+    assert scroll.geometry().bottom() <= command_box.geometry().top()
+    assert command_box.geometry().bottom() <= button.geometry().top()
+
+    wizard.close()
+    app.processEvents()

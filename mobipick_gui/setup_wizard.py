@@ -7,19 +7,22 @@ import shlex
 from dataclasses import dataclass, field
 from typing import Callable, Iterable
 
-from PyQt5.QtCore import QProcess
+from PyQt5.QtCore import QProcess, Qt
 from PyQt5.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
     QDialogButtonBox,
     QFormLayout,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QPushButton,
+    QScrollArea,
     QTextEdit,
     QVBoxLayout,
+    QWidget,
     QWizard,
     QWizardPage,
 )
@@ -190,7 +193,18 @@ class ImageSetupWizard(PersistentWindowStateMixin, QWizard):
 
         dependency_page = QWizardPage()
         dependency_page.setTitle('Host Dependencies')
-        dependency_layout = QVBoxLayout(dependency_page)
+        dependency_page_layout = QVBoxLayout(dependency_page)
+        # The dependency list scrolls so the page fits small screens; the
+        # command box and its buttons stay visible below it.
+        dependency_scroll = QScrollArea()
+        dependency_scroll.setWidgetResizable(True)
+        dependency_scroll.setFrameShape(QFrame.NoFrame)
+        dependency_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        dependency_list = QWidget()
+        dependency_layout = QVBoxLayout(dependency_list)
+        dependency_layout.setContentsMargins(0, 0, 0, 0)
+        dependency_scroll.setWidget(dependency_list)
+        dependency_page_layout.addWidget(dependency_scroll, 3)
         dependency_hint = QLabel(
             'Install missing host tools before using Docker, window layout '
             'capture, workspace graphs, or screen recording. On GNOME '
@@ -215,11 +229,13 @@ class ImageSetupWizard(PersistentWindowStateMixin, QWizard):
             none_label = QLabel('No host dependency checks are configured.')
             none_label.setWordWrap(True)
             dependency_layout.addWidget(none_label)
+        dependency_layout.addStretch(1)
+        dependency_layout = dependency_page_layout
         self.dependency_command_edit = QTextEdit()
         self.dependency_command_edit.setAcceptRichText(False)
         self.dependency_command_edit.setReadOnly(True)
         self.dependency_command_edit.setMinimumHeight(120)
-        dependency_layout.addWidget(self.dependency_command_edit)
+        dependency_layout.addWidget(self.dependency_command_edit, 2)
         self.dependency_result_label = QLabel('')
         self.dependency_result_label.setWordWrap(True)
         dependency_layout.addWidget(self.dependency_result_label)
