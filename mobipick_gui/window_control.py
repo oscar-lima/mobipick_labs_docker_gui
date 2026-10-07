@@ -48,15 +48,6 @@ def gnome_extension_install_command() -> str:
     return f'{python} -m mobipick_gui --install-gnome-window-extension'
 
 
-def gnome_extension_install_time(environ: Mapping[str, str] | None = None) -> float | None:
-    """Return when the extension files were last installed, or ``None``."""
-    target = gnome_extension_install_dir(environ)
-    try:
-        return max((target / name).stat().st_mtime for name in ('extension.js', 'metadata.json'))
-    except OSError:
-        return None
-
-
 def gnome_extension_files_installed(environ: Mapping[str, str] | None = None) -> bool:
     """Return whether the extension files are already in the user's GNOME dir."""
     target = gnome_extension_install_dir(environ)
@@ -115,6 +106,54 @@ def gnome_extension_install_dir(environ: Mapping[str, str] | None = None) -> Pat
     return base / 'gnome-shell' / 'extensions' / GNOME_EXTENSION_UUID
 
 
+def gnome_shell_major_version(
+    run: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+) -> str:
+    """Return the running GNOME Shell major version ("50"), or ''."""
+    if not shutil.which('gnome-shell'):
+        return ''
+    try:
+        cp = run(
+            ['gnome-shell', '--version'],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ''
+    match = re.search(r'(\d+)(?:\.\d+)*', str(getattr(cp, 'stdout', '') or ''))
+    return match.group(1) if match else ''
+
+
+def gnome_extension_state(
+    run: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+) -> str:
+    """Return GNOME Shell's state for the extension, e.g. ``ACTIVE``.
+
+    Known states: ACTIVE, INACTIVE, ERROR, OUT OF DATE, INITIALIZED,
+    DEACTIVATING, ACTIVATING, UNINSTALLED; '' when the Shell does not know
+    the extension (installed after the Shell started) or cannot be asked.
+    """
+    if not shutil.which('gnome-extensions'):
+        return ''
+    try:
+        cp = run(
+            ['gnome-extensions', 'info', GNOME_EXTENSION_UUID],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ''
+    for line in str(getattr(cp, 'stdout', '') or '').splitlines():
+        key, sep, value = line.strip().partition(':')
+        if sep and key.strip() == 'State':
+            return value.strip().upper()
+    return ''
+
+
 def install_gnome_extension(
     *,
     environ: Mapping[str, str] | None = None,
@@ -133,6 +172,26 @@ def install_gnome_extension(
     for name in ('metadata.json', 'extension.js'):
         shutil.copyfile(GNOME_EXTENSION_SOURCE / name, target / name)
     say(f'Installed GNOME Shell extension to {target}')
+    shell_major = gnome_shell_major_version(run=run)
+    if shell_major:
+        metadata_path = target / 'metadata.json'
+        metadata = json.loads(metadata_path.read_text(encoding='utf-8'))
+        versions = [str(item) for item in metadata.get('shell-version', [])]
+        if shell_major not in versions:
+            # GNOME Shell refuses an extension whose metadata does not list
+            # its major version (state OUT OF DATE) and never loads it, so
+            # a new GNOME release would silently disable window layouts.
+            # The extension only uses the stable 45+ API; allow the running
+            # version and say so.
+            versions.append(shell_major)
+            metadata['shell-version'] = versions
+            metadata_path.write_text(
+                json.dumps(metadata, indent=2) + '\n', encoding='utf-8'
+            )
+            say(
+                f'GNOME Shell {shell_major} is newer than the versions the '
+                'extension was tested with; added it to shell-version.'
+            )
     if shutil.which('gsettings'):
         cp = run(
             ['gsettings', 'get', 'org.gnome.shell', 'enabled-extensions'],
@@ -849,7 +908,8 @@ __all__ = [
     'GNOME_EXTENSION_INSTALL_COMMAND',
     'gnome_extension_files_installed',
     'gnome_extension_install_command',
-    'gnome_extension_install_time',
+    'gnome_extension_state',
+    'gnome_shell_major_version',
     'gnome_extension_install_command',
     'gnome_extension_files_installed',
     'GNOME_EXTENSION_UUID',

@@ -828,7 +828,10 @@ backend talks over D-Bus to the GNOME Shell extension shipped in
 `mobipick_gui/resources/gnome-shell-extension/` (installed with
 `mobipick-labs-docker-gui --install-gnome-window-extension`; rerun this after
 GUI upgrades because GNOME Shell only loads extension changes after a fresh
-login). The extension exposes `ListWindows`, `MoveResize`, `SetWorkspace`,
+login; the installer adds the running GNOME Shell major version to the
+extension's `shell-version` list when it is newer than the tested ones, since
+GNOME Shell otherwise marks the extension OUT OF DATE and never loads it).
+The extension exposes `ListWindows`, `MoveResize`, `SetWorkspace`,
 `Activate`, `ClearAttention`, `Unmaximize`, and `SetAbove` on
 `/org/gnome/Shell/Extensions/MobipickWinCtl`, and windows are addressed by the
 Mutter window id. `MainWindow.keep_window_above` uses

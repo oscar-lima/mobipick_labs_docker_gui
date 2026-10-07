@@ -1,4 +1,5 @@
 import subprocess
+from pathlib import Path
 
 from mobipick_gui import window_control
 from mobipick_gui.window_control import (
@@ -618,3 +619,49 @@ def test_layout_corrects_a_window_that_lands_off_its_saved_position(tmp_path, mo
     clock['now'] += 1.0
     manager.maybe_apply_saved_layout()
     assert len(calls) == 2  # corrected once, then left alone
+
+
+def test_install_gnome_extension_adds_the_running_shell_version(tmp_path, monkeypatch):
+    import json
+
+    def fake_run(cmd, **kwargs):
+        if cmd == ['gnome-shell', '--version']:
+            return subprocess.CompletedProcess(cmd, 0, stdout='GNOME Shell 50.1\n', stderr='')
+        if cmd[:2] == ['gsettings', 'get']:
+            return subprocess.CompletedProcess(cmd, 0, stdout='[]\n', stderr='')
+        return subprocess.CompletedProcess(cmd, 0, stdout='', stderr='')
+
+    monkeypatch.setattr(window_control.shutil, 'which', lambda name: f'/usr/bin/{name}')
+    source = json.loads(
+        (window_control.GNOME_EXTENSION_SOURCE / 'metadata.json').read_text()
+    )
+    monkeypatch.setitem(source, 'shell-version', ['45', '46'])
+    monkeypatch.setattr(
+        window_control.shutil,
+        'copyfile',
+        lambda src, dst: Path(dst).write_text(
+            json.dumps(source) if src.name == 'metadata.json' else '// js'
+        ),
+    )
+    messages: list[str] = []
+    target = install_gnome_extension(
+        environ={'XDG_DATA_HOME': str(tmp_path)},
+        run=fake_run,
+        log=messages.append,
+    )
+    installed = json.loads((target / 'metadata.json').read_text())
+    assert installed['shell-version'] == ['45', '46', '50']
+    assert any('GNOME Shell 50' in msg for msg in messages)
+
+
+def test_gnome_extension_state_parses_info_output(monkeypatch):
+    def fake_run(cmd, **kwargs):
+        assert cmd[:2] == ['gnome-extensions', 'info']
+        return subprocess.CompletedProcess(
+            cmd, 0, stdout='winctl@x\n  Name: X\n  Enabled: Yes\n  State: OUT OF DATE\n', stderr=''
+        )
+
+    monkeypatch.setattr(window_control.shutil, 'which', lambda name: f'/usr/bin/{name}')
+    assert window_control.gnome_extension_state(run=fake_run) == 'OUT OF DATE'
+    monkeypatch.setattr(window_control.shutil, 'which', lambda name: None)
+    assert window_control.gnome_extension_state(run=fake_run) == ''

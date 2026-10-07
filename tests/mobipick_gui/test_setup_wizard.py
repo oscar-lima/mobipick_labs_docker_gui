@@ -1931,37 +1931,35 @@ def test_dependency_page_scrolls_and_keeps_command_box_visible(
 
 
 def test_session_restart_hint_names_the_lingering_user_manager(monkeypatch):
-    import time as time_module
-
-    def manager(groups, elapsed):
+    def manager(groups):
         def shell(cls, command, **_kwargs):
             assert 'systemd-run --user' in command
-            return True, f'{groups}\n{elapsed}\n'
+            return True, groups
         return classmethod(shell)
 
     monkeypatch.setenv('USER', 'robot')
     # Manager without the docker group: a plain logout does not help.
-    monkeypatch.setattr(MainWindow, '_host_shell_status', manager('robot adm', 3600))
-    hint = MainWindow._session_restart_hint(required_group='docker')
+    monkeypatch.setattr(MainWindow, '_host_shell_status', manager('robot adm'))
+    hint = MainWindow._session_restart_hint('docker')
     assert 'loginctl terminate-user robot' in hint and 'ssh' in hint
     # Manager already has the group: a logout is all that is needed.
-    monkeypatch.setattr(MainWindow, '_host_shell_status', manager('robot docker', 3600))
-    assert MainWindow._session_restart_hint(required_group='docker') == (
-        'Log out and back in.'
-    )
-    # Manager older than the extension files: stale as well.
-    now = time_module.time()
-    monkeypatch.setattr(MainWindow, '_host_shell_status', manager('robot', 3600))
-    assert 'loginctl' in MainWindow._session_restart_hint(newer_than=now - 60)
-    assert MainWindow._session_restart_hint(newer_than=now - 7200) == (
-        'Log out and back in.'
-    )
+    monkeypatch.setattr(MainWindow, '_host_shell_status', manager('robot docker'))
+    assert MainWindow._session_restart_hint('docker') == 'Log out and back in.'
     # No systemd user manager: nothing to detect.
     monkeypatch.setattr(
         MainWindow,
         '_host_shell_status',
         classmethod(lambda cls, command, **_kwargs: (False, 'no systemd')),
     )
-    assert MainWindow._session_restart_hint(required_group='docker') == (
-        'Log out and back in.'
-    )
+    assert MainWindow._session_restart_hint('docker') == 'Log out and back in.'
+
+
+def test_gnome_extension_advice_names_out_of_date_state(monkeypatch):
+    monkeypatch.setattr(main_window_module, 'gnome_extension_state', lambda: 'OUT OF DATE')
+    monkeypatch.setattr(main_window_module, 'gnome_shell_major_version', lambda: '50')
+    window = MainWindow.__new__(MainWindow)
+    advice = window._gnome_extension_advice('python3 -m mobipick_gui --install-gnome-window-extension')
+    assert 'OUT OF DATE' in advice and '(50)' in advice
+    assert 'python3 -m mobipick_gui --install-gnome-window-extension' in advice
+    monkeypatch.setattr(main_window_module, 'gnome_extension_state', lambda: '')
+    assert 'only scans for new extensions at login' in window._gnome_extension_advice('x')

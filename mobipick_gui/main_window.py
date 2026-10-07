@@ -171,7 +171,8 @@ from .window_utils import (
 from .window_control import (
     gnome_extension_files_installed,
     gnome_extension_install_command,
-    gnome_extension_install_time,
+    gnome_extension_state,
+    gnome_shell_major_version,
     GNOME_EXTENSION_UUID,
     GnomeAppGlow,
     find_own_window,
@@ -6531,45 +6532,57 @@ class MainWindow(QMainWindow):
             timeout=timeout,
         )
 
+    def _gnome_extension_advice(self, install_command: str) -> str:
+        """Explain why installed extension files are not answering."""
+        state = gnome_extension_state()
+        shell_major = gnome_shell_major_version()
+        if state == 'OUT OF DATE':
+            return (
+                'GNOME Shell refuses the installed extension as OUT OF DATE: '
+                'its metadata does not list this GNOME Shell version'
+                + (f' ({shell_major})' if shell_major else '')
+                + f'. Run "{install_command}" again, which adds the running '
+                'version, then log out and back in once. '
+            )
+        if state == 'ERROR':
+            return (
+                'GNOME Shell loaded the extension but it failed (state '
+                'ERROR); see "journalctl --user -b" for the JavaScript error. '
+            )
+        if state in {'INACTIVE', 'INITIALIZED'}:
+            return (
+                f'The extension is installed but disabled (state {state}). '
+                f'Run "gnome-extensions enable {GNOME_EXTENSION_UUID}". '
+            )
+        if state:
+            return (
+                f'The extension is in state {state} but does not answer on '
+                'D-Bus. Log out and back in, then run the checks again. '
+            )
+        return (
+            'The extension files are installed but GNOME Shell has not '
+            'loaded them yet: GNOME Shell only scans for new extensions at '
+            'login. Log out and back in, then run the checks again. '
+        )
+
     @classmethod
-    def _session_restart_hint(
-        cls,
-        *,
-        required_group: str = '',
-        newer_than: float | None = None,
-    ) -> str:
-        """Say how to get a desktop session with fresh groups and extensions.
+    def _session_restart_hint(cls, required_group: str) -> str:
+        """Say how to get a desktop session whose groups include the group.
 
         On a systemd desktop (GNOME, KDE) applications are children of the
         user's ``systemd --user`` manager and inherit its groups.  That
         manager outlives a logout while any other session of the user is
         open, typically an ssh login, so logging out and back in changes
-        nothing.  The manager is stale when it lacks ``required_group`` or
-        started before ``newer_than`` (a file install time); then the hint
-        names the fix that works.
+        nothing.  Detect that from the manager's own groups.
         """
         user = os.environ.get('USER', '') or 'the user'
-        manager_ok, manager_detail = cls._host_shell_status(
-            'systemd-run --user --pipe --quiet --collect '
-            "sh -c 'id -nG; ps -o etimes= -p $PPID'"
+        manager_ok, manager_groups = cls._host_shell_status(
+            'systemd-run --user --pipe --quiet --collect id -nG'
         )
-        stale = False
-        if manager_ok:
-            lines = [line.strip() for line in manager_detail.splitlines() if line.strip()]
-            manager_groups = set(lines[0].split()) if lines else set()
-            if required_group and required_group not in manager_groups:
-                stale = True
-            if newer_than is not None and len(lines) > 1:
-                try:
-                    manager_start = time.time() - float(lines[1])
-                except ValueError:
-                    manager_start = None
-                if manager_start is not None and manager_start < newer_than:
-                    stale = True
-        if stale:
+        if manager_ok and required_group not in set(manager_groups.split()):
             return (
                 'Logging out and back in is not enough here: the user '
-                'session manager (systemd --user) keeps the old state while '
+                'session manager (systemd --user) keeps the old groups while '
                 'another login of this user is open, usually an ssh session. '
                 f'Close those logins, then run "loginctl terminate-user {user}" '
                 'from a text console or another machine, or reboot.'
@@ -6720,7 +6733,7 @@ class MainWindow(QMainWindow):
                     details.append(
                         'This user is already in the docker group, but this '
                         'desktop session started before that change. '
-                        + self._session_restart_hint(required_group='docker')
+                        + self._session_restart_hint('docker')
                         + ' Then start the GUI and run the checks again; '
                         'nothing else is missing.'
                     )
@@ -6802,12 +6815,9 @@ class MainWindow(QMainWindow):
                         'on Wayland sessions, where wmctrl cannot see native '
                         'windows. '
                         + (
-                            'The extension files are installed but GNOME '
-                            'Shell has not loaded them yet. '
-                            + self._session_restart_hint(
-                                newer_than=gnome_extension_install_time(),
+                            self._gnome_extension_advice(
+                                extension_install_command
                             )
-                            + ' Then run the checks again. '
                             if not ext_ok and gnome_extension_files_installed()
                             else
                             f'Install with "{extension_install_command}" '
