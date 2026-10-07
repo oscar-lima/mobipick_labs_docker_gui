@@ -1750,6 +1750,9 @@ def test_optional_dependency_warning_describes_disabled_functionality(
 
 
 def test_host_dependency_checks_add_gnome_extension_on_wayland(monkeypatch):
+    monkeypatch.setattr(
+        main_window_module, 'gnome_extension_files_installed', lambda: False
+    )
     monkeypatch.setenv('XDG_SESSION_TYPE', 'wayland')
     monkeypatch.setattr(
         main_window_module.shutil,
@@ -1849,3 +1852,21 @@ def test_setup_wizard_auto_opens_when_image_discovery_fails(
 
     window.deleteLater()
     app.processEvents()
+
+
+def test_gnome_extension_install_command_follows_the_launch(monkeypatch):
+    from mobipick_gui import window_control
+
+    monkeypatch.setattr(
+        window_control.shutil, 'which', lambda name: '/x/' + name
+    )
+    assert window_control.gnome_extension_install_command() == (
+        'mobipick-labs-docker-gui --install-gnome-window-extension'
+    )
+
+    monkeypatch.setattr(window_control.shutil, 'which', lambda name: None)
+    monkeypatch.setattr(window_control.sys, 'executable', '/usr/bin/python3')
+    assert window_control.gnome_extension_install_command() == (
+        '/usr/bin/python3 -m mobipick_gui --install-gnome-window-extension'
+    )
+

@@ -13,6 +13,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import threading
 import time
 from dataclasses import dataclass
@@ -32,6 +33,25 @@ GNOME_EXTENSION_INTERFACE = 'org.gnome.Shell.Extensions.MobipickWinCtl'
 GNOME_EXTENSION_INSTALL_COMMAND = (
     'mobipick-labs-docker-gui --install-gnome-window-extension'
 )
+
+
+def gnome_extension_install_command() -> str:
+    """Return the extension install command that works for this launch.
+
+    The console script only exists for a pip/pipx install.  A GUI started
+    from a source checkout (``python gui.py`` or ``python -m mobipick_gui``)
+    gets the equivalent ``python -m`` form with the running interpreter.
+    """
+    if shutil.which('mobipick-labs-docker-gui'):
+        return GNOME_EXTENSION_INSTALL_COMMAND
+    python = sys.executable or 'python3'
+    return f'{python} -m mobipick_gui --install-gnome-window-extension'
+
+
+def gnome_extension_files_installed(environ: Mapping[str, str] | None = None) -> bool:
+    """Return whether the extension files are already in the user's GNOME dir."""
+    target = gnome_extension_install_dir(environ)
+    return all((target / name).is_file() for name in ('extension.js', 'metadata.json'))
 
 LogFn = Callable[[str], None]
 
@@ -385,7 +405,7 @@ class GnomeWaylandWindowBackend:
             self.hint = (
                 'wmctrl only sees XWayland windows. Install the native '
                 'Wayland helper with '
-                f'{GNOME_EXTENSION_INSTALL_COMMAND} and then log out and in.'
+                f'{gnome_extension_install_command()} and then log out and in.'
             )
 
     @property
@@ -402,7 +422,7 @@ class GnomeWaylandWindowBackend:
         if not self._extension_available:
             missing.append(
                 f'GNOME Shell extension {GNOME_EXTENSION_UUID} '
-                f'(install with: {GNOME_EXTENSION_INSTALL_COMMAND}, then log out and in)'
+                f'(install with: {gnome_extension_install_command()}, then log out and in)'
             )
         return missing
 
@@ -818,6 +838,10 @@ def select_backend(
 
 __all__ = [
     'GNOME_EXTENSION_INSTALL_COMMAND',
+    'gnome_extension_files_installed',
+    'gnome_extension_install_command',
+    'gnome_extension_install_command',
+    'gnome_extension_files_installed',
     'GNOME_EXTENSION_UUID',
     'GnomeAppGlow',
     'GnomeWaylandWindowBackend',

@@ -169,7 +169,8 @@ from .window_utils import (
     saved_window_state,
 )
 from .window_control import (
-    GNOME_EXTENSION_INSTALL_COMMAND,
+    gnome_extension_files_installed,
+    gnome_extension_install_command,
     GNOME_EXTENSION_UUID,
     GnomeAppGlow,
     find_own_window,
@@ -6417,7 +6418,7 @@ class MainWindow(QMainWindow):
                     (
                         GNOME_EXTENSION_UUID,
                         'window layout capture and replay on Wayland '
-                        f'(install with "{GNOME_EXTENSION_INSTALL_COMMAND}" '
+                        f'(install with "{gnome_extension_install_command()}" '
                         'and log in again)',
                     )
                 )
@@ -6734,6 +6735,7 @@ class MainWindow(QMainWindow):
         dot_ok, dot_detail = self._host_shell_status('command -v dot')
         ffmpeg_ok, ffmpeg_detail = self._host_shell_status('command -v ffmpeg')
         on_wayland = desktop_session_type() == 'wayland'
+        extension_install_command = gnome_extension_install_command()
         window_deps: list[HostDependency] = []
         if on_wayland:
             ext_ok, ext_detail = self._gnome_window_extension_status()
@@ -6746,16 +6748,24 @@ class MainWindow(QMainWindow):
                     reason=(
                         'Optional; enables window layout capture and replay '
                         'on Wayland sessions, where wmctrl cannot see native '
-                        f'windows. Install with "{GNOME_EXTENSION_INSTALL_COMMAND}" '
-                        'and log out and back in. '
-                        f'Probe output: {ext_detail or "extension not responding"}.'
+                        'windows. '
+                        + (
+                            'The extension files are installed but GNOME '
+                            'Shell has not loaded them yet: log out and back '
+                            'in, then run the checks again. '
+                            if not ext_ok and gnome_extension_files_installed()
+                            else
+                            f'Install with "{extension_install_command}" '
+                            'and log out and back in. '
+                        )
+                        + f'Probe output: {ext_detail or "extension not responding"}.'
                     ),
                     check_commands=[
                         f'gnome-extensions info {GNOME_EXTENSION_UUID}',
                     ],
                     install_commands=[
                         '# Install the bundled GNOME Wayland window extension once.',
-                        GNOME_EXTENSION_INSTALL_COMMAND,
+                        extension_install_command,
                         '# Log out and back in once so GNOME Shell loads it.',
                     ],
                 )
