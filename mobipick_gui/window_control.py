@@ -177,7 +177,20 @@ def install_gnome_extension(
         metadata_path = target / 'metadata.json'
         metadata = json.loads(metadata_path.read_text(encoding='utf-8'))
         versions = [str(item) for item in metadata.get('shell-version', [])]
-        if shell_major not in versions:
+        numeric = [int(v) for v in versions if v.isdigit()]
+        newest_tested = max(numeric) if numeric else 0
+        oldest_supported = min(numeric) if numeric else 0
+        if shell_major.isdigit() and int(shell_major) < oldest_supported:
+            # Ubuntu 22.04 ships GNOME Shell 42: the extension is written
+            # against the 45+ ESM API and cannot work there; leave the
+            # metadata alone so GNOME keeps it OUT OF DATE instead of
+            # loading a broken extension.
+            say(
+                f'GNOME Shell {shell_major} is older than {oldest_supported}, '
+                'the first version the window extension supports; window '
+                'layout capture stays unavailable on this session.'
+            )
+        elif shell_major.isdigit() and int(shell_major) > newest_tested:
             # GNOME Shell refuses an extension whose metadata does not list
             # its major version (state OUT OF DATE) and never loads it, so
             # a new GNOME release would silently disable window layouts.

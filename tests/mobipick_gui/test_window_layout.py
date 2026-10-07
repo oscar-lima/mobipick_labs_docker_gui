@@ -665,3 +665,25 @@ def test_gnome_extension_state_parses_info_output(monkeypatch):
     assert window_control.gnome_extension_state(run=fake_run) == 'OUT OF DATE'
     monkeypatch.setattr(window_control.shutil, 'which', lambda name: None)
     assert window_control.gnome_extension_state(run=fake_run) == ''
+
+
+def test_install_gnome_extension_leaves_too_old_shell_alone(tmp_path, monkeypatch):
+    import json
+
+    def fake_run(cmd, **kwargs):
+        if cmd == ['gnome-shell', '--version']:
+            return subprocess.CompletedProcess(cmd, 0, stdout='GNOME Shell 42.9\n', stderr='')
+        if cmd[:2] == ['gsettings', 'get']:
+            return subprocess.CompletedProcess(cmd, 0, stdout='[]\n', stderr='')
+        return subprocess.CompletedProcess(cmd, 0, stdout='', stderr='')
+
+    monkeypatch.setattr(window_control.shutil, 'which', lambda name: f'/usr/bin/{name}')
+    messages: list[str] = []
+    target = install_gnome_extension(
+        environ={'XDG_DATA_HOME': str(tmp_path)},
+        run=fake_run,
+        log=messages.append,
+    )
+    installed = json.loads((target / 'metadata.json').read_text())
+    assert '42' not in installed['shell-version']
+    assert any('older than 45' in msg for msg in messages)

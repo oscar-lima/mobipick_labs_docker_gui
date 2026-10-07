@@ -6536,6 +6536,13 @@ class MainWindow(QMainWindow):
         """Explain why installed extension files are not answering."""
         state = gnome_extension_state()
         shell_major = gnome_shell_major_version()
+        if state == 'OUT OF DATE' and shell_major.isdigit() and int(shell_major) < 45:
+            return (
+                f'GNOME Shell {shell_major} is older than 45, the first '
+                'version the window extension supports (Ubuntu 24.04 and '
+                'newer). Window layout capture and replay stay unavailable '
+                'on this Wayland session; use an X11 session for them. '
+            )
         if state == 'OUT OF DATE':
             return (
                 'GNOME Shell refuses the installed extension as OUT OF DATE: '

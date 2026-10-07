@@ -2035,3 +2035,11 @@ def test_nvidia_toolkit_commands_are_the_rootful_docker_steps():
     assert 'sudo nvidia-ctk runtime configure --runtime=docker' in text
     assert 'sudo systemctl restart docker' in text
     assert 'systemctl --user' not in text.replace('(systemctl --user, no-cgroups)', '')
+
+
+def test_gnome_extension_advice_on_too_old_shell(monkeypatch):
+    monkeypatch.setattr(main_window_module, 'gnome_extension_state', lambda: 'OUT OF DATE')
+    monkeypatch.setattr(main_window_module, 'gnome_shell_major_version', lambda: '42')
+    window = MainWindow.__new__(MainWindow)
+    advice = window._gnome_extension_advice('x')
+    assert 'older than 45' in advice and 'X11 session' in advice
