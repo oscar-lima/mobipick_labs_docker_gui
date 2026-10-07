@@ -6566,6 +6566,126 @@ class MainWindow(QMainWindow):
         )
 
     @classmethod
+    def _nvidia_driver_dependency(cls) -> HostDependency:
+        """Check for an NVIDIA GPU with a working proprietary driver.
+
+        The NVIDIA Container Toolkit (next wizard step) needs the host
+        driver: without it every GPU container fails with "failed to
+        initialize NVML: ERROR_LIBRARY_NOT_FOUND".  A fresh Ubuntu boots
+        the GPU on the open-source nouveau module, which does not provide
+        NVML, so nvidia-smi is the decisive probe.
+        """
+        gpu_command = "lspci -d 10de: -nn 2>/dev/null | grep -E 'VGA|3D|Display'"
+        smi_command = (
+            'nvidia-smi --query-gpu=name,driver_version --format=csv,noheader'
+        )
+        modules_command = (
+            "lsmod | awk '$1 == \"nvidia\" || $1 == \"nouveau\" {print $1}'"
+        )
+        recommended_command = (
+            "ubuntu-drivers devices 2>/dev/null | awk '/recommended/ {print $3}'"
+        )
+        secure_boot_command = 'mokutil --sb-state 2>/dev/null'
+        check_commands = [
+            gpu_command,
+            smi_command,
+            modules_command,
+            recommended_command,
+            secure_boot_command,
+        ]
+        gpu_ok, gpu_detail = cls._host_shell_status(gpu_command)
+        gpu_detail = gpu_detail.strip()
+        smi_ok, smi_detail = cls._host_shell_status(smi_command)
+        smi_detail = smi_detail.strip()
+        _modules_ok, modules_detail = cls._host_shell_status(modules_command)
+        modules = set(modules_detail.split())
+        _rec_ok, recommended = cls._host_shell_status(recommended_command)
+        recommended = recommended.strip().splitlines()[0].strip() if recommended.strip() else ''
+        _sb_ok, secure_boot = cls._host_shell_status(secure_boot_command)
+        secure_boot_on = 'enabled' in secure_boot.lower()
+
+        install_commands: list[str] = []
+        if smi_ok and smi_detail:
+            installed = True
+            reason = (
+                f'NVIDIA driver is loaded: {smi_detail.replace(chr(10), "; ")}.'
+            )
+        elif not gpu_ok or not gpu_detail:
+            installed = False
+            reason = (
+                'No NVIDIA GPU was found on the PCI bus (lspci -d 10de:). '
+                'Mobipick Labs needs a CUDA capable NVIDIA GPU for Gazebo, '
+                'RViz and the perception containers. '
+                f'Probe output: {gpu_detail or "no NVIDIA VGA/3D device"}; '
+                f'nvidia-smi: {smi_detail or "not available"}.'
+            )
+        else:
+            installed = False
+            details = [
+                f'An NVIDIA GPU is present ({gpu_detail.splitlines()[0]}) but '
+                'the proprietary driver is not working: '
+                f'nvidia-smi {"failed: " + smi_detail if smi_detail else "was not found"}.'
+            ]
+            if 'nouveau' in modules and 'nvidia' not in modules:
+                details.append(
+                    'The GPU runs on the open-source nouveau module, which '
+                    'the NVIDIA Container Toolkit cannot use.'
+                )
+            elif 'nvidia' in modules:
+                details.append(
+                    'The nvidia kernel module is loaded but nvidia-smi '
+                    'fails: the user-space packages (nvidia-utils) are '
+                    'missing or do not match the module; reinstall the '
+                    'driver and reboot.'
+                )
+            else:
+                details.append(
+                    'No NVIDIA kernel module is loaded: the driver is not '
+                    'installed, or the system was not rebooted after '
+                    'installing it.'
+                )
+            if recommended:
+                details.append(
+                    f'Ubuntu recommends the package {recommended}.'
+                )
+            if secure_boot_on:
+                details.append(
+                    'Secure Boot is enabled: the installer asks for a MOK '
+                    'password and the next boot shows "Perform MOK '
+                    'management"; choose Enroll MOK there, or the module '
+                    'will not load.'
+                )
+            details.append('Reboot after the installation.')
+            reason = ' '.join(details)
+            install_commands = [
+                '# Install the proprietary NVIDIA driver Ubuntu recommends '
+                'for this GPU.',
+                (
+                    f'sudo apt install -y {recommended}'
+                    if recommended
+                    else 'sudo ubuntu-drivers install'
+                ),
+            ]
+            if secure_boot_on:
+                install_commands.append(
+                    '# Secure Boot is on: set a MOK password when asked and '
+                    'choose "Enroll MOK" at the next boot.'
+                )
+            install_commands.append(
+                '# Then reboot (sudo reboot) and run the checks again.'
+            )
+        return HostDependency(
+            key='nvidia_driver',
+            label='NVIDIA driver',
+            package='',
+            installed=installed,
+            reason=reason,
+            required=True,
+            check_commands=check_commands,
+            install_commands=install_commands,
+        )
+
+    @classmethod
     def _session_restart_hint(cls, required_group: str) -> str:
         """Say how to get a desktop session whose groups include the group.
 
@@ -6841,6 +6961,8 @@ class MainWindow(QMainWindow):
             else ''
         )
 
+        nvidia_dep = self._nvidia_driver_dependency()
+
         return [
             HostDependency(
                 key='docker',
@@ -6851,6 +6973,7 @@ class MainWindow(QMainWindow):
                 required=True,
                 check_commands=docker_probe_commands,
             ),
+            nvidia_dep,
             HostDependency(
                 key='docker_compose',
                 label='Docker Compose plugin',

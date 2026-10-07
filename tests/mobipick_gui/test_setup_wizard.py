@@ -1963,3 +1963,73 @@ def test_gnome_extension_advice_names_out_of_date_state(monkeypatch):
     assert 'python3 -m mobipick_gui --install-gnome-window-extension' in advice
     monkeypatch.setattr(main_window_module, 'gnome_extension_state', lambda: '')
     assert 'only scans for new extensions at login' in window._gnome_extension_advice('x')
+
+
+def _nvidia_shell(answers):
+    def shell(cls, command, **_kwargs):
+        for needle, result in answers.items():
+            if needle in command:
+                return result
+        return True, ''
+    return classmethod(shell)
+
+
+def test_nvidia_driver_check_fails_on_nouveau_with_install_advice(monkeypatch):
+    monkeypatch.setattr(MainWindow, '_host_shell_status', _nvidia_shell({
+        'lspci -d 10de:': (True, '02:00.0 VGA compatible controller: NVIDIA GB205M'),
+        'nvidia-smi': (False, 'nvidia-smi: command not found'),
+        'lsmod': (True, 'nouveau\n'),
+        'ubuntu-drivers': (True, 'nvidia-driver-595-open\n'),
+        'mokutil': (True, 'SecureBoot enabled'),
+    }))
+    dep = MainWindow._nvidia_driver_dependency()
+    assert dep.key == 'nvidia_driver' and dep.required and not dep.installed
+    assert 'nouveau' in dep.reason
+    assert 'nvidia-driver-595-open' in dep.reason
+    assert 'Enroll MOK' in dep.reason
+    assert 'sudo apt install -y nvidia-driver-595-open' in dep.install_commands
+    assert any('reboot' in line for line in dep.install_commands)
+    assert 'sudo reboot' not in dep.install_commands
+    assert dep.package == ''
+
+
+def test_nvidia_driver_check_passes_with_working_nvidia_smi(monkeypatch):
+    monkeypatch.setattr(MainWindow, '_host_shell_status', _nvidia_shell({
+        'lspci -d 10de:': (True, '01:00.0 VGA compatible controller: NVIDIA'),
+        'nvidia-smi': (True, 'Quadro RTX 4000, 595.84'),
+        'lsmod': (True, 'nvidia\n'),
+    }))
+    dep = MainWindow._nvidia_driver_dependency()
+    assert dep.installed
+    assert '595.84' in dep.reason and dep.install_commands == []
+
+
+def test_nvidia_driver_check_reports_missing_gpu(monkeypatch):
+    monkeypatch.setattr(MainWindow, '_host_shell_status', _nvidia_shell({
+        'lspci -d 10de:': (False, ''),
+        'nvidia-smi': (False, ''),
+    }))
+    dep = MainWindow._nvidia_driver_dependency()
+    assert not dep.installed and 'No NVIDIA GPU' in dep.reason
+
+
+def test_nvidia_test_diagnosis_names_the_missing_host_driver():
+    output = (
+        'docker: Error response from daemon: failed to create task for '
+        'container: ... failed to initialize NVML: ERROR_LIBRARY_NOT_FOUND'
+    )
+    text = ImageSetupWizard._nvidia_test_diagnosis(output)
+    assert 'host dependency step' in text and 'driver' in text
+    assert ImageSetupWizard._nvidia_test_diagnosis('something else') == ''
+    assert 'nvidia-ctk runtime configure' in ImageSetupWizard._nvidia_test_diagnosis(
+        'docker: Error response from daemon: unknown or invalid runtime name: nvidia'
+    )
+
+
+def test_nvidia_toolkit_commands_are_the_rootful_docker_steps():
+    text = '\n'.join(ImageSetupWizard.NVIDIA_TOOLKIT_COMMANDS)
+    assert 'libnvidia-container/stable/deb' in text
+    assert 'experimental/deb' not in text.replace('experimental sections', '')
+    assert 'sudo nvidia-ctk runtime configure --runtime=docker' in text
+    assert 'sudo systemctl restart docker' in text
+    assert 'systemctl --user' not in text.replace('(systemctl --user, no-cgroups)', '')

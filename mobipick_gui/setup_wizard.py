@@ -87,6 +87,34 @@ class ImageSetupWizard(PersistentWindowStateMixin, QWizard):
     NVIDIA_TEST_COMMAND = (
         'sudo docker run --rm --runtime=nvidia --gpus all ubuntu nvidia-smi'
     )
+    # The official guide also covers rootless Docker and the experimental
+    # repository; those steps (systemctl --user, no-cgroups) do not apply to
+    # the Docker Engine the host dependency step installs and break GPU
+    # containers on it, so the wizard hands out the exact rootful steps.
+    NVIDIA_TOOLKIT_COMMANDS = (
+        '# Add the NVIDIA Container Toolkit apt repository (stable only).',
+        'curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey '
+        '| sudo gpg --dearmor -o '
+        '/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg',
+        'curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/'
+        'nvidia-container-toolkit.list '
+        '| sed \'s#deb https://#deb [signed-by=/usr/share/keyrings/'
+        'nvidia-container-toolkit-keyring.gpg] https://#g\' '
+        '| sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list '
+        '> /dev/null',
+        '',
+        '# Install the toolkit and register the nvidia runtime with Docker.',
+        'sudo apt update',
+        'sudo apt install -y nvidia-container-toolkit',
+        'sudo nvidia-ctk runtime configure --runtime=docker',
+        'sudo systemctl restart docker',
+        '',
+        '# Skip the guide\'s rootless Docker and experimental sections '
+        '(systemctl --user, no-cgroups).',
+        '# If no-cgroups was set by mistake, undo it:',
+        '#   sudo nvidia-ctk config --set nvidia-container-cli.no-cgroups=false '
+        '--in-place && sudo systemctl restart docker',
+    )
 
     def __init__(
         self,
@@ -265,14 +293,30 @@ class ImageSetupWizard(PersistentWindowStateMixin, QWizard):
         nvidia_page.setTitle('NVIDIA Container Toolkit')
         nvidia_layout = QVBoxLayout(nvidia_page)
         nvidia_hint = QLabel(
-            'After Docker and the host packages are installed, follow the '
-            'official NVIDIA Container Toolkit installation guide. Return '
-            'here when its configuration steps are complete, then run the '
-            'GPU test. A passing test must find NVIDIA-SMI, driver, CUDA, and '
-            'GPU evidence inside the container.'
+            'After Docker, the NVIDIA driver and the host packages are '
+            'installed, run the commands below in a terminal (they are the '
+            'Docker Engine steps of the official NVIDIA Container Toolkit '
+            'guide). Then run the GPU test. A passing test must find '
+            'NVIDIA-SMI, driver, CUDA, and GPU evidence inside the container.'
         )
         nvidia_hint.setWordWrap(True)
         nvidia_layout.addWidget(nvidia_hint)
+        self.nvidia_toolkit_command_edit = QTextEdit()
+        self.nvidia_toolkit_command_edit.setAcceptRichText(False)
+        self.nvidia_toolkit_command_edit.setReadOnly(True)
+        self.nvidia_toolkit_command_edit.setMinimumHeight(120)
+        self.nvidia_toolkit_command_edit.setPlainText(
+            '\n'.join(self.NVIDIA_TOOLKIT_COMMANDS)
+        )
+        nvidia_layout.addWidget(self.nvidia_toolkit_command_edit)
+        nvidia_toolkit_buttons = QHBoxLayout()
+        self.copy_nvidia_toolkit_button = QPushButton('Copy Commands')
+        self.copy_nvidia_toolkit_button.clicked.connect(
+            self._copy_nvidia_toolkit_commands
+        )
+        nvidia_toolkit_buttons.addWidget(self.copy_nvidia_toolkit_button)
+        nvidia_toolkit_buttons.addStretch(1)
+        nvidia_layout.addLayout(nvidia_toolkit_buttons)
         self.nvidia_url_edit = QLineEdit(self.NVIDIA_TOOLKIT_URL)
         self.nvidia_url_edit.setReadOnly(True)
         self.nvidia_url_edit.setMinimumWidth(620)
@@ -643,6 +687,41 @@ class ImageSetupWizard(PersistentWindowStateMixin, QWizard):
     def _copy_nvidia_test_command(self) -> None:
         QApplication.clipboard().setText(self.NVIDIA_TEST_COMMAND)
 
+    def _copy_nvidia_toolkit_commands(self) -> None:
+        QApplication.clipboard().setText(
+            '\n'.join(self.NVIDIA_TOOLKIT_COMMANDS)
+        )
+
+    @staticmethod
+    def _nvidia_test_diagnosis(output: str) -> str:
+        """Translate a known GPU test failure into the step that fixes it."""
+        text = output.lower()
+        if 'error_library_not_found' in text or 'failed to initialize nvml' in text:
+            return (
+                'The host has no working NVIDIA driver (NVML library not '
+                'found): go back to the host dependency step, install the '
+                'driver and reboot.'
+            )
+        if 'unknown or invalid runtime name: nvidia' in text or (
+            'runtime' in text and 'nvidia' in text and 'not found' in text
+        ):
+            return (
+                'Docker does not know the nvidia runtime: run "sudo '
+                'nvidia-ctk runtime configure --runtime=docker" and restart '
+                'Docker.'
+            )
+        if 'no-cgroups' in text or 'cgroup' in text:
+            return (
+                'The toolkit is configured for rootless Docker (no-cgroups); '
+                'undo it with the last command in the list above.'
+            )
+        if 'permission denied' in text and 'docker.sock' in text:
+            return (
+                'This user cannot reach Docker: see the Docker Engine check '
+                'in the host dependency step.'
+            )
+        return ''
+
     def _run_nvidia_test(self) -> None:
         """Run a GPU-enabled container without blocking the GUI."""
         if self._gpu_test_process is not None:
@@ -702,11 +781,18 @@ class ImageSetupWizard(PersistentWindowStateMixin, QWizard):
                 'CUDA runtime inside Docker.'
             )
         else:
+            diagnosis = self._nvidia_test_diagnosis(output)
             self.nvidia_test_result.setText(
-                'FAILED: the container did not provide complete NVIDIA-SMI, '
-                'driver, CUDA, and GPU evidence. Review the guide, then retry. '
-                'If Docker requires sudo in your terminal, copy and run the '
-                'displayed test command there too.'
+                'FAILED: '
+                + (
+                    diagnosis
+                    if diagnosis else
+                    'the container did not provide complete NVIDIA-SMI, '
+                    'driver, CUDA, and GPU evidence. Review the commands '
+                    'above, then retry. If Docker requires sudo in your '
+                    'terminal, copy and run the displayed test command there '
+                    'too.'
+                )
             )
         self._gpu_test_process = None
         self.run_nvidia_test_button.setEnabled(True)
