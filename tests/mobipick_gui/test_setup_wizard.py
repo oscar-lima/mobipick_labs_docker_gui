@@ -2069,3 +2069,38 @@ def test_installable_nvidia_driver_falls_back_when_recommended_has_archive_skew(
     assert MainWindow._installable_nvidia_driver('nvidia-driver-595-open', ['nvidia-driver-580-open']) == (
         'nvidia-driver-595-open', ''
     )
+
+
+def test_last_input_page_offers_only_start_setup_until_setup_begins():
+    from PyQt5.QtWidgets import QWizard
+
+    app = QApplication.instance() or QApplication([])
+    wizard = ImageSetupWizard(
+        public_images=['x:1'],
+        default_image='x:1',
+        host_user='u',
+        host_uid='1',
+        host_gid='1',
+        base_image='x:1',
+        target_image='x:2',
+        source_image='x:1',
+        source_workspace_name='ws',
+        workspace_names=['ws'],
+        active_workspace='ws',
+        host_dependencies=[],
+    )
+    wizard.show()
+    while wizard.currentId() != wizard._source_page_id:
+        before = wizard.currentId()
+        wizard.next()
+        assert wizard.currentId() != before, 'input pages must stay reachable'
+    app.processEvents()
+    assert wizard.nextId() == -1
+    assert not wizard.button(QWizard.NextButton).isVisible()
+    assert wizard.button(QWizard.FinishButton).text() == 'Start Setup'
+    wizard.next()
+    assert wizard.currentId() == wizard._source_page_id, 'Next must not leave the input page'
+    wizard.begin_setup()
+    assert wizard.currentId() == wizard._progress_page_id
+    wizard.close()
+    app.processEvents()

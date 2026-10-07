@@ -831,6 +831,19 @@ class ImageSetupWizard(PersistentWindowStateMixin, QWizard):
             return
         super().accept()
 
+    def nextId(self) -> int:  # noqa: N802 (Qt override)
+        """Hide Next on the last input page until setup has started.
+
+        The source page is a final page so that Qt shows Start Setup there,
+        but Qt also keeps Next because a progress page follows.  Next used
+        to open that page with nothing running: Back is disabled there and
+        Next waits for a setup that never started, so the user was stuck
+        with Cancel.  Only ``begin_setup`` may move past the input pages.
+        """
+        if self.currentId() == self._source_page_id and not self._setup_started:
+            return -1
+        return super().nextId()
+
     def begin_setup(self) -> None:
         """Show the progress page and reset prior streamed setup output."""
         self._setup_started = True
