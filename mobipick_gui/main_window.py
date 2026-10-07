@@ -171,6 +171,7 @@ from .window_utils import (
 from .window_control import (
     gnome_extension_files_installed,
     gnome_extension_install_command,
+    gnome_extension_install_time,
     GNOME_EXTENSION_UUID,
     GnomeAppGlow,
     find_own_window,
@@ -6531,6 +6532,51 @@ class MainWindow(QMainWindow):
         )
 
     @classmethod
+    def _session_restart_hint(
+        cls,
+        *,
+        required_group: str = '',
+        newer_than: float | None = None,
+    ) -> str:
+        """Say how to get a desktop session with fresh groups and extensions.
+
+        On a systemd desktop (GNOME, KDE) applications are children of the
+        user's ``systemd --user`` manager and inherit its groups.  That
+        manager outlives a logout while any other session of the user is
+        open, typically an ssh login, so logging out and back in changes
+        nothing.  The manager is stale when it lacks ``required_group`` or
+        started before ``newer_than`` (a file install time); then the hint
+        names the fix that works.
+        """
+        user = os.environ.get('USER', '') or 'the user'
+        manager_ok, manager_detail = cls._host_shell_status(
+            'systemd-run --user --pipe --quiet --collect '
+            "sh -c 'id -nG; ps -o etimes= -p $PPID'"
+        )
+        stale = False
+        if manager_ok:
+            lines = [line.strip() for line in manager_detail.splitlines() if line.strip()]
+            manager_groups = set(lines[0].split()) if lines else set()
+            if required_group and required_group not in manager_groups:
+                stale = True
+            if newer_than is not None and len(lines) > 1:
+                try:
+                    manager_start = time.time() - float(lines[1])
+                except ValueError:
+                    manager_start = None
+                if manager_start is not None and manager_start < newer_than:
+                    stale = True
+        if stale:
+            return (
+                'Logging out and back in is not enough here: the user '
+                'session manager (systemd --user) keeps the old state while '
+                'another login of this user is open, usually an ssh session. '
+                f'Close those logins, then run "loginctl terminate-user {user}" '
+                'from a text console or another machine, or reboot.'
+            )
+        return 'Log out and back in.'
+
+    @classmethod
     def _docker_apt_candidate_status(
         cls,
         packages: list[str],
@@ -6673,9 +6719,10 @@ class MainWindow(QMainWindow):
                 ):
                     details.append(
                         'This user is already in the docker group, but this '
-                        'desktop session started before that change. Log out '
-                        'and back in, then start the GUI and run the checks '
-                        'again; nothing else is missing.'
+                        'desktop session started before that change. '
+                        + self._session_restart_hint(required_group='docker')
+                        + ' Then start the GUI and run the checks again; '
+                        'nothing else is missing.'
                     )
                 else:
                     details.append(
@@ -6756,8 +6803,11 @@ class MainWindow(QMainWindow):
                         'windows. '
                         + (
                             'The extension files are installed but GNOME '
-                            'Shell has not loaded them yet: log out and back '
-                            'in, then run the checks again. '
+                            'Shell has not loaded them yet. '
+                            + self._session_restart_hint(
+                                newer_than=gnome_extension_install_time(),
+                            )
+                            + ' Then run the checks again. '
                             if not ext_ok and gnome_extension_files_installed()
                             else
                             f'Install with "{extension_install_command}" '

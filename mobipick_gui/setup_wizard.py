@@ -910,6 +910,9 @@ class ImageSetupWizard(PersistentWindowStateMixin, QWizard):
         lines.extend([
             '',
             '# Let your user run Docker. Log out and back in afterwards.',
+            '# If other logins of this user stay open (e.g. ssh), the desktop',
+            '# keeps the old groups: close them and run',
+            '# "loginctl terminate-user $USER" from a text console, or reboot.',
             'sudo usermod -aG docker "$USER"',
         ])
         return lines

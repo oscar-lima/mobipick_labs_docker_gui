@@ -48,6 +48,15 @@ def gnome_extension_install_command() -> str:
     return f'{python} -m mobipick_gui --install-gnome-window-extension'
 
 
+def gnome_extension_install_time(environ: Mapping[str, str] | None = None) -> float | None:
+    """Return when the extension files were last installed, or ``None``."""
+    target = gnome_extension_install_dir(environ)
+    try:
+        return max((target / name).stat().st_mtime for name in ('extension.js', 'metadata.json'))
+    except OSError:
+        return None
+
+
 def gnome_extension_files_installed(environ: Mapping[str, str] | None = None) -> bool:
     """Return whether the extension files are already in the user's GNOME dir."""
     target = gnome_extension_install_dir(environ)
@@ -840,6 +849,7 @@ __all__ = [
     'GNOME_EXTENSION_INSTALL_COMMAND',
     'gnome_extension_files_installed',
     'gnome_extension_install_command',
+    'gnome_extension_install_time',
     'gnome_extension_install_command',
     'gnome_extension_files_installed',
     'GNOME_EXTENSION_UUID',
