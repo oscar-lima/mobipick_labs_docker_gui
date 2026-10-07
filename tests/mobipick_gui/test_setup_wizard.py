@@ -2104,3 +2104,44 @@ def test_last_input_page_offers_only_start_setup_until_setup_begins():
     assert wizard.currentId() == wizard._progress_page_id
     wizard.close()
     app.processEvents()
+
+
+def test_wizard_simulation_test_names_the_roslaunch_error(tmp_path):
+    app = QApplication.instance() or QApplication([])
+    reports = []
+    wizard = ImageSetupWizard(
+        public_images=['x:1'],
+        default_image='x:1',
+        host_user='u',
+        host_uid='1',
+        host_gid='1',
+        base_image='x:1',
+        target_image='x:2',
+        workspace_names=[],
+        source_master_folder=str(tmp_path / 'master'),
+        simulation_test_start_handler=lambda: True,
+        simulation_test_stop_handler=lambda: None,
+        simulation_test_report_handler=reports.append,
+    )
+    wizard.run_simulation_test_button.click()
+    wizard.simulation_test_output.enqueue(
+        False,
+        '... logging to /root/.ros/log/x/roslaunch-host-1.log\n'
+        'RLException: unused args [use_ur_polished_kinematics] for include of '
+        '[/root/catkin_ws/src/mobipick/mobipick_moveit_config/launch/'
+        'moveit_planning_execution.launch]\n'
+        'The traceback for the exception was written to the log file\n',
+    )
+    wizard.simulation_test_output._flush()
+    wizard.simulation_test_finished(1)
+
+    text = wizard.simulation_test_result.text()
+    assert 'before Gazebo could start' in text
+    assert 'RLException: unused args [use_ur_polished_kinematics]' in text
+    assert 'not a display problem' in text
+
+    wizard.simulation_not_visible_button.click()
+    assert 'Launch failure: RLException: unused args' in reports[0]
+
+    wizard.deleteLater()
+    app.processEvents()

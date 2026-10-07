@@ -7313,6 +7313,11 @@ class MainWindow(QMainWindow):
 
     def _open_setup_simulation_report(self, setup_diagnostics: str) -> None:
         """Open a prefilled report for a failed final visibility test."""
+        failure_match = re.search(
+            r'^Launch failure: (.+)$', setup_diagnostics, re.M
+        )
+        launch_failure = failure_match.group(1).strip() if failure_match else ''
+
         def _context() -> dict:
             context = self._build_bug_report_context()
             context['setup_diagnostics'] = setup_diagnostics
@@ -7324,6 +7329,9 @@ class MainWindow(QMainWindow):
             _context,
             self,
             initial_notes=(
+                'The setup wizard simulation test failed before Gazebo '
+                f'started: {launch_failure}'
+                if launch_failure else
                 'The setup wizard simulation test ran, but no Gazebo window '
                 'was visible.'
             ),

@@ -629,10 +629,48 @@ class ImageSetupWizard(PersistentWindowStateMixin, QWizard):
                 'you saw the Gazebo window.'
             )
         else:
-            self.simulation_test_result.setText(
-                f'The simulation command exited with code {exit_code}. You can '
-                'package its output in a bug report.'
-            )
+            self.simulation_test_output._flush()
+            failure = self.simulation_launch_failure()
+            if failure:
+                self.simulation_test_result.setText(
+                    f'The simulation command exited with code {exit_code} '
+                    f'before Gazebo could start: {failure} This is a launch '
+                    'problem (workspace or image versions), not a display '
+                    'problem. You can package the output in a bug report.'
+                )
+            else:
+                self.simulation_test_result.setText(
+                    f'The simulation command exited with code {exit_code}. '
+                    'You can package its output in a bug report.'
+                )
+
+    _LAUNCH_FAILURE_PATTERNS = (
+        r'RLException: .*',
+        r'Invalid <arg> tag: .*',
+        r'Invalid <param> tag: .*',
+        r'Invalid <include> tag: .*',
+        r'Resource not found: .*',
+        r'ERROR: cannot launch node of type .*',
+        r'\[[^\]]+\] process has died .*',
+        r'error loading <rosparam> tag: .*',
+        r'unused args \[.*',
+    )
+
+    def simulation_launch_failure(self) -> str:
+        """Return the first roslaunch error line in the test output, or ''.
+
+        A launch that dies on a version mismatch (an unused include arg, a
+        missing package) never opens a Gazebo window; naming the line keeps
+        the user from blaming the display setup.
+        """
+        output = self.simulation_test_output.toPlainText()
+        for line in output.splitlines():
+            stripped = line.strip()
+            for pattern in self._LAUNCH_FAILURE_PATTERNS:
+                match = re.search(pattern, stripped)
+                if match:
+                    return match.group(0).strip()
+        return ''
 
     def _stop_simulation_test(self) -> None:
         if self._simulation_test_stop_handler is not None:
@@ -654,7 +692,14 @@ class ImageSetupWizard(PersistentWindowStateMixin, QWizard):
     def _report_simulation_not_visible(self) -> None:
         self._simulation_test_answered = True
         self._stop_simulation_test()
+        self.simulation_test_output._flush()
+        failure = self.simulation_launch_failure()
         self.simulation_test_result.setText(
+            (
+                f'FAILED: the simulation did not start: {failure} Preparing a '
+                'bug report with the captured terminal output.'
+            )
+            if failure else
             'FAILED: no simulation window was visible. Preparing a bug report '
             'with the captured terminal output.'
         )
@@ -672,7 +717,9 @@ class ImageSetupWizard(PersistentWindowStateMixin, QWizard):
         else:
             exit_result = str(self._simulation_test_exit_code)
         output = self.simulation_test_output.toPlainText().strip()
+        failure = self.simulation_launch_failure()
         return '\n'.join([
+            *([f'Launch failure: {failure}'] if failure else []),
             'Docker simulation visibility test',
             'User result: no Gazebo simulation window was visible',
             f'Process exit code: {exit_result}',
