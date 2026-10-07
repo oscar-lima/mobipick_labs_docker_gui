@@ -5,7 +5,7 @@ services:
     # so the "mobipick" alias below keeps resolving for GAZEBO_MASTER_URI.
     hostname: ${MOBIPICK_CONTAINER_HOSTNAME:-mobipick}
     # gazebo server
-    image: ${MOBIPICK_IMAGE:-ozkrelo/x_mobipick_labs:noetic-v1.1}
+    image: ${MOBIPICK_IMAGE:-ozkrelo/x_mobipick_labs:noetic-v2.0}
     working_dir: ${MOBIPICK_WORKSPACE_PATH:-/tmp}
     entrypoint: /usr/local/bin/entrypoint_user.sh
     user: "${USER}"
@@ -62,7 +62,7 @@ services:
     # RViz/RQt windows as remote; empty keeps Docker's default.
     hostname: ${MOBIPICK_CONTAINER_HOSTNAME:-}
     # gazebo server
-    image: ${MOBIPICK_IMAGE:-ozkrelo/x_mobipick_labs:noetic-v1.1}
+    image: ${MOBIPICK_IMAGE:-ozkrelo/x_mobipick_labs:noetic-v2.0}
     working_dir: ${MOBIPICK_WORKSPACE_PATH:-/tmp}
     entrypoint: /usr/local/bin/entrypoint_user.sh
     # user: "${USER}" # from mobipick service above
@@ -114,7 +114,7 @@ services:
     privileged: true  # for Gazebo GUI
 
   mobipick_remote_cmd:
-    image: ${MOBIPICK_IMAGE:-ozkrelo/x_mobipick_labs:noetic-v1.1}
+    image: ${MOBIPICK_IMAGE:-ozkrelo/x_mobipick_labs:noetic-v2.0}
     working_dir: ${MOBIPICK_WORKSPACE_PATH:-/tmp}
     entrypoint: /usr/local/bin/entrypoint_user.sh
     group_add:

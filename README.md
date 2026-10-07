@@ -200,11 +200,10 @@ with `newgrp docker`.
 
 When no matching Mobipick Labs image is installed, the GUI opens the setup
 wizard so you can pull one on the host PC with streamed output. If you choose
-the manual wizard option, run one of these commands and confirm in the wizard
-when it finishes:
+the manual wizard option, run this command and confirm in the wizard when it
+finishes:
 
 ```bash
-docker pull ozkrelo/x_mobipick_labs:noetic-v1.1
 docker pull ozkrelo/x_mobipick_labs:noetic-v2.0
 ```
 

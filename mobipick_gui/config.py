@@ -377,7 +377,6 @@ CONFIG_DEFAULTS: Dict[str, Dict] = {
     'setup_wizard': {
         'show_on_first_run': True,
         'public_images': [
-            'ozkrelo/x_mobipick_labs:noetic-v1.1',
             'ozkrelo/x_mobipick_labs:noetic-v2.0',
         ],
         'development_base_image': 'ozkrelo/x_mobipick_labs:noetic-v2.0',

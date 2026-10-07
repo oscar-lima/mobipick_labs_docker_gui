@@ -95,7 +95,6 @@ remote_control:
 setup_wizard:
   show_on_first_run: true                    # open setup as recovery when no matching image is installed
   public_images:                             # images the wizard can pull for image-default testing
-    - "ozkrelo/x_mobipick_labs:noetic-v1.1"
     - "ozkrelo/x_mobipick_labs:noetic-v2.0"
   development_base_image: "ozkrelo/x_mobipick_labs:noetic-v2.0"
   development_image_repository: "ozkrelo/x_mobipick_labs"
