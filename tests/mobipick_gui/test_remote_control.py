@@ -653,6 +653,46 @@ def test_api_shell_lifecycle_with_stream_flag(api_server):
     assert 'shell_opened' in names and 'shell_closed' in names
 
 
+@pytestmark_bash
+def test_idle_shell_and_grep_follow_stream_use_no_cpu(api_server):
+    """An open shell must not cost CPU: not its reader thread, not a follow stream.
+
+    Regression for a follow stream with ``grep``: lines that did not match
+    never advanced the stream's cursor, so it re-read them in a loop at
+    100 % of a core until the stream timed out (or the shell was deleted).
+    """
+    server, adapter, api = api_server
+    status, payload = api('POST', '/shell', {'name': 'agent'})
+    assert status == 200 and payload['ready'], payload
+    session_id = payload['session']['id']
+    status, payload = api('POST', f'/shell/{session_id}/exec', {'command': 'seq 1 20'})
+    assert status == 200 and payload['line_count'] == 20
+
+    # idle shell: only the reader thread (blocked in os.read) and the server
+    before = time.process_time()
+    time.sleep(0.5)
+    idle_cpu = time.process_time() - before
+    assert idle_cpu < 0.1, f'idle shell burnt {idle_cpu:.3f} s CPU in 0.5 s'
+
+    # a follow stream whose grep matches none of the buffered lines, kept
+    # open by a running command that prints nothing
+    status, payload = api('POST', f'/shell/{session_id}/exec', {'command': 'sleep 1', 'wait': False})
+    assert payload['command']['running']
+    before = time.process_time()
+    items = api.stream(f'/shell/{session_id}/output?follow=1&timeout=5&since=0&grep=NOMATCH', timeout=15)
+    stream_cpu = time.process_time() - before
+    assert stream_cpu < 0.3, f'follow stream burnt {stream_cpu:.3f} s CPU over about 1 s'
+    assert items[-1]['done'] is True and not items[-1]['busy'], items
+    assert not any('text' in item for item in items), items
+
+    # the filter itself still works for lines produced while streaming
+    status, payload = api('POST', f'/shell/{session_id}/exec', {'command': 'echo keep; echo drop', 'wait': False})
+    items = api.stream(f'/shell/{session_id}/output?follow=1&timeout=5&command={payload["command"]["id"]}&grep=keep')
+    assert [item['text'] for item in items if 'text' in item] == ['keep']
+    status, payload = api('DELETE', f'/shell/{session_id}')
+    assert status == 200
+
+
 def test_api_events_follow_streams_until_timeout(api_server):
     server, adapter, api = api_server
     threading.Thread(target=lambda: (time.sleep(0.1), server.emit('custom', n=1)), daemon=True).start()

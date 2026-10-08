@@ -1679,6 +1679,7 @@ class RemoteControlServer:
     ) -> None:
         since = _int_param(query.get('since'), None)
         grep = query.get('grep') or None
+        pattern = re.compile(grep) if grep else None
         command_id = _int_param(query.get('command'), None)
         timeout = _float_param(query.get('timeout'), 300.0)
         record = session.command(command_id) if command_id is not None else None
@@ -1688,9 +1689,16 @@ class RemoteControlServer:
         client = self.touch_presence(client or query.get('client'))
         while True:
             self.touch_presence(client)      # an open stream is activity
-            lines, _, _ = session.lines(since=since, grep=grep, max_lines=None)
+            # ``grep`` is applied here, not in ``lines()``: ``since`` must
+            # advance over every line the shell produced, matching or not,
+            # because ``wait_for_lines`` returns at once while a newer line
+            # exists.  Filtering first left ``since`` behind on unmatched
+            # lines and the loop spun at 100 % CPU until the stream timed out.
+            lines, _, _ = session.lines(since=since, max_lines=None)
             for entry in lines:
                 since = entry['seq']
+                if pattern is not None and not pattern.search(entry['text']):
+                    continue
                 if not write(entry):
                     return
             with session._cond:
@@ -1698,7 +1706,7 @@ class RemoteControlServer:
             finished = record is not None and not record.running
             idle = record is None and current is None
             if finished or (idle and since >= session.last_seq) or session.closed:
-                if session.lines(since=since, grep=grep, max_lines=None)[0]:
+                if session.lines(since=since, max_lines=None)[0]:
                     continue
                 write({
                     'done': True,
