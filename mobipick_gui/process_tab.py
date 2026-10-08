@@ -26,9 +26,7 @@ GUARD_FLUSH_INTERVAL_MS = 1000
 def _flood_guard_from_config() -> OutputFloodGuard:
     flood_cfg = (CONFIG.get('log') or {}).get('flood') or {}
     return OutputFloodGuard(
-        max_lines_per_second=int(flood_cfg.get('max_lines_per_second', 1000)),
-        min_repeats=int(flood_cfg.get('min_repeats', 3)),
-        repeat_notice_interval_s=float(flood_cfg.get('repeat_notice_interval_s', 10.0)),
+        max_lines_per_second=int(flood_cfg.get('max_lines_per_second', 1000))
     )
 
 
@@ -56,7 +54,7 @@ class ProcessTab:
         self._disk_log: LogFileWriter | None = None
         self._reset_output_stream()
         self._shutting_down = False
-        # Reports a trailing repeat/drop summary once the flood pauses.
+        # Reports a trailing drop summary once the flood pauses.
         self._guard_timer: QTimer | None = None
         if isinstance(parent, QObject):
             self._guard_timer = QTimer(parent)
@@ -295,7 +293,7 @@ class ProcessTab:
             timer.start()
 
     def _flush_flood_guard(self) -> None:
-        """Timer slot: report a repeat/drop summary after the flood pauses."""
+        """Timer slot: report a drop summary after the flood pauses."""
         if self._shutting_down:
             return
         self._render_events(self._flood_guard.flush())

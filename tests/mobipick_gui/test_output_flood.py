@@ -9,63 +9,24 @@ class FakeClock:
         return self.now
 
 
-def make_guard(max_lines_per_second=1000, min_repeats=3, interval=10.0):
+def make_guard(max_lines_per_second=1000):
     clock = FakeClock()
-    guard = OutputFloodGuard(
-        max_lines_per_second=max_lines_per_second, min_repeats=min_repeats,
-        repeat_notice_interval_s=interval, clock=clock,
-    )
-    return guard, clock
+    return OutputFloodGuard(max_lines_per_second=max_lines_per_second, clock=clock), clock
 
 
-def test_distinct_lines_pass_through_unchanged():
+def test_lines_pass_through_unchanged():
     guard, _ = make_guard()
     assert guard.feed_many(['a\n', 'b\n']) == [(LINE, 'a\n'), (LINE, 'b\n')]
 
 
-def test_a_few_repeats_are_shown_and_the_rest_collapses_with_a_notice_on_change():
+def test_identical_lines_are_shown_as_they_came():
+    # ROS nodes print the same text for separate events (one per planning pipeline, per
+    # costmap layer, per grasp thread); hiding or counting them would hamper debugging
     guard, _ = make_guard()
-    events = guard.feed_many(['same\n'] * 6 + ['other\n'])
-    assert events == [
-        (LINE, 'same\n'),
-        (LINE, 'same\n'),
-        (LINE, 'same\n'),
-        (NOTICE, '... (previous line repeated 3 more times)'),
-        (LINE, 'other\n'),
-    ]
-    assert guard.total_collapsed == 3
-
-
-def test_up_to_min_repeats_copies_pass_through_without_any_notice():
-    guard, _ = make_guard()
-    events = guard.feed_many(['twice\n'] * 2 + ['thrice\n'] * 3 + ['end\n'])
-    assert events == [(LINE, 'twice\n')] * 2 + [(LINE, 'thrice\n')] * 3 + [(LINE, 'end\n')]
+    events = guard.feed_many(['same\n'] * 4 + ['other\n'])
+    assert events == [(LINE, 'same\n')] * 4 + [(LINE, 'other\n')]
     assert guard.flush(final=True) == []
-    assert guard.total_collapsed == 0
-
-
-def test_interim_repeat_notice_at_most_once_per_interval():
-    guard, clock = make_guard()
-    assert guard.feed_many(['x\n'] * 10) == [(LINE, 'x\n')] * 3
-    clock.now = 10.0
-    events = guard.feed_many(['x\n'] * 5)
-    assert events == [(NOTICE, '... (previous line repeated 8 more times so far)')]
-    clock.now = 15.0
-    assert guard.feed_many(['x\n'] * 5) == []
-    assert guard.has_pending
-    assert guard.flush(final=True) == [
-        (NOTICE, '... (previous line repeated 17 more times)')
-    ]
     assert not guard.has_pending
-
-
-def test_flush_without_final_reports_only_after_the_interval():
-    guard, clock = make_guard()
-    guard.feed_many(['x\n'] * 4)
-    assert guard.flush() == []
-    clock.now = 10.0
-    assert guard.flush() == [(NOTICE, '... (previous line repeated 1 more times so far)')]
-    assert guard.flush() == []
 
 
 def test_rate_limit_drops_lines_and_reports_the_count_once_per_second():
@@ -83,15 +44,27 @@ def test_rate_limit_drops_lines_and_reports_the_count_once_per_second():
     assert events[1] == (LINE, 'next\n')
 
 
-def test_hidden_repeats_do_not_count_against_the_rate():
-    guard, _ = make_guard(max_lines_per_second=4)
-    events = guard.feed_many(['a\n'] * 1000 + ['b\n'])
-    assert [e for e in events if e[0] == LINE] == [(LINE, 'a\n')] * 3 + [(LINE, 'b\n')]
-    assert guard.total_dropped == 0
+def test_flush_without_final_reports_the_drop_only_after_a_second():
+    guard, clock = make_guard(max_lines_per_second=1)
+    guard.feed_many(['a\n', 'b\n'])
+    assert guard.flush() == []
+    clock.now = 1.0
+    events = guard.flush()
+    assert len(events) == 1 and 'dropped 1 lines' in events[0][1]
+    assert guard.flush() == []
+    assert not guard.has_pending
 
 
-def test_reset_forgets_the_last_line():
-    guard, _ = make_guard()
-    guard.feed('a\n')
+def test_final_flush_reports_a_pending_drop_at_once():
+    guard, _ = make_guard(max_lines_per_second=1)
+    guard.feed_many(['a\n', 'b\n', 'c\n'])
+    events = guard.flush(final=True)
+    assert len(events) == 1 and 'dropped 2 lines' in events[0][1]
+
+
+def test_reset_forgets_the_window():
+    guard, _ = make_guard(max_lines_per_second=1)
+    guard.feed_many(['a\n', 'b\n'])
     guard.reset()
-    assert guard.feed('a\n') == [(LINE, 'a\n')]
+    assert guard.feed('c\n') == [(LINE, 'c\n')]
+    assert not guard.has_pending

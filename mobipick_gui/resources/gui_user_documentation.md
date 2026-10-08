@@ -451,12 +451,10 @@ tab to `gui-<date-time>.log`, each process start of a tab to a file under the
 session's `<date-time>/` folder), so nothing is lost when the GUI is killed.
 The **Log** tab names the folder at startup; the newest 20 sessions are kept.
 
-A process that prints the same line over and over, or more than about 1000
-different lines per second, cannot freeze the GUI: a line repeated more than
-three times in a row is shown three times with `... (previous line repeated N
-more times)` for the rest, and lines beyond the rate
-are dropped with a `... dropped N lines in the last second` notice. The log
-files hold the same summaries instead of the flood.
+A process that prints more than about 1000 lines per second cannot freeze the
+GUI: lines beyond the rate are dropped with a `... dropped N lines in the last
+second` notice, and the log files hold the same notice instead of the flood.
+Below the rate every line is shown as it came, also repeated ones.
 
 ## Bottom log controls
 

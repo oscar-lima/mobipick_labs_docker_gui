@@ -122,17 +122,28 @@ def test_stop_for_shutdown_reaps_process_and_disables_callbacks():
     parent.deleteLater()
 
 
-def test_repeated_lines_collapse_into_one_line_plus_a_counter():
+def test_repeated_lines_below_the_rate_are_shown_as_they_came():
     tab = make_process_tab()
+
+    tab._append_raw(b'[INFO] Added plan for pipeline pick. Queue is now of size 1\n' * 3)
+    tab._flush_output_pending(final=True)
+
+    assert tab.output.entries == [
+        (False, '[INFO] Added plan for pipeline pick. Queue is now of size 1\n')
+    ] * 3
+
+
+def test_a_flood_of_one_repeated_line_is_rate_limited_like_any_other():
+    tab = make_process_tab(max_lines_per_second=100)
 
     tab._append_raw(b'still waiting for /query (49 s left)\n' * 5000)
     tab._flush_output_pending(final=True)
 
-    assert len(tab.output.entries) == 4
-    assert tab.output.entries[:3] == [(False, 'still waiting for /query (49 s left)\n')] * 3
-    is_html, notice = tab.output.entries[3]
+    shown = [e for e in tab.output.entries if e == (False, 'still waiting for /query (49 s left)\n')]
+    assert len(shown) == 100
+    is_html, notice = tab.output.entries[-1]
     assert is_html is True
-    assert 'repeated 4997 more times' in notice
+    assert 'dropped 4900 lines' in notice
 
 
 def test_one_megabyte_of_repeated_lines_is_processed_quickly_and_bounded():
@@ -148,7 +159,7 @@ def test_one_megabyte_of_repeated_lines_is_processed_quickly_and_bounded():
     elapsed = time.perf_counter() - started
 
     assert elapsed < 1.0, f'processing 1 MB took {elapsed:.2f} s'
-    assert len(tab.output.entries) <= 4   # three shown copies plus one notice
+    assert len(tab.output.entries) <= 1001   # one second of lines plus the drop notice
 
 
 def test_distinct_lines_beyond_the_rate_are_dropped_with_a_notice():
@@ -242,10 +253,8 @@ def test_real_process_flood_keeps_the_event_loop_responsive_and_widget_bounded()
 
     text = tab.output.toPlainText()
     lines = text.splitlines()
-    assert lines.count('still waiting for /pose_selector_class_query (49 s left)') == 3
-    assert 'repeated 199997 more times' in text
+    assert 1 <= lines.count('still waiting for /pose_selector_class_query (49 s left)') <= 1000 * 30
     assert 'rate limited' in text
-    assert 'distinct line 0' in lines
-    assert len(lines) < 20000
+    assert len(lines) < 1000 * 30 + 100
     parent.deleteLater()
     app.processEvents()
