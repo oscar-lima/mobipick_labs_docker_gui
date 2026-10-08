@@ -128,11 +128,11 @@ def test_repeated_lines_collapse_into_one_line_plus_a_counter():
     tab._append_raw(b'still waiting for /query (49 s left)\n' * 5000)
     tab._flush_output_pending(final=True)
 
-    assert len(tab.output.entries) == 2
-    assert tab.output.entries[0] == (False, 'still waiting for /query (49 s left)\n')
-    is_html, notice = tab.output.entries[1]
+    assert len(tab.output.entries) == 4
+    assert tab.output.entries[:3] == [(False, 'still waiting for /query (49 s left)\n')] * 3
+    is_html, notice = tab.output.entries[3]
     assert is_html is True
-    assert 'repeated 4999 times' in notice
+    assert 'repeated 4997 more times' in notice
 
 
 def test_one_megabyte_of_repeated_lines_is_processed_quickly_and_bounded():
@@ -148,7 +148,7 @@ def test_one_megabyte_of_repeated_lines_is_processed_quickly_and_bounded():
     elapsed = time.perf_counter() - started
 
     assert elapsed < 1.0, f'processing 1 MB took {elapsed:.2f} s'
-    assert len(tab.output.entries) <= 3
+    assert len(tab.output.entries) <= 4   # three shown copies plus one notice
 
 
 def test_distinct_lines_beyond_the_rate_are_dropped_with_a_notice():
@@ -185,8 +185,9 @@ def test_process_output_and_notices_are_written_to_the_tab_log_file(tmp_path):
     assert files[0].read_text(encoding='utf-8') == (
         'green line\n'
         '[WARN] careful\n'
+        '[WARN] careful\n'
+        '[WARN] careful\n'
         '> roslaunch demo.launch\n'
-        '... (previous line repeated 2 times)\n'
     )
 
 
@@ -241,8 +242,8 @@ def test_real_process_flood_keeps_the_event_loop_responsive_and_widget_bounded()
 
     text = tab.output.toPlainText()
     lines = text.splitlines()
-    assert lines.count('still waiting for /pose_selector_class_query (49 s left)') == 1
-    assert 'repeated 199999 times' in text
+    assert lines.count('still waiting for /pose_selector_class_query (49 s left)') == 3
+    assert 'repeated 199997 more times' in text
     assert 'rate limited' in text
     assert 'distinct line 0' in lines
     assert len(lines) < 20000

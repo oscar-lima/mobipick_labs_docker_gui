@@ -1144,8 +1144,9 @@ and the flush interval (`flush_interval_s`).
 A child process that prints the same line in a tight loop (tens of thousands
 of lines per second) must never freeze the GUI. Every process tab passes its
 lines through `output_flood.OutputFloodGuard` before rendering: consecutive
-identical lines collapse into the first one plus `... (previous line repeated
-N times)`, and distinct lines beyond `log.flood.max_lines_per_second` are
+identical lines are shown `log.flood.min_repeats` (3) times and the further copies hide
+behind one `... (previous line repeated N more times)` notice (an interim notice at
+most every `log.flood.repeat_notice_interval_s`), and distinct lines beyond `log.flood.max_lines_per_second` are
 dropped with `... dropped N lines in the last second; process output is being
 rate limited`. The notices, not the raw flood, are what the widget shows and
 the disk log records. `LogTextEdit` adds two more layers: it renders at most

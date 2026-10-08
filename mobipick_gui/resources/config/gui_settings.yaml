@@ -10,6 +10,8 @@ log:
   max_characters: 4000000       # hard cap on the characters kept in a log tab (colored lines share a block, so max_block_count alone does not bound them)
   flood:                        # protection against a process that floods stdout/stderr (the GUI never hangs on it)
     max_lines_per_second: 1000  # distinct lines shown per second and tab; the rest is dropped with a notice (identical lines are collapsed first)
+    min_repeats: 3              # a line repeated more often than this in a row is shown this many times, the rest hides behind one "repeated N more times" notice
+    repeat_notice_interval_s: 10.0  # while a repeat goes on, an interim "so far" notice at most this often
     max_pending_entries: 20000  # buffered entries a log tab keeps before dropping the oldest with a notice
     max_entries_per_flush: 2000 # entries rendered per flush tick, so the event loop stays responsive
   disk:                         # plain-text copies of the Log tab and every process tab, so a force quit loses nothing
