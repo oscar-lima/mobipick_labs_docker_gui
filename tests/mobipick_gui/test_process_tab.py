@@ -5,6 +5,7 @@ import time
 from PyQt5.QtCore import QProcess, QProcessEnvironment
 from PyQt5.QtWidgets import QApplication, QMainWindow
 
+from mobipick_gui.log_files import LogFileManager
 from mobipick_gui.output_flood import OutputFloodGuard
 from mobipick_gui.process_tab import ProcessTab, ROS_WARNING_COLOR
 
@@ -38,6 +39,7 @@ def make_process_tab(*, max_lines_per_second=1000, clock=None):
     tab.output = FakeOutput()
     tab.notify_parent_finished = True
     tab._shutting_down = False
+    tab._disk_log = None
     tab._guard_timer = None
     guard_kwargs = {'max_lines_per_second': max_lines_per_second}
     if clock is not None:
@@ -164,6 +166,28 @@ def test_distinct_lines_beyond_the_rate_are_dropped_with_a_notice():
     assert 'dropped 49900 lines in the last second' in notices[0]
     assert 'rate limited' in notices[0]
     assert tab.output.entries[-1] == (False, 'after the flood\n')
+
+
+def test_process_output_and_notices_are_written_to_the_tab_log_file(tmp_path):
+    tab = make_process_tab()
+    manager = LogFileManager(tmp_path / 'logs', session='20260101-120000')
+    tab.parent._log_files = manager
+    tab._open_disk_log(new_run=True)
+
+    tab._append_raw(b'\x1b[32mgreen line\x1b[0m\n')
+    tab._append_raw(b'[WARN] careful\n' * 3)
+    tab.append_line_html('<i>&gt; roslaunch demo.launch</i>')
+    tab._flush_output_pending(final=True)
+    manager.close_all()
+
+    files = sorted((tmp_path / 'logs' / '20260101-120000').glob('sim-*.log'))
+    assert len(files) == 1
+    assert files[0].read_text(encoding='utf-8') == (
+        'green line\n'
+        '[WARN] careful\n'
+        '> roslaunch demo.launch\n'
+        '... (previous line repeated 2 times)\n'
+    )
 
 
 def _pump_until(app, predicate, timeout_s):

@@ -10,6 +10,7 @@ from PyQt5.QtCore import QObject, QProcess, QTimer
 
 from .ansi import CSI_SEQ_RE, ansi_to_html
 from .config import CONFIG
+from .log_files import LogFileWriter, ansi_to_plain, html_to_plain
 from .log_widget import NOTICE_COLOR, LogTextEdit
 from .output_flood import LINE, OutputFloodGuard
 
@@ -50,6 +51,7 @@ class ProcessTab:
 
         self.output = output or LogTextEdit()
         self._flood_guard = _flood_guard_from_config()
+        self._disk_log: LogFileWriter | None = None
         self._reset_output_stream()
         self._shutting_down = False
         # Reports a trailing repeat/drop summary once the flood pauses.
@@ -82,6 +84,7 @@ class ProcessTab:
     def start_shell(self, bash_cmd: str):
         self.run_generation += 1
         self._reset_output_stream()
+        self._open_disk_log(new_run=True)
         self._append_command_line(bash_cmd)
         self.parent._log_cmd(bash_cmd)
         self._apply_env()
@@ -90,6 +93,7 @@ class ProcessTab:
     def start_program(self, program: str, args: list[str]):
         self.run_generation += 1
         self._reset_output_stream()
+        self._open_disk_log(new_run=True)
         cmdline = program + ' ' + ' '.join(args)
         self._append_command_line(cmdline)
         self.parent._log_cmd([program] + args)
@@ -133,6 +137,48 @@ class ProcessTab:
 
     def append_line_html(self, html_text: str):
         self.output.enqueue(True, html_text + '<br>')
+        self._write_disk(html_to_plain(html_text))
+
+    # ---------- disk log ----------
+
+    def set_disk_log(self, writer: LogFileWriter | None) -> None:
+        """Use ``writer`` for this tab (the Log tab shares the GUI log)."""
+        self._disk_log = writer
+
+    def disk_log_path(self):
+        writer = getattr(self, '_disk_log', None)
+        return writer.path if writer is not None and writer.is_open else None
+
+    def _open_disk_log(self, *, new_run: bool = False) -> LogFileWriter | None:
+        manager = getattr(self.parent, '_log_files', None)
+        if manager is None:
+            return None
+        writer = getattr(self, '_disk_log', None)
+        if writer is not None and not new_run:
+            return writer
+        if writer is not None:
+            manager.close(writer)
+        try:
+            writer = manager.open_tab_log(self.key)
+        except Exception:  # noqa: BLE001 - logging must never break a tab
+            writer = None
+        self._disk_log = writer
+        return writer
+
+    def _write_disk(self, text: str) -> None:
+        if not text:
+            return
+        writer = getattr(self, '_disk_log', None)
+        if writer is None:
+            writer = self._open_disk_log()
+            if writer is None:
+                return
+        writer.write(text)
+
+    def flush_disk_log(self) -> None:
+        writer = getattr(self, '_disk_log', None)
+        if writer is not None:
+            writer.flush()
 
     def _on_stdout_buf(self):
         if self._shutting_down:
@@ -229,6 +275,7 @@ class ProcessTab:
             self.output.enqueue(True, ansi_to_html(line))
         else:
             self.output.enqueue(False, line)
+        self._write_disk(ansi_to_plain(plain_line))
 
     def _render_notice(self, text: str) -> None:
         self.output.enqueue(
@@ -236,6 +283,7 @@ class ProcessTab:
             f'<span style="color:{NOTICE_COLOR}"><i>{html.escape(text)}</i>'
             '</span><br>',
         )
+        self._write_disk(text)
 
     def _schedule_guard_flush(self) -> None:
         timer = getattr(self, '_guard_timer', None)

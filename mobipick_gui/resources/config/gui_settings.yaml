@@ -12,6 +12,10 @@ log:
     max_lines_per_second: 1000  # distinct lines shown per second and tab; the rest is dropped with a notice (identical lines are collapsed first)
     max_pending_entries: 20000  # buffered entries a log tab keeps before dropping the oldest with a notice
     max_entries_per_flush: 2000 # entries rendered per flush tick, so the event loop stays responsive
+  disk:                         # plain-text copies of the Log tab and every process tab, so a force quit loses nothing
+    enabled: true               # write <data dir>/logs/gui-<session>.log and <data dir>/logs/<session>/<tab>-<HHMMSS>.log
+    keep_sessions: 20           # newest GUI sessions kept on disk; older ones are deleted at startup
+    flush_interval_s: 1.0       # files are flushed at most this many seconds after a line arrives
 
 window:
   geometry: [100, 100, 1100, 780]   # main window position (x, y) and size (width, height)

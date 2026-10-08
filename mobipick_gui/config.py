@@ -84,6 +84,11 @@ def default_user_data_dir() -> Path:
     return base / 'mobipick-labs-docker-gui'
 
 
+def default_log_dir() -> Path:
+    """Return the directory holding the GUI and process log files."""
+    return default_user_data_dir() / 'logs'
+
+
 def default_user_config_path() -> Path:
     """Return the optional per-user GUI settings override path."""
     override = os.environ.get('MOBIPICK_GUI_CONFIG')
@@ -189,6 +194,11 @@ CONFIG_DEFAULTS: Dict[str, Dict] = {
             'max_lines_per_second': 1000,
             'max_pending_entries': 20000,
             'max_entries_per_flush': 2000,
+        },
+        'disk': {
+            'enabled': True,
+            'keep_sessions': 20,
+            'flush_interval_s': 1.0,
         },
     },
     'window': {
@@ -1441,6 +1451,7 @@ def user_configuration_paths(
         ('Imported settings profiles', config_dir / 'profiles'),
         ('Recordings', data_dir / 'recordings'),
         ('Custom image build contexts', data_dir / 'image_builds'),
+        ('GUI and process logs', data_dir / 'logs'),
     ]
 
 
@@ -1483,6 +1494,7 @@ __all__ = [
     'USER_DATA_DIR',
     'default_user_config_dir',
     'default_user_config_path',
+    'default_log_dir',
     'default_user_data_dir',
     'user_state_reset_command',
     'user_state_reset_paths',

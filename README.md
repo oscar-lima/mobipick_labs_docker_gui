@@ -360,6 +360,7 @@ Default per-user state locations:
 ~/.config/mobipick-labs-docker-gui/profiles/
 ~/.local/share/mobipick-labs-docker-gui/recordings/
 ~/.local/share/mobipick-labs-docker-gui/image_builds/
+~/.local/share/mobipick-labs-docker-gui/logs/
 ```
 
 Keep bundled resource files immutable at runtime. User edits should be written
@@ -1119,6 +1120,24 @@ block count. ROS messages use readable wall-clock time and identify their node,
 for example `[WARN] [14:26:56] [/pose_selector]: Clearing planning scene`.
 
 GUI-originated messages and executed commands are written to the **Log** tab.
+
+### Log files on disk
+
+The log tabs live only in memory, so every tab is also mirrored to plain-text
+files (no HTML or ANSI colours) as lines arrive, flushed at most one second
+later; a crash or force quit loses nothing older than that. The files live in
+the per-user data directory (`$XDG_DATA_HOME` or `~/.local/share`):
+
+```text
+~/.local/share/mobipick-labs-docker-gui/logs/
+  gui-<YYYYmmdd-HHMMSS>.log            # the Log tab of one GUI session
+  <YYYYmmdd-HHMMSS>/<tabkey>-<HHMMSS>.log   # one file per process start of a tab
+```
+
+The GUI log names the directory at startup (`logs are written to ...`).
+`log.disk` in `gui_settings.yaml` switches the files off (`enabled`), sets how
+many sessions are kept (`keep_sessions`, older ones are deleted at startup)
+and the flush interval (`flush_interval_s`).
 
 ### Output flood protection
 

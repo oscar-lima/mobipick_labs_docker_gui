@@ -101,6 +101,7 @@ from .config import (
     USER_DATA_DIR,
     USER_CONFIG_FILE,
     WINDOW_LAYOUT_FILE,
+    default_log_dir,
     load_docker_cp_config,
     load_docker_cp_user_config,
     load_button_layout,
@@ -139,6 +140,7 @@ from .display_runtime import (
 )
 from .external_links import open_external_url
 from .flow_layout import FlowLayout
+from .log_files import LogFileManager
 from .headless import (
     button_opens_window,
     headless_launch_entries,
@@ -3502,6 +3504,10 @@ class MainWindow(QMainWindow):
         self._sim_running_cached = False  # event driven sim state
 
         self.tasks: dict[str, ProcessTab] = {}
+        self._log_files: LogFileManager | None = None
+        self._log_files_timer: QTimer | None = None
+        self._log_files_error: str | None = None
+        self._init_log_files()
         self._bg_procs: list[QProcess] = []
         self._async_tasks = AsyncTaskRunner(self)
         self._cleanup_done = False
@@ -4027,6 +4033,7 @@ class MainWindow(QMainWindow):
         self.update_sim_status_from_poll(force=True)
 
         self._console_log(1, f'Mobipick Labs Control ready (verbosity {self._verbosity})')
+        self._log_log_files_location()
         self._console_log(
             1,
             'desktop session: '
@@ -6140,6 +6147,8 @@ class MainWindow(QMainWindow):
             index = self.tabs.indexOf(tab.output)
             if index >= 0:
                 self.tabs.removeTab(index)
+            if self._log_files is not None and tab.key != 'log':
+                self._log_files.close(getattr(tab, '_disk_log', None))
             tab.proc.deleteLater()
             tab.output.deleteLater()
         self.tasks.clear()
@@ -10761,6 +10770,60 @@ CMD ["bash"]
             return data.decode(errors='replace')
         return str(data)
 
+    # ---------- log files on disk ----------
+
+    def _init_log_files(self) -> None:
+        """Open this session's log directory (``log.disk`` settings)."""
+        disk_cfg = (CONFIG.get('log') or {}).get('disk') or {}
+        if not disk_cfg.get('enabled', True):
+            return
+        try:
+            manager = LogFileManager(
+                default_log_dir(),
+                keep_sessions=int(disk_cfg.get('keep_sessions', 20)),
+                flush_interval_s=float(disk_cfg.get('flush_interval_s', 1.0)),
+                on_error=self._on_log_file_error,
+            )
+            manager.root.mkdir(parents=True, exist_ok=True)
+            manager.prune()
+        except Exception as exc:  # noqa: BLE001 - logging must never block startup
+            self._log_files_error = f'log files disabled: {exc}'
+            self._console_log(1, self._log_files_error)
+            return
+        self._log_files = manager
+        self._log_files_timer = QTimer(self)
+        self._log_files_timer.setInterval(
+            max(100, int(float(disk_cfg.get('flush_interval_s', 1.0)) * 1000))
+        )
+        self._log_files_timer.timeout.connect(manager.flush_all)
+        self._log_files_timer.start()
+
+    def _on_log_file_error(self, message: str) -> None:
+        if message == self._log_files_error:
+            return
+        self._log_files_error = message
+        self._console_log(1, message)
+        if 'log' in self.tasks:
+            self._log_event(message)
+
+    def _log_log_files_location(self) -> None:
+        if self._log_files is None:
+            if self._log_files_error:
+                self._log_event(self._log_files_error)
+            return
+        self._log_info(
+            f'logs are written to {self._log_files.root} '
+            f'(GUI log {self._log_files.gui_log_path.name}, process tabs under '
+            f'{self._log_files.session}/; newest {self._log_files.keep_sessions} '
+            'sessions are kept)'
+        )
+
+    def _close_log_files(self) -> None:
+        if self._log_files_timer is not None:
+            self._log_files_timer.stop()
+        if self._log_files is not None:
+            self._log_files.close_all()
+
     def _append_log_html(self, html_text: str):
         if 'log' not in self.tasks:
             return
@@ -13431,6 +13494,8 @@ CMD ["bash"]
         if key in self.tasks:
             return self.tasks[key]
         tab = ProcessTab(key, label, self, closable)
+        if key == 'log' and self._log_files is not None:
+            tab.set_disk_log(self._log_files.gui_writer())
         idx = self.tabs.addTab(tab.output, label)
         self._apply_close_button(idx, closable)
         if key == 'sim':
@@ -16451,6 +16516,9 @@ CMD ["bash"]
         tab = self.tasks.get(key)
         if tab:
             self._append_gui_html(key, f'<i>Process finished with code {exit_code} [{status_name}]</i>')
+            flush_disk_log = getattr(tab, 'flush_disk_log', None)
+            if callable(flush_disk_log):
+                flush_disk_log()
             if (
                 self._config_buttons.get(key, {}).get('kind') == 'command'
                 and tab.exec_id
@@ -16643,6 +16711,7 @@ CMD ["bash"]
             self._cleanup_done = True
 
         self._console_log(1, CONFIG['exit']['log_done_message'])
+        self._close_log_files()
 
         app = QApplication.instance()
         if app:

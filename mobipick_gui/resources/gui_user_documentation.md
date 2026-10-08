@@ -445,6 +445,12 @@ color codes.
 Only custom, terminal, build, and loaded log tabs can be closed.
 Press **Ctrl+W** to close the current tab when it has an **X** close button.
 
+Every tab is also written as plain text to
+`~/.local/share/mobipick-labs-docker-gui/logs/` while it arrives (the **Log**
+tab to `gui-<date-time>.log`, each process start of a tab to a file under the
+session's `<date-time>/` folder), so nothing is lost when the GUI is killed.
+The **Log** tab names the folder at startup; the newest 20 sessions are kept.
+
 A process that prints the same line over and over, or more than about 1000
 different lines per second, cannot freeze the GUI: repeated lines are shown
 once with `... (previous line repeated N times)`, and lines beyond the rate
