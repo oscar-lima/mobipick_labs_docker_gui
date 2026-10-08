@@ -7,6 +7,11 @@ log:
   command_log_color: "#4da3ff"  # color for command lines emitted by the GUI
   font_family: "monospace"      # font family used for log text
   scroll_tolerance_min: 2       # how close (in scroll units) the user must be to the bottom for auto-scroll to stay enabled
+  max_characters: 4000000       # hard cap on the characters kept in a log tab (colored lines share a block, so max_block_count alone does not bound them)
+  flood:                        # protection against a process that floods stdout/stderr (the GUI never hangs on it)
+    max_lines_per_second: 1000  # distinct lines shown per second and tab; the rest is dropped with a notice (identical lines are collapsed first)
+    max_pending_entries: 20000  # buffered entries a log tab keeps before dropping the oldest with a notice
+    max_entries_per_flush: 2000 # entries rendered per flush tick, so the event loop stays responsive
 
 window:
   geometry: [100, 100, 1100, 780]   # main window position (x, y) and size (width, height)

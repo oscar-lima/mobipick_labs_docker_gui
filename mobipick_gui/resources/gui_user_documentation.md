@@ -445,6 +445,12 @@ color codes.
 Only custom, terminal, build, and loaded log tabs can be closed.
 Press **Ctrl+W** to close the current tab when it has an **X** close button.
 
+A process that prints the same line over and over, or more than about 1000
+different lines per second, cannot freeze the GUI: repeated lines are shown
+once with `... (previous line repeated N times)`, and lines beyond the rate
+are dropped with a `... dropped N lines in the last second` notice. The log
+files hold the same summaries instead of the flood.
+
 ## Bottom log controls
 
 - **Clear Current Tab** clears the visible tab.

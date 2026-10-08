@@ -1119,6 +1119,22 @@ block count. ROS messages use readable wall-clock time and identify their node,
 for example `[WARN] [14:26:56] [/pose_selector]: Clearing planning scene`.
 
 GUI-originated messages and executed commands are written to the **Log** tab.
+
+### Output flood protection
+
+A child process that prints the same line in a tight loop (tens of thousands
+of lines per second) must never freeze the GUI. Every process tab passes its
+lines through `output_flood.OutputFloodGuard` before rendering: consecutive
+identical lines collapse into the first one plus `... (previous line repeated
+N times)`, and distinct lines beyond `log.flood.max_lines_per_second` are
+dropped with `... dropped N lines in the last second; process output is being
+rate limited`. The notices, not the raw flood, are what the widget shows and
+the disk log records. `LogTextEdit` adds two more layers: it renders at most
+`log.flood.max_entries_per_flush` entries per timer tick, bounds its pending
+buffer (`log.flood.max_pending_entries`) and trims the document to
+`log.max_characters` (HTML lines share one block, so `max_block_count` alone
+does not bound them). `GET /tabs/<key>` of the remote API reads the same
+widget text, so remote clients see the collapsed summaries too.
 Users can save the current tab, save all tabs, or load a saved HTML log into a
 closable tab. Ctrl+W closes the current tab when it has an X close button. The
 bottom search row searches only the current log tab.

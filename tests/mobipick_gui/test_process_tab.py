@@ -5,6 +5,7 @@ import time
 from PyQt5.QtCore import QProcess, QProcessEnvironment
 from PyQt5.QtWidgets import QApplication, QMainWindow
 
+from mobipick_gui.output_flood import OutputFloodGuard
 from mobipick_gui.process_tab import ProcessTab, ROS_WARNING_COLOR
 
 
@@ -30,12 +31,18 @@ class FakeParent:
         return None
 
 
-def make_process_tab():
+def make_process_tab(*, max_lines_per_second=1000, clock=None):
     tab = ProcessTab.__new__(ProcessTab)
     tab.key = 'sim'
     tab.parent = FakeParent()
     tab.output = FakeOutput()
     tab.notify_parent_finished = True
+    tab._shutting_down = False
+    tab._guard_timer = None
+    guard_kwargs = {'max_lines_per_second': max_lines_per_second}
+    if clock is not None:
+        guard_kwargs['clock'] = clock
+    tab._flood_guard = OutputFloodGuard(**guard_kwargs)
 
     tab._output_decoder = codecs.getincrementaldecoder('utf-8')(
         errors='replace'
@@ -111,3 +118,109 @@ def test_stop_for_shutdown_reaps_process_and_disables_callbacks():
 
     app.processEvents()
     parent.deleteLater()
+
+
+def test_repeated_lines_collapse_into_one_line_plus_a_counter():
+    tab = make_process_tab()
+
+    tab._append_raw(b'still waiting for /query (49 s left)\n' * 5000)
+    tab._flush_output_pending(final=True)
+
+    assert len(tab.output.entries) == 2
+    assert tab.output.entries[0] == (False, 'still waiting for /query (49 s left)\n')
+    is_html, notice = tab.output.entries[1]
+    assert is_html is True
+    assert 'repeated 4999 times' in notice
+
+
+def test_one_megabyte_of_repeated_lines_is_processed_quickly_and_bounded():
+    tab = make_process_tab()
+    line = b'still waiting for /pick_pose_selector_node/pose_selector_class_query (49 s left)\n'
+    payload = line * (1_000_000 // len(line) + 1)
+    assert len(payload) >= 1_000_000
+
+    started = time.perf_counter()
+    for start in range(0, len(payload), 65536):
+        tab._append_raw(payload[start:start + 65536])
+    tab._flush_output_pending(final=True)
+    elapsed = time.perf_counter() - started
+
+    assert elapsed < 1.0, f'processing 1 MB took {elapsed:.2f} s'
+    assert len(tab.output.entries) <= 3
+
+
+def test_distinct_lines_beyond_the_rate_are_dropped_with_a_notice():
+    now = [0.0]
+    tab = make_process_tab(max_lines_per_second=100, clock=lambda: now[0])
+
+    tab._append_raw(''.join(f'line {i}\n' for i in range(50_000)).encode())
+    assert len(tab.output.entries) == 100
+
+    now[0] += 1.5
+    tab._append_raw(b'after the flood\n')
+
+    notices = [text for is_html, text in tab.output.entries if 'dropped' in text]
+    assert len(notices) == 1
+    assert 'dropped 49900 lines in the last second' in notices[0]
+    assert 'rate limited' in notices[0]
+    assert tab.output.entries[-1] == (False, 'after the flood\n')
+
+
+def _pump_until(app, predicate, timeout_s):
+    deadline = time.monotonic() + timeout_s
+    longest_tick = 0.0
+    while not predicate() and time.monotonic() < deadline:
+        tick_started = time.perf_counter()
+        app.processEvents()
+        longest_tick = max(longest_tick, time.perf_counter() - tick_started)
+        time.sleep(0.005)
+    return longest_tick
+
+
+def test_real_process_flood_keeps_the_event_loop_responsive_and_widget_bounded():
+    app = QApplication.instance() or QApplication([])
+    parent = QMainWindow()
+    parent._build_process_environment = (
+        lambda _env: QProcessEnvironment.systemEnvironment()
+    )
+    parent._log_cmd = lambda _command: None
+    parent._command_log_color = '#4da3ff'
+    parent._filter_terminal_escapes = lambda data: data
+    parent._collapse_carriage_returns = lambda data: data
+    tab = ProcessTab(
+        'flood-test',
+        'Flood test',
+        parent,
+        False,
+        notify_parent_finished=False,
+    )
+    script = (
+        'import sys\n'
+        'w = sys.stdout.write\n'
+        'for _ in range(200000):\n'
+        "    w('still waiting for /pose_selector_class_query (49 s left)\\n')\n"
+        'for i in range(200000):\n'
+        "    w(f'distinct line {i}\\n')\n"
+        "w('done\\n')\n"
+    )
+    tab.start_program(sys.executable, ['-u', '-c', script])
+    assert tab.proc.waitForStarted(2000)
+
+    longest_tick = _pump_until(
+        app,
+        lambda: tab.proc.state() == QProcess.NotRunning
+        and tab.output.pending_count() == 0,
+        timeout_s=30,
+    )
+    assert tab.proc.state() == QProcess.NotRunning
+    assert longest_tick < 0.5, f'event loop blocked for {longest_tick:.2f} s'
+
+    text = tab.output.toPlainText()
+    lines = text.splitlines()
+    assert lines.count('still waiting for /pose_selector_class_query (49 s left)') == 1
+    assert 'repeated 199999 times' in text
+    assert 'rate limited' in text
+    assert 'distinct line 0' in lines
+    assert len(lines) < 20000
+    parent.deleteLater()
+    app.processEvents()

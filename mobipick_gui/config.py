@@ -184,6 +184,12 @@ CONFIG_DEFAULTS: Dict[str, Dict] = {
         'command_log_color': '#4da3ff',
         'font_family': 'monospace',
         'scroll_tolerance_min': 2,
+        'max_characters': 4_000_000,
+        'flood': {
+            'max_lines_per_second': 1000,
+            'max_pending_entries': 20000,
+            'max_entries_per_flush': 2000,
+        },
     },
     'window': {
         'geometry': [100, 100, 1100, 780],

@@ -6,10 +6,12 @@ import html
 import re
 from typing import TYPE_CHECKING
 
-from PyQt5.QtCore import QProcess
+from PyQt5.QtCore import QObject, QProcess, QTimer
 
 from .ansi import CSI_SEQ_RE, ansi_to_html
-from .log_widget import LogTextEdit
+from .config import CONFIG
+from .log_widget import NOTICE_COLOR, LogTextEdit
+from .output_flood import LINE, OutputFloodGuard
 
 if TYPE_CHECKING:  # pragma: no cover
     from .main_window import MainWindow
@@ -17,6 +19,14 @@ if TYPE_CHECKING:  # pragma: no cover
 
 ROS_WARNING_RE = re.compile(r'^\[\s*WARN(?:ING)?\s*\]')
 ROS_WARNING_COLOR = '#f1fa8c'
+GUARD_FLUSH_INTERVAL_MS = 1000
+
+
+def _flood_guard_from_config() -> OutputFloodGuard:
+    flood_cfg = (CONFIG.get('log') or {}).get('flood') or {}
+    return OutputFloodGuard(
+        max_lines_per_second=int(flood_cfg.get('max_lines_per_second', 1000))
+    )
 
 
 class ProcessTab:
@@ -39,8 +49,16 @@ class ProcessTab:
         self.notify_parent_finished = notify_parent_finished
 
         self.output = output or LogTextEdit()
+        self._flood_guard = _flood_guard_from_config()
         self._reset_output_stream()
         self._shutting_down = False
+        # Reports a trailing repeat/drop summary once the flood pauses.
+        self._guard_timer: QTimer | None = None
+        if isinstance(parent, QObject):
+            self._guard_timer = QTimer(parent)
+            self._guard_timer.setSingleShot(True)
+            self._guard_timer.setInterval(GUARD_FLUSH_INTERVAL_MS)
+            self._guard_timer.timeout.connect(self._flush_flood_guard)
 
         self.environment_overrides: dict[str, str] = {}
         self.proc = QProcess(parent)
@@ -157,6 +175,7 @@ class ProcessTab:
             errors='replace'
         )
         self._output_pending = ''
+        self._flood_guard.reset()
 
     def _flush_output_pending(self, *, final: bool = False) -> None:
         """Render complete lines while retaining an unfinished stream line."""
@@ -170,30 +189,67 @@ class ProcessTab:
             data = self._output_pending[:line_end + 1]
             self._output_pending = self._output_pending[line_end + 1:]
         if not data:
+            if final:
+                self._render_events(self._flood_guard.flush(final=True))
             return
         data = self.parent._filter_terminal_escapes(data)
         data = self.parent._collapse_carriage_returns(data)
         if self.notify_parent_finished:
             self.parent._prepare_tab_for_origin(self.key, 'container')
-        self._enqueue_output_lines(data)
+        self._enqueue_output_lines(data, final=final)
 
-    def _enqueue_output_lines(self, data: str) -> None:
-        """Preserve ANSI colors and highlight uncolored ROS warnings."""
-        for line in data.splitlines(keepends=True):
-            plain_line = CSI_SEQ_RE.sub('', line)
-            if ROS_WARNING_RE.match(plain_line):
-                content = plain_line.rstrip('\r\n')
-                rendered = (
-                    f'<span style="color:{ROS_WARNING_COLOR}">'
-                    f'{html.escape(content)}</span>'
-                )
-                if line.endswith('\n'):
-                    rendered += '<br>'
-                self.output.enqueue(True, rendered)
-            elif '\x1b[' in line:
-                self.output.enqueue(True, ansi_to_html(line))
+    def _enqueue_output_lines(self, data: str, *, final: bool = False) -> None:
+        """Pass lines through the flood guard, then render and log them."""
+        events = self._flood_guard.feed_many(data.splitlines(keepends=True))
+        if final:
+            events += self._flood_guard.flush(final=True)
+        self._render_events(events)
+        self._schedule_guard_flush()
+
+    def _render_events(self, events) -> None:
+        for kind, text in events:
+            if kind == LINE:
+                self._render_output_line(text)
             else:
-                self.output.enqueue(False, line)
+                self._render_notice(text)
+
+    def _render_output_line(self, line: str) -> None:
+        """Preserve ANSI colors and highlight uncolored ROS warnings."""
+        plain_line = CSI_SEQ_RE.sub('', line)
+        if ROS_WARNING_RE.match(plain_line):
+            content = plain_line.rstrip('\r\n')
+            rendered = (
+                f'<span style="color:{ROS_WARNING_COLOR}">'
+                f'{html.escape(content)}</span>'
+            )
+            if line.endswith('\n'):
+                rendered += '<br>'
+            self.output.enqueue(True, rendered)
+        elif '\x1b[' in line:
+            self.output.enqueue(True, ansi_to_html(line))
+        else:
+            self.output.enqueue(False, line)
+
+    def _render_notice(self, text: str) -> None:
+        self.output.enqueue(
+            True,
+            f'<span style="color:{NOTICE_COLOR}"><i>{html.escape(text)}</i>'
+            '</span><br>',
+        )
+
+    def _schedule_guard_flush(self) -> None:
+        timer = getattr(self, '_guard_timer', None)
+        if timer is None or not self._flood_guard.has_pending:
+            return
+        if not timer.isActive():
+            timer.start()
+
+    def _flush_flood_guard(self) -> None:
+        """Timer slot: report a repeat/drop summary after the flood pauses."""
+        if self._shutting_down:
+            return
+        self._render_events(self._flood_guard.flush())
+        self._schedule_guard_flush()
 
     def _append_command_line(self, command: str) -> None:
         line = f'<i>&gt; {html.escape(command)}</i>'
