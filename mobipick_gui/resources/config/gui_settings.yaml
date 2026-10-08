@@ -9,7 +9,8 @@ log:
   scroll_tolerance_min: 2       # how close (in scroll units) the user must be to the bottom for auto-scroll to stay enabled
   max_characters: 4000000       # hard cap on the characters kept in a log tab (colored lines share a block, so max_block_count alone does not bound them)
   flood:                        # protection against a process that floods stdout/stderr (the GUI never hangs on it)
-    max_lines_per_second: 1000  # lines shown per second and tab; the rest of that second is dropped with a notice (every line below the rate is shown as is)
+    max_lines_per_second: 1000  # sustained rate a process may print at; a flood above it loses its surplus with a notice once the burst allowance is used up
+    burst_lines: 20000          # lines a process may print at any speed before the rate applies (a roslaunch parameter dump or a stack trace is a burst, not a flood)
     max_pending_entries: 20000  # buffered entries a log tab keeps before dropping the oldest with a notice
     max_entries_per_flush: 2000 # entries rendered per flush tick, so the event loop stays responsive
   disk:                         # plain-text copies of the Log tab and every process tab, so a force quit loses nothing

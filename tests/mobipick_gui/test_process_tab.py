@@ -32,7 +32,7 @@ class FakeParent:
         return None
 
 
-def make_process_tab(*, max_lines_per_second=1000, clock=None):
+def make_process_tab(*, max_lines_per_second=1000, burst_lines=None, clock=None):
     tab = ProcessTab.__new__(ProcessTab)
     tab.key = 'sim'
     tab.parent = FakeParent()
@@ -41,7 +41,10 @@ def make_process_tab(*, max_lines_per_second=1000, clock=None):
     tab._shutting_down = False
     tab._disk_log = None
     tab._guard_timer = None
-    guard_kwargs = {'max_lines_per_second': max_lines_per_second}
+    guard_kwargs = {
+        'max_lines_per_second': max_lines_per_second,
+        'burst_lines': max_lines_per_second if burst_lines is None else burst_lines,
+    }
     if clock is not None:
         guard_kwargs['clock'] = clock
     tab._flood_guard = OutputFloodGuard(**guard_kwargs)
@@ -159,7 +162,7 @@ def test_one_megabyte_of_repeated_lines_is_processed_quickly_and_bounded():
     elapsed = time.perf_counter() - started
 
     assert elapsed < 1.0, f'processing 1 MB took {elapsed:.2f} s'
-    assert len(tab.output.entries) <= 1001   # one second of lines plus the drop notice
+    assert len(tab.output.entries) <= 1001 + 100   # the burst, the drop notice and the refill during processing
 
 
 def test_distinct_lines_beyond_the_rate_are_dropped_with_a_notice():
@@ -175,7 +178,7 @@ def test_distinct_lines_beyond_the_rate_are_dropped_with_a_notice():
     notices = [text for is_html, text in tab.output.entries if 'dropped' in text]
     assert len(notices) == 1
     assert 'dropped 49900 lines in the last second' in notices[0]
-    assert 'rate limited' in notices[0]
+    assert 'faster than 100 lines/s' in notices[0]
     assert tab.output.entries[-1] == (False, 'after the flood\n')
 
 
@@ -253,8 +256,8 @@ def test_real_process_flood_keeps_the_event_loop_responsive_and_widget_bounded()
 
     text = tab.output.toPlainText()
     lines = text.splitlines()
-    assert 1 <= lines.count('still waiting for /pose_selector_class_query (49 s left)') <= 1000 * 30
-    assert 'rate limited' in text
-    assert len(lines) < 1000 * 30 + 100
+    assert 1 <= lines.count('still waiting for /pose_selector_class_query (49 s left)') <= 20000 + 1000 * 30
+    assert 'dropped' in text and 'surplus is not shown' in text
+    assert len(lines) < 20000 + 1000 * 30 + 100
     parent.deleteLater()
     app.processEvents()

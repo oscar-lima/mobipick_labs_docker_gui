@@ -9,9 +9,14 @@ class FakeClock:
         return self.now
 
 
-def make_guard(max_lines_per_second=1000):
+def make_guard(max_lines_per_second=1000, burst_lines=None):
     clock = FakeClock()
-    return OutputFloodGuard(max_lines_per_second=max_lines_per_second, clock=clock), clock
+    guard = OutputFloodGuard(
+        max_lines_per_second=max_lines_per_second,
+        burst_lines=max_lines_per_second if burst_lines is None else burst_lines,
+        clock=clock,
+    )
+    return guard, clock
 
 
 def test_lines_pass_through_unchanged():
@@ -40,7 +45,7 @@ def test_rate_limit_drops_lines_and_reports_the_count_once_per_second():
     events = guard.feed('next\n')
     assert events[0][0] == NOTICE
     assert 'dropped 7 lines in the last second' in events[0][1]
-    assert 'rate limited (3 lines/s shown)' in events[0][1]
+    assert 'faster than 3 lines/s' in events[0][1]
     assert events[1] == (LINE, 'next\n')
 
 
@@ -68,3 +73,20 @@ def test_reset_forgets_the_window():
     guard.reset()
     assert guard.feed('c\n') == [(LINE, 'c\n')]
     assert not guard.has_pending
+
+
+def test_a_burst_within_the_allowance_passes_untouched():
+    # a roslaunch parameter dump: thousands of lines in one instant, then quiet
+    guard, _ = make_guard(max_lines_per_second=1000, burst_lines=20000)
+    events = guard.feed_many([f' * /param/{i}: 1\n' for i in range(5000)])
+    assert len(events) == 5000 and all(kind == LINE for kind, _ in events)
+    assert guard.total_dropped == 0
+
+
+def test_the_bucket_refills_at_the_rate():
+    guard, clock = make_guard(max_lines_per_second=10, burst_lines=10)
+    assert len(guard.feed_many(['x\n'] * 10)) == 10
+    assert guard.feed_many(['y\n']) == []
+    clock.now = 0.5
+    assert guard.feed_many(['z\n'] * 10) == [(LINE, 'z\n')] * 5
+    assert guard.total_dropped == 6

@@ -4,11 +4,14 @@ A child process that prints lines in a tight loop can produce tens of
 thousands of lines per second.  Rendering every one of them into a text
 widget blocks the Qt event loop, so every tab passes its lines through an
 :class:`OutputFloodGuard` first.  The guard is pure Python (no Qt) and rate
-limits the stream: once more than ``max_lines_per_second`` lines arrived
-within one second, the rest of that second is dropped and a notice says how
-many lines were dropped.  Below the rate every line passes through unchanged,
-also identical ones: ROS nodes print the same text for separate events, and
-hiding that would hamper debugging.
+limits the stream with a token bucket: ``burst_lines`` lines may arrive at any
+speed (a roslaunch parameter dump or a stack trace is a burst, not a flood)
+and the bucket refills at ``max_lines_per_second``; only a flood that keeps
+exceeding that rate after the burst allowance is used up gets its surplus
+dropped, with one notice per second saying how many lines were dropped.
+Within the allowance every line passes through unchanged, also identical
+ones: ROS nodes print the same text for separate events, and hiding that
+would hamper debugging.
 
 The notice is returned as an event so the caller renders it in the widget
 and writes it to the disk log instead of the raw flood.
@@ -25,22 +28,26 @@ Event = tuple[str, str]
 
 
 class OutputFloodGuard:
-    """Rate limit a line stream."""
+    """Rate limit a line stream (token bucket)."""
 
     def __init__(
         self,
         *,
         max_lines_per_second: int = 1000,
+        burst_lines: int = 20000,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.max_lines_per_second = max(1, int(max_lines_per_second))
+        self.burst_lines = max(self.max_lines_per_second, int(burst_lines))
         self._clock = clock
         self.reset()
 
     def reset(self) -> None:
         """Forget all state, e.g. when a tab starts a new process."""
-        self._window_start = self._clock()
-        self._window_count = 0
+        now = self._clock()
+        self._tokens = float(self.burst_lines)
+        self._refilled_at = now
+        self._window_start = now
         self._dropped = 0
         self.total_dropped = 0
 
@@ -57,13 +64,14 @@ class OutputFloodGuard:
         """Feed several lines at once and return the events to render."""
         events: list[Event] = []
         now = self._clock()
+        self._refill(now)
+        self._roll_window(events, now)
         for line in lines:
-            self._roll_window(events, now)
-            if self._window_count >= self.max_lines_per_second:
+            if self._tokens < 1.0:
                 self._dropped += 1
                 self.total_dropped += 1
                 continue
-            self._window_count += 1
+            self._tokens -= 1.0
             events.append((LINE, line))
         return events
 
@@ -83,6 +91,14 @@ class OutputFloodGuard:
 
     # -- helpers -----------------------------------------------------------
 
+    def _refill(self, now: float) -> None:
+        elapsed = max(0.0, now - self._refilled_at)
+        self._refilled_at = now
+        self._tokens = min(
+            float(self.burst_lines),
+            self._tokens + elapsed * self.max_lines_per_second,
+        )
+
     def _roll_window(
         self, events: list[Event], now: float, *, force: bool = False
     ) -> None:
@@ -92,13 +108,13 @@ class OutputFloodGuard:
             events.append(
                 (
                     NOTICE,
-                    f'... dropped {self._dropped} lines in the last second; '
-                    'process output is being rate limited '
-                    f'({self.max_lines_per_second} lines/s shown)',
+                    f'... dropped {self._dropped} lines in the last second: '
+                    f'this process printed more than {self.burst_lines} lines '
+                    f'faster than {self.max_lines_per_second} lines/s, the '
+                    'surplus is not shown',
                 )
             )
         self._dropped = 0
-        self._window_count = 0
         self._window_start = now
 
 

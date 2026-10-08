@@ -192,6 +192,7 @@ CONFIG_DEFAULTS: Dict[str, Dict] = {
         'max_characters': 4_000_000,
         'flood': {
             'max_lines_per_second': 1000,
+            'burst_lines': 20000,
             'max_pending_entries': 20000,
             'max_entries_per_flush': 2000,
         },

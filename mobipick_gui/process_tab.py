@@ -26,7 +26,8 @@ GUARD_FLUSH_INTERVAL_MS = 1000
 def _flood_guard_from_config() -> OutputFloodGuard:
     flood_cfg = (CONFIG.get('log') or {}).get('flood') or {}
     return OutputFloodGuard(
-        max_lines_per_second=int(flood_cfg.get('max_lines_per_second', 1000))
+        max_lines_per_second=int(flood_cfg.get('max_lines_per_second', 1000)),
+        burst_lines=int(flood_cfg.get('burst_lines', 20000)),
     )
 
 

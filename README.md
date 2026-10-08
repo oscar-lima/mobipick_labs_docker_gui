@@ -1143,9 +1143,10 @@ and the flush interval (`flush_interval_s`).
 
 A child process that prints the same line in a tight loop (tens of thousands
 of lines per second) must never freeze the GUI. Every process tab passes its
-lines through `output_flood.OutputFloodGuard` before rendering: lines beyond
-`log.flood.max_lines_per_second` are dropped with `... dropped N lines in the last second; process output is being
-rate limited`. The notices, not the raw flood, are what the widget shows and
+lines through `output_flood.OutputFloodGuard` before rendering, a token bucket: `log.flood.burst_lines`
+(20000) lines may arrive at any speed and the bucket refills at `log.flood.max_lines_per_second` (1000),
+so a roslaunch parameter dump or a stack trace passes untouched and only a flood that keeps printing
+faster than that loses its surplus, with a `... dropped N lines in the last second` notice. The notices, not the raw flood, are what the widget shows and
 the disk log records. `LogTextEdit` adds two more layers: it renders at most
 `log.flood.max_entries_per_flush` entries per timer tick, bounds its pending
 buffer (`log.flood.max_pending_entries`) and trims the document to
