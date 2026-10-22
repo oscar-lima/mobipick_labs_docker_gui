@@ -318,6 +318,8 @@ def _mark_invalid_combo_items(
         item.setToolTip(tooltip)
 
 
+# button texts of a yellow toggle whose process is going down (not starting)
+STOPPING_TEXT_PREFIXES = ('stopping', 'shutting', 'closing')
 ADVANCED_COLUMN_WIDTH = 560   # px per option column of the Advanced Launch Options dialog (#264)
 
 
@@ -11144,7 +11146,52 @@ CMD ["bash"]
         self._log_button_click(self.auto_launch_button, self._auto_launch_label())
         if not self._guard_toggle_action('auto_launch', self.auto_launch_button):
             return
+        if not self._auto_launch_running:
+            reason = self._auto_launch_start_refusal()
+            if reason:
+                self._log_info(f'auto launch: not started: {reason}')
+                QMessageBox.information(self, 'Please Wait', reason)
+                return
         self._toggle_auto_launch_stack()
+
+    def _stopping_process_keys(self) -> list[str]:
+        """Keys of the processes that are still shutting down.
+
+        Covers every toolbar button whose yellow state means stopping (not
+        starting), custom tabs with a pending stop, and the roscore and sim
+        shutdown flags.
+        """
+        keys: list[str] = []
+        for key, state in getattr(self, '_toggle_states', {}).items():
+            if key == 'auto_launch' or state != 'yellow':
+                continue
+            button = self._get_button_widget(key)
+            text = button.text().strip().lower() if button else ''
+            if text.startswith(STOPPING_TEXT_PREFIXES):
+                keys.append(key)
+        keys.extend(sorted(getattr(self, '_stopping_tab_keys', set())))
+        if getattr(self, '_roscore_stopping', False):
+            keys.append('roscore')
+        if getattr(self, '_killing', False):
+            keys.append('sim')
+        return list(dict.fromkeys(keys))
+
+    def _auto_launch_start_refusal(self) -> str | None:
+        """Why Auto Launch must not start now, or None when it may.
+
+        A process that is still dying would look running to the launch
+        schedule, be treated as ready and then never be started.
+        """
+        keys = self._stopping_process_keys()
+        if not keys:
+            return None
+        labels = dict(self._auto_launch_wizard_buttons())
+        labels.setdefault('sim', 'Simulation')
+        names = ', '.join(labels.get(key, key) for key in keys)
+        return (
+            f'Still shutting down: {names}. Wait until it has stopped, '
+            'then start Auto Launch again.'
+        )
 
     def _on_refresh_scripts_clicked(self):
         self._log_button_click(self.refresh_scripts_button, 'Refresh Scripts')

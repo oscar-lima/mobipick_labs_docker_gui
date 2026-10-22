@@ -242,6 +242,11 @@ part of the sequence and when each step starts.
 If no sequence exists, pressing Auto Launch offers to open the configuration
 dialog.
 
+Auto Launch does not start while any process is still shutting down (a yellow
+**Stopping ...** or **Shutting down...** button): a **Please Wait** message
+names those processes, and nothing is started. Press Auto Launch again once
+they have stopped. The remote API refuses the start with the same reason.
+
 **Headless**, next to Auto Launch, keeps windows closed. While it is checked,
 Auto Launch skips the buttons that only open a window (RViz, RQt and any
 button the profile marks with `opens_window: true`) and does not arrange

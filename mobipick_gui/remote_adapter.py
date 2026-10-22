@@ -319,6 +319,15 @@ class MainWindowRemoteAdapter(GuiAdapter):
                 'reason': f'docker stop failed for {", ".join(failed)}' if failed else '',
                 'button': self._describe_button(key),
             }
+        if (
+            key == 'auto_launch'
+            and action != 'stop'
+            and not getattr(self.window, '_auto_launch_running', False)
+        ):
+            refusal = self.window._auto_launch_start_refusal()
+            if refusal:
+                self.window._log_info(f'remote control: auto launch not started: {refusal}')
+                return {'accepted': False, 'reason': refusal, 'button': before}
         if not before['running']:
             blocked = self.window._start_blocked_reason(key)
             if blocked:

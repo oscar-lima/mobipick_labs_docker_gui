@@ -1804,3 +1804,141 @@ def test_config_button_stays_stopping_until_container_is_gone(monkeypatch):
     assert harness._stopping_tab_keys == set()
     assert visuals == ['red']
     assert 'tables' not in harness._active_config_button_configs
+
+
+def _stopping_guard_harness(monkeypatch, *, states, texts, stopping_tabs=()):
+    app = QApplication.instance() or QApplication([])
+    from PyQt5.QtWidgets import QPushButton
+
+    events = []
+    widgets = {key: QPushButton(text) for key, text in texts.items()}
+    harness = SimpleNamespace(
+        _toggle_states=dict(states),
+        _button_widgets=widgets,
+        _stopping_tab_keys=set(stopping_tabs),
+        _roscore_stopping=False,
+        _killing=False,
+        _auto_launch_running=False,
+        _config_button_order=['disc', 'gpt'],
+        _config_buttons={'disc': {'label': 'DISC'}, 'gpt': {'label': 'GPT'}},
+        auto_launch_button=QPushButton('Auto Launch'),
+        _app=app,
+        _auto_launch_label=lambda: 'Auto Launch',
+        _log_button_click=lambda *args: None,
+        _log_info=lambda text: events.append(('log', text)),
+        _toggle_auto_launch_stack=lambda: events.append('toggle'),
+    )
+    for name in (
+        '_get_button_widget',
+        '_guard_toggle_action',
+        '_stopping_process_keys',
+        '_auto_launch_start_refusal',
+        '_auto_launch_wizard_buttons',
+        '_on_auto_launch_toggle_clicked',
+    ):
+        setattr(harness, name, MethodType(getattr(MainWindow, name), harness))
+    monkeypatch.setattr(
+        main_window_module.QMessageBox,
+        'information',
+        lambda _parent, title, text: events.append(('box', title, text)),
+    )
+    app.processEvents()
+    return harness, events
+
+
+def test_auto_launch_start_refused_while_a_process_is_stopping(monkeypatch):
+    harness, events = _stopping_guard_harness(
+        monkeypatch,
+        states={'disc': 'yellow', 'gpt': 'red', 'auto_launch': 'red'},
+        texts={'disc': 'Stopping DISC...', 'gpt': 'Start GPT'},
+    )
+
+    harness._on_auto_launch_toggle_clicked()
+
+    assert 'toggle' not in events
+    boxes = [event for event in events if event[0] == 'box']
+    assert len(boxes) == 1 and boxes[0][1] == 'Please Wait'
+    assert 'DISC' in boxes[0][2] and 'GPT' not in boxes[0][2]
+    assert any(
+        event[0] == 'log' and 'not started' in event[1] and 'DISC' in event[1]
+        for event in events
+    )
+    assert harness._toggle_states['disc'] == 'yellow'
+
+
+def test_auto_launch_start_refused_while_a_tab_or_sim_stops(monkeypatch):
+    harness, events = _stopping_guard_harness(
+        monkeypatch,
+        states={'auto_launch': 'red'},
+        texts={},
+        stopping_tabs={'custom1'},
+    )
+    harness._killing = True
+
+    assert harness._stopping_process_keys() == ['custom1', 'sim']
+    harness._on_auto_launch_toggle_clicked()
+
+    assert 'toggle' not in events
+    assert 'Simulation' in [e for e in events if e[0] == 'box'][0][2]
+
+
+def test_auto_launch_starts_when_nothing_is_stopping(monkeypatch):
+    harness, events = _stopping_guard_harness(
+        monkeypatch,
+        states={'disc': 'yellow', 'gpt': 'green', 'auto_launch': 'red'},
+        texts={'disc': 'Starting DISC...', 'gpt': 'Stop GPT'},
+    )
+
+    assert harness._stopping_process_keys() == []
+    harness._on_auto_launch_toggle_clicked()
+
+    assert events == ['toggle']
+
+
+def test_auto_launch_stop_is_not_blocked_by_stopping_processes(monkeypatch):
+    harness, events = _stopping_guard_harness(
+        monkeypatch,
+        states={'disc': 'yellow', 'auto_launch': 'green'},
+        texts={'disc': 'Shutting down...'},
+    )
+    harness._auto_launch_running = True
+
+    harness._on_auto_launch_toggle_clicked()
+
+    assert events == ['toggle']
+
+
+def test_remote_auto_launch_start_refused_while_a_process_is_stopping(
+    monkeypatch,
+):
+    from mobipick_gui.remote_adapter import MainWindowRemoteAdapter
+
+    harness, events = _stopping_guard_harness(
+        monkeypatch,
+        states={'disc': 'yellow', 'auto_launch': 'red'},
+        texts={'disc': 'Stopping DISC...'},
+    )
+    harness._button_widgets['auto_launch'] = harness.auto_launch_button
+    harness.auto_launch_button.clicked.connect(
+        lambda: events.append('click') or harness._on_auto_launch_toggle_clicked()
+    )
+    harness.tasks = {}
+    harness._config_runs_on_host = lambda config: False
+    harness.button_args = lambda key: {}
+    harness.button_readiness = lambda key: {}
+    harness._start_blocked_reason = lambda key: None
+    adapter = MainWindowRemoteAdapter.__new__(MainWindowRemoteAdapter)
+    adapter.window = harness
+
+    result = adapter.press_button('auto_launch', 'start')
+
+    assert result['accepted'] is False
+    assert 'DISC' in result['reason']
+    assert 'click' not in events and 'toggle' not in events
+
+    harness._toggle_states['disc'] = 'red'
+    harness._button_widgets['disc'].setText('Start DISC')
+    result = adapter.press_button('auto_launch', 'start')
+
+    assert result['accepted'] is True
+    assert 'toggle' in events
