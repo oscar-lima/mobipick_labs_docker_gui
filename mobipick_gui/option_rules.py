@@ -46,6 +46,16 @@ button starts, so one button runs right in every mode::
           start_keyframe_node: false
       reason: the keyframe node runs on the robot PC
 
+A rule can grey out a whole dropdown while it matches. ``disable`` lists
+the toolbar or advanced argument names; the dropdown keeps its value, cannot
+be changed (also not over the remote API) and shows the ``reason`` under
+it::
+
+    - when:
+        remote_master: true
+      disable: [gui]
+      reason: sim only, the Gazebo window does not exist on the real robot
+
 State names are ``remote_master`` (true when the GUI uses a remote ROS
 master), ``world`` (the world_config dropdown), the name of every generic
 toolbar argument such as ``model_profile``, and ``running.<button key>``
@@ -84,6 +94,7 @@ class OptionRule:
     notice: str = ''
     clipboard: str = ''
     start_args: dict[str, tuple[tuple[str, str], ...]] = field(default_factory=dict)
+    disable: tuple[str, ...] = ()
 
     def _names(self, keys: tuple[str, ...], key: str) -> bool:
         if key in self.block_start_except:
@@ -156,6 +167,16 @@ class OptionRules:
             if key in rule.start_args and rule.matches(normalized)
             for pair in rule.start_args[key]
         ]
+
+    def disabled_options(self, state: dict) -> dict[str, str]:
+        """Return ``{argument name: reason}`` for the dropdowns rules grey out."""
+        normalized = {name: _text(value) for name, value in state.items()}
+        result: dict[str, str] = {}
+        for rule in self.rules:
+            if rule.disable and rule.matches(normalized):
+                for name in rule.disable:
+                    result.setdefault(name, rule.describe())
+        return result
 
     def invalid_options(
         self,
@@ -250,6 +271,8 @@ def parse_option_rules(data, path: Path | None = None) -> OptionRules:
         start_args = _start_args_map(
             item.get('start_args'), loaded.errors, index
         )
+        raw_disable = item.get('disable')
+        disable = _values(raw_disable) if raw_disable is not None else ()
         notice = str(item.get('notice') or '').strip()
         if remind_start and not notice:
             loaded.errors.append(f'rule {index}: remind_start needs "notice"')
@@ -257,11 +280,11 @@ def parse_option_rules(data, path: Path | None = None) -> OptionRules:
             continue
         if (
             not invalid and not only and not block_start and not remind_start
-            and not start_args
+            and not start_args and not disable
         ):
             loaded.errors.append(
                 f'rule {index}: needs "invalid", "only", "block_start", '
-                '"remind_start" or "start_args"'
+                '"remind_start", "start_args" or "disable"'
             )
             continue
         loaded.rules.append(
@@ -276,6 +299,7 @@ def parse_option_rules(data, path: Path | None = None) -> OptionRules:
                 notice=notice,
                 clipboard=str(item.get('clipboard') or '').strip(),
                 start_args=start_args,
+                disable=disable,
             )
         )
     return loaded

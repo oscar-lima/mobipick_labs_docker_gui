@@ -318,6 +318,19 @@ def _mark_invalid_combo_items(
         item.setToolTip(tooltip)
 
 
+def _mark_disabled_combo(combo: QComboBox, reason: str | None) -> None:
+    """Grey out the whole ``combo`` while a rule disables it, with ``reason`` in its tooltip and note line."""
+    combo.setEnabled(reason is None)
+    if combo.property('rule_description') is None:   # e.g. the world dropdown: its own tooltip is the description
+        combo.setProperty('rule_description', combo.toolTip())
+    description = str(combo.property('rule_description') or '')
+    combo.setToolTip('\n'.join(filter(None, (description, reason or ''))))
+    note = getattr(combo, 'rule_note', None)
+    if note is not None:
+        note.setText(reason or '')
+        note.setVisible(reason is not None)
+
+
 # button texts of a yellow toggle whose process is going down (not starting)
 STOPPING_TEXT_PREFIXES = ('stopping', 'shutting', 'closing')
 ADVANCED_COLUMN_WIDTH = 560   # px per option column of the Advanced Launch Options dialog (#264)
@@ -8700,6 +8713,7 @@ CMD ["bash"]
             value_input.addItems(options[slot])
             description = descriptions[slot]
             value_input.setToolTip(description)
+            value_input.setProperty('rule_description', description)
             for index, value in enumerate(options[slot]):
                 item = value_input.model().item(index)
                 if item is not None:
@@ -8725,6 +8739,12 @@ CMD ["bash"]
                     help_line.setStyleSheet('color: #777;')
                     help_line.setToolTip(description)
                     field_layout.addWidget(help_line)
+                rule_note = QLabel()   # why a rule greys this option out, e.g. sim only
+                rule_note.setWordWrap(True)
+                rule_note.setStyleSheet('color: #d08000;')
+                rule_note.setVisible(False)
+                field_layout.addWidget(rule_note)
+                value_input.rule_note = rule_note
                 field_layout.addStretch(1)   # spare height of the row goes below the help line, not into the selector
                 label = QLabel(f'{name}:')
                 label.setToolTip(description)
@@ -14933,6 +14953,16 @@ CMD ["bash"]
         }
         return rules.invalid_options(state, choices)
 
+    def _disabled_options(self) -> dict[str, str]:
+        """Return ``{dropdown: reason}`` for the dropdowns rules grey out now."""
+        rules = getattr(self, '_option_rules', None)
+        if rules is None or not rules.rules:
+            return {}
+        combos = MainWindow._option_rule_combos(self)
+        return rules.disabled_options(
+            MainWindow._option_rule_state(self, rules, combos)
+        )
+
     def _apply_option_rules(self, notify: bool = False) -> None:
         """Grey out invalid dropdown options and move off invalid choices.
 
@@ -14991,6 +15021,9 @@ CMD ["bash"]
                     switched = True
                 if not switched:
                     break
+            disabled = MainWindow._disabled_options(self)
+            for name, combo in MainWindow._option_rule_combos(self).items():
+                _mark_disabled_combo(combo, disabled.get(name))
         finally:
             self._applying_option_rules = False
         if notify and switches:
@@ -15009,6 +15042,7 @@ CMD ["bash"]
             self, '_generic_arg_value_descriptions', {}
         )
         invalid = MainWindow._invalid_options(self)
+        disabled = MainWindow._disabled_options(self)
         entries: list[dict] = []
         for slot in GENERIC_BUTTON_ARG_SLOTS:
             widget = inputs.get(slot)
@@ -15024,6 +15058,7 @@ CMD ["bash"]
                     'value': widget.currentText().strip(),
                     'options': [widget.itemText(i) for i in range(widget.count())],
                     'invalid': invalid.get(name, {}),
+                    'disabled': disabled.get(name, ''),
                     'buttons': [
                         key
                         for key, config in self._config_buttons.items()
@@ -15042,6 +15077,7 @@ CMD ["bash"]
                     'value': self._current_world(),
                     'options': [world_combo.itemText(i) for i in range(world_combo.count())],
                     'invalid': invalid.get('world', {}),
+                    'disabled': disabled.get('world', ''),
                     'buttons': sorted(
                         key
                         for key, config in self._config_buttons.items()
@@ -15076,6 +15112,8 @@ CMD ["bash"]
                     f'unknown argument {name!r}; known: {", ".join(entries) or "none"}'
                 )
             text = str(value).strip()
+            if entry['disabled']:
+                raise ValueError(f'{name} is disabled: {entry["disabled"]}')
             if text not in entry['options']:
                 raise ValueError(
                     f'{name!r} accepts {entry["options"]}, not {text!r}'

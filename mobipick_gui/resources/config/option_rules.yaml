@@ -6,3 +6,7 @@ rules:
       disc_mode: [cpu]
       anygrasp_mode: [real]
     reason: the real robot requires cic_tables, CPU DISC, and real AnyGrasp
+  - when:
+      remote_master: true
+    disable: [gui]
+    reason: sim only, the Gazebo window does not exist on the real robot

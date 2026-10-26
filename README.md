@@ -658,7 +658,8 @@ workspace-specific GUI code. `mobipick_gui/option_rules.py` always loads
 `resources/config/option_rules.yaml`, then loads `<profile stem>_rules.yaml`
 beside the button profile or `option_rules.yaml` in the same directory.
 The shared rules keep remote-master mode on `cic_tables`, `disc_mode=cpu`,
-and `anygrasp_mode=real` when those selectors are present. All invalid
+and `anygrasp_mode=real` when those selectors are present, and grey out the
+sim-only `gui` (Gazebo window) option there. All invalid
 selections are switched automatically and reported in one warning. For
 example, profile-specific rules can add other conditions:
 
@@ -690,6 +691,10 @@ rules:
     disc_ros:
       start_keyframe_node: false # appended as start_keyframe_node:='false'
   reason: the keyframe node runs on the robot PC
+- when:
+    remote_master: true
+  disable: [gui]                 # argument names; the whole dropdown greys out
+  reason: sim only, the Gazebo window does not exist on the real robot
 ```
 
 `when` conditions and the `invalid` / `only` lists name `world` or any generic
@@ -713,6 +718,10 @@ its rule holds, after the toolbar arguments, so one button runs correctly in
 simulation and on the real robot. The arguments are read when the button
 starts (a running process keeps what it started with) and show in the
 remote API's `full_command`.
+`disable` greys out whole argument dropdowns while its rule holds: each keeps
+its value, shows the `reason` under it (Advanced Launch Options) and in its
+tooltip, and `POST /args` refuses to change it; `GET /args` reports the reason
+as `disabled`.
 `running.*` conditions are read when a start or dropdown change is evaluated,
 not polled. Malformed rules are skipped and reported in the GUI log. The
 profile editor does not rewrite the rules file.
@@ -894,7 +903,7 @@ click with a wait without missing events.
 | `GET /status` | Workspace, image, world, cached roscore/sim state, buttons, tabs, shells, active dialog. |
 | `GET /buttons` | Toolbar buttons with `state` (`red` stopped, `green` running, `yellow` busy, `grey` unavailable), `tooltip`, `runs_on` (`host` or `container`), the log `tab` key, the toolbar `args` the button receives and the resulting `full_command`, plus readiness from the auto-launch estimates: `startup_seconds` (the plan's `duration_seconds`, `null` when the button has none), `started_at`, `ready_at`, `ready_in_s` and `ready` (running and past the estimate). |
 | `POST /buttons/{key}/click`, `/start`, `/stop` | Press a button. `start`/`stop` are idempotent. Body may contain `args` (`{"anygrasp_mode": "real"}`, selected before the press), `wait_for` (event names) and `timeout`. Keyed events (`button_state`, `button_ready`, `process_finished`) only match this button; waiting for `button_ready` on a button that is already running and past its estimate returns at once with `already_ready: true`. |
-| `GET /args`, `POST /args` | The launch argument selectors (generic `arg_N` slots from the button profile) and world: `name`, current `value`, `options`, `description`, `option_descriptions`, and applicable `buttons`. `POST` selects values by name (`{"anygrasp_mode": "real", "world": "moelk_tables"}`); unknown names or values are rejected. `invalid` maps choices forbidden by option rules to their reasons, and `POST` rejects them too. |
+| `GET /args`, `POST /args` | The launch argument selectors (generic `arg_N` slots from the button profile) and world: `name`, current `value`, `options`, `description`, `option_descriptions`, and applicable `buttons`. `POST` selects values by name (`{"anygrasp_mode": "real", "world": "moelk_tables"}`); unknown names or values are rejected. `invalid` maps choices forbidden by option rules to their reasons, and `POST` rejects them too; `disabled` is the reason a rule greys out the whole selector (empty otherwise), and `POST` refuses to change it. |
 | `GET /presence`, `POST /presence`, `DELETE /presence` | Declare that a client is using the GUI (`{"name": "<agent>", "ttl_s": 600, "note": ""}`; the name is chosen by the client, so any agent can use its own, and several may be present at once) or withdraw it. The first `POST` for a name returns a `token` that the `DELETE` must carry (`{"name": ..., "token": ...}`); a refresh by a namesake gets no token and its bye is refused with 409, so two agents that picked the same name cannot withdraw and clean up after each other. While a client is present the window icon glows bright and the GUI log records who is working. Presence is kept alive by activity, not by heartbeats: every request the client sends refreshes it (with several clients present, name yourself with the `X-Client-Name` header or a `client` field; an anonymous request refreshes the client present the longest, the one that also owns new processes), and so does a shell command it started that is still running or an `follow=1` stream it keeps open. Only `ttl_s` (default 10 min, max 30 min) of complete idleness lapses it. The server remembers every button, custom command, and shell the client started; when the client withdraws (without `"keep": true`) or lapses, the GUI stops those and logs the cleanup, so a crashed agent cannot leave the simulator running. Clients should not run a separate presence-refresh process: one that outlives its owner keeps a dead agent "present" for hours. |
 | `POST /reload` | Re-read `gui_settings.yaml` and the workspace button profile without restarting the GUI. Button commands, labels, tooltips and argument slots are picked up for the next press; running processes and their tabs are preserved. |
 | `GET /recording`, `POST /recording/{start\|pause\|resume\|stop}` | Screen recording state (`active`, `paused`, `segments`, `recorded_s`, `video_path`, `video_speedup_path`) and its control without Auto Launch. A recording started by a client is stopped when that client leaves. |

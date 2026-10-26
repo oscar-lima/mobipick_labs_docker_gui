@@ -110,7 +110,7 @@ def test_rules_file_is_found_beside_the_button_profile(tmp_path):
     profile = tmp_path / 'profile.yaml'
     profile.write_text('buttons: []\n')
     assert option_rules_path(profile) is None
-    assert len(load_option_rules(profile).rules) == 1
+    assert len(load_option_rules(profile).rules) == 2   # the shared file beside the GUI
 
     shared = tmp_path / 'option_rules.yaml'
     shared.write_text(yaml.safe_dump(REAL_ROBOT_RULES))
@@ -119,7 +119,7 @@ def test_rules_file_is_found_beside_the_button_profile(tmp_path):
     specific = tmp_path / 'profile_rules.yaml'
     specific.write_text(yaml.safe_dump(REAL_ROBOT_RULES))
     assert option_rules_path(profile) == specific
-    assert len(load_option_rules(profile).rules) == 2
+    assert len(load_option_rules(profile).rules) == 3
 
 
 def test_remote_master_switches_all_robot_options_in_one_warning(
@@ -450,6 +450,60 @@ def test_start_reminders_share_one_window(monkeypatch, tmp_path):
         window._show_start_reminders('disc_ros')
         assert window._start_reminder_dialog is not first
         assert [item[2] for item in window._start_reminder_dialog.items()] == ['disc_keyframe']
+    finally:
+        window.close()
+        app.processEvents()
+
+
+SIM_ONLY_GUI = {
+    'when': {'remote_master': True},
+    'disable': ['gui'],
+    'reason': 'sim only, the Gazebo window does not exist on the real robot',
+}
+
+
+def test_disable_rule_greys_out_named_dropdowns_while_it_matches():
+    rules = parse_option_rules({'rules': [SIM_ONLY_GUI, {'disable': None}]})
+
+    assert len(rules.rules) == 1
+    assert '"disable"' in rules.errors[0]
+    assert rules.disabled_options({'remote_master': True}) == {
+        'gui': SIM_ONLY_GUI['reason']
+    }
+    assert rules.disabled_options({'remote_master': False}) == {}
+
+
+def test_shared_rules_grey_out_gui_on_the_real_robot(monkeypatch, tmp_path):
+    app, window = _create_window(monkeypatch, tmp_path)
+    try:
+        window._option_rules = load_option_rules(None)
+        window._button_layout = [{
+            'key': 'sim', 'arg_1_name': 'gui', 'arg_1_options': ['true', 'false'],
+            'arg_1_advanced': True, 'arg_1_description': 'Open the Gazebo window',
+        }]
+        window._refresh_generic_arg_controls()
+        combo = window._generic_arg_inputs[1]
+        assert combo.isEnabled() and combo.rule_note.isHidden()
+
+        window.remote_master_checkbox.setChecked(True)
+
+        assert not combo.isEnabled()
+        assert combo.rule_note.text().startswith('sim only')
+        assert not combo.rule_note.isHidden()
+        assert 'Open the Gazebo window' in combo.toolTip()
+        assert 'sim only' in combo.toolTip()
+        assert combo.currentText() == 'true'   # greyed out, the value stays
+        gui = next(e for e in window.generic_args() if e['name'] == 'gui')
+        assert gui['disabled'].startswith('sim only')
+        with pytest.raises(ValueError, match='gui is disabled: sim only'):
+            window.set_generic_args({'gui': 'false'})
+
+        window.remote_master_checkbox.setChecked(False)
+
+        assert combo.isEnabled() and combo.rule_note.isHidden()
+        assert combo.toolTip() == 'Open the Gazebo window'
+        window.set_generic_args({'gui': 'false'})
+        assert combo.currentText() == 'false'
     finally:
         window.close()
         app.processEvents()
