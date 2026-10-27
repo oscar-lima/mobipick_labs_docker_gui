@@ -110,7 +110,7 @@ def test_rules_file_is_found_beside_the_button_profile(tmp_path):
     profile = tmp_path / 'profile.yaml'
     profile.write_text('buttons: []\n')
     assert option_rules_path(profile) is None
-    assert len(load_option_rules(profile).rules) == 2   # the shared file beside the GUI
+    assert len(load_option_rules(profile).rules) == 4   # the shared file beside the GUI
 
     shared = tmp_path / 'option_rules.yaml'
     shared.write_text(yaml.safe_dump(REAL_ROBOT_RULES))
@@ -119,7 +119,7 @@ def test_rules_file_is_found_beside_the_button_profile(tmp_path):
     specific = tmp_path / 'profile_rules.yaml'
     specific.write_text(yaml.safe_dump(REAL_ROBOT_RULES))
     assert option_rules_path(profile) == specific
-    assert len(load_option_rules(profile).rules) == 3
+    assert len(load_option_rules(profile).rules) == 5
 
 
 def test_remote_master_switches_all_robot_options_in_one_warning(
@@ -507,3 +507,15 @@ def test_shared_rules_grey_out_gui_on_the_real_robot(monkeypatch, tmp_path):
     finally:
         window.close()
         app.processEvents()
+
+
+def test_shared_rules_grey_out_every_sim_only_option_on_the_real_robot():
+    rules = load_option_rules(None)
+
+    disabled = rules.disabled_options({'remote_master': True})
+
+    assert set(disabled) == {
+        'gui', 'num_robots', 'use_ur_polished_kinematics'
+    }
+    assert all(reason.startswith('sim only, ') for reason in disabled.values())
+    assert rules.disabled_options({'remote_master': False}) == {}

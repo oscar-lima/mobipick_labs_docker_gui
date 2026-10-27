@@ -659,7 +659,8 @@ workspace-specific GUI code. `mobipick_gui/option_rules.py` always loads
 beside the button profile or `option_rules.yaml` in the same directory.
 The shared rules keep remote-master mode on `cic_tables`, `disc_mode=cpu`,
 and `anygrasp_mode=real` when those selectors are present, and grey out the
-sim-only `gui` (Gazebo window) option there. All invalid
+sim-only demo_sim options there: `gui` (Gazebo window), `num_robots` and
+`use_ur_polished_kinematics`. All invalid
 selections are switched automatically and reported in one warning. For
 example, profile-specific rules can add other conditions:
 

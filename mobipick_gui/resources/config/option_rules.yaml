@@ -10,3 +10,11 @@ rules:
       remote_master: true
     disable: [gui]
     reason: sim only, the Gazebo window does not exist on the real robot
+  - when:
+      remote_master: true
+    disable: [num_robots]
+    reason: sim only, the real robot is one Mobipick; several robots exist only in the simulation
+  - when:
+      remote_master: true
+    disable: [use_ur_polished_kinematics]
+    reason: sim only, it picks the IK solver of the simulated MoveIt; the real robot's MoveIt runs on the robot PC
