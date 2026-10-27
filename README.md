@@ -630,7 +630,7 @@ Set `arg_N_advanced: true` to place a selector in the advanced dialog.
 Set `arg_N_advanced: false` to keep a selector on the main window, including
 one that defaults to advanced placement. `arg_N_description` is optional
 multi-line help text; `arg_N_option_descriptions` maps selectable values to
-their tooltips. A profile can omit either field. The description appears on
+their tooltips. `arg_N_old_names` lists former names of the option (a renamed option): a value saved in the user's settings under one of them is still applied, so a rename does not reset the saved choice. A profile can omit any of these fields. The description appears on
 the selector and its label, and its first line appears below advanced options.
 The remote `GET /args` response includes `description` and
 `option_descriptions`.

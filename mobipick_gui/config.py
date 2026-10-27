@@ -701,6 +701,9 @@ def _normalize_button_entry(item: dict) -> dict | None:
             for value in raw_options
             if str(value).strip()
         ))
+        normalized[f'arg_{slot}_old_names'] = normalize_old_names(
+            item.get(f'arg_{slot}_old_names')
+        )
         normalized[f'arg_{slot}_applies'] = bool(
             item.get(f'arg_{slot}_applies', False)
         )
@@ -722,6 +725,24 @@ def _normalize_button_entry(item: dict) -> dict | None:
             and str(description).strip()
         }
     return normalized
+
+
+def normalize_old_names(raw) -> list[str]:
+    """Return the former names of a launch option as a clean list (a comma separated string works too)."""
+    if isinstance(raw, str):
+        raw = raw.split(',')
+    if not isinstance(raw, (list, tuple)):
+        return []
+    return list(dict.fromkeys(str(value).strip() for value in raw if str(value).strip()))
+
+
+def saved_option_value(saved_entry, name: str, old_names=()) -> str:
+    """Return the value saved for a launch option, also when it was saved under a former name of it."""
+    if not isinstance(saved_entry, dict):
+        return ''
+    if saved_entry.get('name') == name or saved_entry.get('name') in old_names:
+        return str(saved_entry.get('value') or '')
+    return ''
 
 
 def ensure_required_button_layout(entries: list[dict]) -> list[dict]:
@@ -871,6 +892,9 @@ def _button_entry_for_save(entry: dict) -> dict:
             ))
             if normalized_options:
                 saved[f'arg_{slot}_options'] = normalized_options
+        old_names = normalize_old_names(entry.get(f'arg_{slot}_old_names'))
+        if old_names:
+            saved[f'arg_{slot}_old_names'] = old_names
         if bool(entry.get(f'arg_{slot}_applies')):
             saved[f'arg_{slot}_applies'] = True
         if arg_name and entry.get(f'arg_{slot}_advanced') is not None:
@@ -920,6 +944,7 @@ def _strip_unused_arg_definitions(saved: list[dict]) -> list[dict]:
                 entry.pop(options_field, None)
                 entry.pop(advanced_field, None)
                 entry.pop(f'arg_{slot}_description', None)
+                entry.pop(f'arg_{slot}_old_names', None)
                 entry.pop(f'arg_{slot}_option_descriptions', None)
     return saved
 

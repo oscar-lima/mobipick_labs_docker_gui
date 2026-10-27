@@ -826,3 +826,21 @@ default:
         'host_to_container': [],
         'container_to_host': [],
     }
+
+
+def test_saved_option_value_accepts_a_former_option_name():
+    from mobipick_gui.config import saved_option_value
+
+    saved = {'name': 'mtc_cable_constraints', 'value': 'false'}
+    assert saved_option_value(saved, 'mtc_cable_plan_check', ['mtc_cable_constraints']) == 'false'
+    assert saved_option_value(saved, 'mtc_cable_plan_check', []) == ''
+    assert saved_option_value({'name': 'mtc_cable_plan_check', 'value': 'true'}, 'mtc_cable_plan_check') == 'true'
+    assert saved_option_value('broken', 'x', ['y']) == ''
+
+
+def test_old_names_survive_profile_normalization_and_saving():
+    from mobipick_gui.config import normalize_old_names
+
+    assert normalize_old_names(' a, b ,a,') == ['a', 'b']
+    assert normalize_old_names(['a', '', 'a']) == ['a']
+    assert normalize_old_names(None) == []

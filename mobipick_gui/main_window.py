@@ -90,6 +90,7 @@ from .ansi import CSI_SEQ_RE, OSC_SEQ_RE, ansi_to_html
 from .async_tasks import AsyncTaskRunner
 from .bug_report import BugReportDialog
 from .config import (
+    saved_option_value,
     BUTTON_CONFIG_FILE,
     CONFIG,
     DEFAULT_BUTTON_COMMANDS,
@@ -8633,6 +8634,18 @@ CMD ["bash"]
             )
             for slot in GENERIC_BUTTON_ARG_SLOTS
         }
+        old_names = {
+            slot: next(
+                (
+                    list(entry.get(f'arg_{slot}_old_names') or [])
+                    for entry in self._button_layout
+                    if isinstance(entry, dict)
+                    and entry.get(f'arg_{slot}_old_names')
+                ),
+                [],
+            )
+            for slot in GENERIC_BUTTON_ARG_SLOTS
+        }
         options = {
             slot: next(
                 (
@@ -8703,12 +8716,9 @@ CMD ["bash"]
                 else ''
             )
             if not previous_value:
-                saved_entry = saved_values.get(str(slot), {})
-                if (
-                    isinstance(saved_entry, dict)
-                    and saved_entry.get('name') == name
-                ):
-                    previous_value = str(saved_entry.get('value') or '')
+                previous_value = saved_option_value(
+                    saved_values.get(str(slot), {}), name, old_names[slot]
+                )
             value_input = QComboBox()
             value_input.addItems(options[slot])
             description = descriptions[slot]
