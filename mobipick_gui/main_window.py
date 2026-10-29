@@ -4635,6 +4635,15 @@ class MainWindow(QMainWindow):
         menu.installEventFilter(self)
         return menu
 
+    def event(self, event):  # noqa: N802 - Qt API
+        if event.type() == QEvent.DeferredDelete:
+            # Qt destroys the tab processes together with the window, and a process that still runs then reports
+            # finished from inside that destruction, into slots of this half-destroyed window: stop them first
+            self._exit_in_progress = True
+            for tab in list(getattr(self, 'tasks', {}).values()):
+                tab.stop_for_shutdown()
+        return super().event(event)
+
     def eventFilter(self, watched, event):  # noqa: N802 - Qt API
         if (
             event.type() == QEvent.KeyPress

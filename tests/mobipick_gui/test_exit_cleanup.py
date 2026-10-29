@@ -150,3 +150,28 @@ def test_exit_cleanup_cancels_background_sequence_before_deleting_process():
     assert process not in window._bg_procs
     app.processEvents()
     window.deleteLater()
+
+
+def test_a_window_deleted_while_its_tab_processes_run_calls_none_of_their_slots(monkeypatch, tmp_path):
+    from PyQt5.QtCore import QCoreApplication, QEvent
+
+    from mobipick_gui.process_tab import ProcessTab
+    from test_remote_ros_master import _create_window
+
+    finished = []
+    monkeypatch.setattr(MainWindow, 'on_task_finished', lambda self, *args: finished.append(args))
+    app, window = _create_window(monkeypatch, tmp_path)
+    tab = ProcessTab('long_task', 'Long task', window, closable=False)
+    window.tasks['long_task'] = tab
+    tab.start_shell('sleep 30')
+    assert tab.proc.waitForStarted(3000)
+    drained = []
+    monkeypatch.setattr(ProcessTab, '_drain_remaining', lambda self, *args: drained.append(self.key))
+
+    # Qt destroys the window's processes with it; one that still runs reports finished from inside that destruction
+    window.deleteLater()
+    QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+    app.processEvents()
+
+    assert finished == []
+    assert drained == []
