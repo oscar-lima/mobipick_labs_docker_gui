@@ -8,6 +8,20 @@ from typing import Any, Callable
 from PyQt5.QtCore import QObject, pyqtSignal
 
 
+class _Liveness:
+    """Whether the runner may still be signalled, shared with its task threads (they must not keep the runner's
+    lifetime). The lock makes a thread's emit and the runner's destruction take turns."""
+
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.alive = True
+        self.owner = threading.get_ident()   # the runner's own (GUI) thread
+
+    def end(self, *_args) -> None:
+        with self.lock:
+            self.alive = False
+
+
 class AsyncTaskRunner(QObject):
     """Run host work on daemon threads and deliver results through Qt."""
 
@@ -24,6 +38,10 @@ class AsyncTaskRunner(QObject):
         ] = {}
         self._completed.connect(self._deliver)
         self._posted.connect(lambda function: function())
+        # a task that ends after the window (and with it this runner) was closed or deleted is dropped; emitting
+        # into a runner that is being destroyed on the GUI thread could crash the process
+        self._liveness = _Liveness()
+        self.destroyed.connect(self._liveness.end)
 
     def submit(
         self,
@@ -42,7 +60,7 @@ class AsyncTaskRunner(QObject):
                 result, error = function(), None
             except BaseException as exc:  # noqa: BLE001 - returned to GUI callback
                 result, error = None, exc
-            self._completed.emit(task_id, result, error)
+            self._emit_if_alive('_completed', task_id, result, error)
 
         threading.Thread(
             target=run,
@@ -52,8 +70,26 @@ class AsyncTaskRunner(QObject):
         return task_id
 
     def post(self, function: Callable[[], None]) -> None:
-        """Queue a callable on the object's Qt thread."""
-        self._posted.emit(function)
+        """Queue a callable on the object's Qt thread (dropped once the runner is closed or gone)."""
+        self._emit_if_alive('_posted', function)
+
+    def _emit_if_alive(self, signal: str, *args) -> None:
+        """Emit ``signal`` (looked up only here: on a deleted runner even the lookup fails) unless the runner is
+        closed or gone."""
+        liveness = self._liveness
+        if threading.get_ident() == liveness.owner:
+            # the runner's own thread cannot destroy it meanwhile; no lock, so a slot Qt calls directly here may
+            # close the window or post again
+            if liveness.alive:
+                getattr(self, signal).emit(*args)
+            return
+        with liveness.lock:
+            if not liveness.alive:
+                return
+            try:
+                getattr(self, signal).emit(*args)
+            except RuntimeError:   # the wrapper was marked deleted just before ``destroyed`` cleared the flag
+                pass
 
     def _deliver(self, task_id: int, result: object, error: object) -> None:
         callbacks = self._callbacks.pop(task_id, None)
@@ -71,6 +107,7 @@ class AsyncTaskRunner(QObject):
         """Reject new work; running jobs finish without blocking the caller."""
         self._closed = True
         self._callbacks.clear()
+        self._liveness.end()
 
 
 __all__ = ['AsyncTaskRunner']

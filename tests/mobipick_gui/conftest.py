@@ -41,3 +41,19 @@ def _no_desktop_glow(monkeypatch):
     from mobipick_gui.window_control import GnomeAppGlow
 
     monkeypatch.setattr(GnomeAppGlow, '_call', lambda self, method, *args: None)
+
+
+@pytest.fixture(autouse=True)
+def _finish_host_tasks():
+    """Deliver each test's background host work (mobipick-host-task threads, e.g. the docker ps a closing window
+    starts) within that test: a result that reaches a closed test window during a later test can crash the run."""
+    yield
+    import threading
+    tasks = [thread for thread in threading.enumerate() if thread.name.startswith('mobipick-host-task-')]
+    for thread in tasks:
+        thread.join(10)
+    if tasks and 'PyQt5.QtWidgets' in sys.modules:
+        from PyQt5.QtWidgets import QApplication
+        app = QApplication.instance()
+        if app is not None:
+            app.processEvents()
