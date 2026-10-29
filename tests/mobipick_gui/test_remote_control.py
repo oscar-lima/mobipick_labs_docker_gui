@@ -455,6 +455,35 @@ def test_shell_session_rejects_concurrent_commands_and_supports_background_polli
 
 
 @pytestmark_bash
+def test_shell_session_never_shows_the_end_marker_blank_line_when_bash_writes_it_alone():
+    # bash writes the newline in front of the end marker as a write of its own, so a busy reader can get it alone
+    session = _local_shell()
+    try:
+        record = session.run('sleep 30')
+
+        def texts():
+            lines, _, _ = session.lines(since=record.first_seq)
+            return [entry['text'] for entry in lines]
+
+        session._ingest('late\n')
+        session._ingest('\n')
+        assert texts() == ['late']
+        session._ingest(f'__MPRC_END_{record.token}__ 0\n')
+        assert not record.running and record.exit_code == 0
+        assert texts() == ['late']
+
+        record = session.run('sleep 30')
+        session._ingest('late\n')
+        session._ingest('\n')
+        session._ingest('\n')
+        assert texts() == ['late', '']
+        session._ingest(f'__MPRC_END_{record.token}__ 0\n')
+        assert texts() == ['late', '']
+    finally:
+        session.close(wait=False)
+
+
+@pytestmark_bash
 @pytest.mark.skipif(not (shutil.which('pkill') or shutil.which('pgrep')), reason='pkill/pgrep required')
 def test_shell_session_interrupt_stops_foreground_command():
     session = _local_shell()

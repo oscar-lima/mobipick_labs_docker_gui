@@ -438,6 +438,7 @@ class RemoteShellSession:
         self._lines: Deque[tuple[int, str]] = deque(maxlen=max(100, int(max_lines)))
         self._line_seq = 0
         self._partial = ''
+        self._held: list[str] = []
         self._commands: dict[int, ShellCommand] = {}
         self._command_counter = 0
         self._current: ShellCommand | None = None
@@ -538,11 +539,17 @@ class RemoteShellSession:
         else:
             self._partial = parts.pop() if parts else ''
             complete = parts
+        complete = self._held + complete
+        self._held = []
         if not complete:
             return
         visible: list[str] = []
         finished: list[ShellCommand] = []
         with self._cond:
+            if not final and self._current is not None and clean_output_line(complete[-1]) == '':
+                # bash writes the newline in front of the end marker on its own, so a blank last line may be that
+                # newline: keep it back until the next output shows whether the end marker follows and drops it
+                self._held = [complete.pop()]
             for raw in complete:
                 line = clean_output_line(raw)
                 pid_match = _PID_MARKER_RE.match(line)
