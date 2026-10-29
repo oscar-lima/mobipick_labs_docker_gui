@@ -26,6 +26,7 @@ import yaml
 from PyQt5.QtCore import (
     QEvent,
     QIODevice,
+    QObject,
     QPoint,
     QProcess,
     QProcessEnvironment,
@@ -17193,6 +17194,13 @@ CMD ["bash"]
         if self._exit_in_progress:
             return
         self._exit_in_progress = True
+        # The application-wide event filter (Ctrl+W, Esc in the option search) has nothing left to do: PyQt wraps
+        # every object that gets any event for it, also widgets in the middle of their destruction, so a window that
+        # keeps filtering while it and its children go away (and in the test suite, dozens of closed windows) can
+        # crash the process.
+        app_instance = QApplication.instance()
+        if app_instance and isinstance(self, QObject):
+            app_instance.removeEventFilter(self)
         # Clear the shell-owned dock halo before any shutdown work that may
         # wait on child processes.  Otherwise the icon can remain green while
         # the main window is already hidden.
