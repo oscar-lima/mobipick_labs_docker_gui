@@ -785,8 +785,11 @@ plain `options` of a preset or a remote request cannot get around this: a value
 that an unticked careful feature or mode sets is refused and reported. The same
 holds for single options: `POST /args` refuses such a value (HTTP 400, nothing
 selected), and choosing it in a toolbar or Advanced Launch Options dropdown puts
-the dropdown back with a note that moves on its own and blocks nothing. The
-option rules still have the last word. The Features dialog is a top-level
+the dropdown back with a note that moves on its own and blocks nothing. When
+**Use remote ROS master** gets checked, every option a careful feature or mode
+set (for example carried over from the sim) goes back to its off value; each
+switch is logged and listed in such a note. The option rules still have the last
+word. The Features dialog is a top-level
 window of its own, so it can be moved aside from the main window.
 
 Without a remembered preset, loading the GUI moves the saved choices to the

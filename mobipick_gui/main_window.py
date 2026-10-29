@@ -9676,6 +9676,8 @@ CMD ["bash"]
         self._remote_master_enabled_value = checked
         self.remote_master_input.setEnabled(checked)
         self._clear_remote_ros_cleanup_offer()
+        if checked:
+            MainWindow._switch_careful_off(self)
         self._apply_option_rules(notify=True)
         self._apply_env_to_all_tabs()
         self._update_buttons()
@@ -15309,8 +15311,33 @@ CMD ["bash"]
             MainWindow._show_careful_notice(self, reason)
         MainWindow._apply_option_rules(self, True)
 
+    def _switch_careful_off(self) -> list[str]:
+        """On the switch to the real robot: every option a careful feature or mode set (e.g. carried over from the sim)
+        goes to its off value, each logged and listed in one non-modal note; a tick in the Features window switches one
+        on again there. Returns the messages."""
+        features = getattr(self, '_features', None)
+        if not features:
+            return []
+        entries = {entry['name']: entry for entry in self.generic_args()}
+        inputs = getattr(self, '_generic_arg_inputs', {})
+        values = {name: entry['value'] for name, entry in entries.items()}
+        messages: list[str] = []
+        for name, (off, owner) in sorted(feature_sets.careful_off_values(features, values).items()):
+            entry = entries[name]
+            if entry['slot'] == 'world' or off not in entry['options']:
+                continue
+            inputs[entry['slot']].setCurrentIndex(entry['options'].index(off))
+            messages.append(f'{name}={values[name]} switched to {off} (careful: {owner})')
+        for message in messages:
+            self._log_info(f'real robot: {message}')
+        if messages:
+            MainWindow._show_careful_notice(self, 'on the real robot careful features start off; switched off: '
+                                            + '; '.join(messages) + '. A tick in the Features window (it asks first) '
+                                            'switches one on again')
+        return messages
+
     def _show_careful_notice(self, reason: str) -> None:
-        """Explain a refused careful value in a top-level note without a parent: it moves independently of the main
+        """Show a careful-feature note in a top-level window without a parent: it moves independently of the main
         window and blocks nothing."""
         box = QMessageBox(QMessageBox.Warning, 'Careful feature on the real robot', reason[:1].upper() + reason[1:] + '.',
                           QMessageBox.Ok, None)

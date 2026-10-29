@@ -1,6 +1,7 @@
 import yaml
 
 from mobipick_gui.features import (
+    careful_off_values,
     Preset,
     Selection,
     careful_turned_on,
@@ -179,3 +180,12 @@ def test_features_and_presets_load_beside_the_profile_and_user_presets_win(tmp_p
     assert presets['sim-full'].user and presets['sim-full'].features_on == ('padding',)
     assert (user / 'real-safe.yaml').is_file()
     assert len(errors) == 1 and 'target must be sim or real' in errors[0]
+
+
+def test_careful_off_values_name_the_off_value_of_every_careful_value_that_is_set():
+    features = parse_features(FEATURES)
+    values = {'skip_untangle': 'true', 'pruning': 'true', 'box_padding': '0.005', 'align_jaw': 'true'}
+    assert careful_off_values(features, values) == {
+        'skip_untangle': ('false', 'cable_aware'), 'pruning': ('false', 'cable_aware'),
+        'box_padding': ('0.01', 'padding')}   # the safe jaw stays
+    assert careful_off_values(features, {'skip_untangle': 'false', 'box_padding': '0.01'}) == {}

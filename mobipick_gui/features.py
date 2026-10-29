@@ -428,6 +428,26 @@ def careful_option_values(features: Features, allowed: set[str]) -> dict[tuple[s
     return owners
 
 
+def careful_off_values(features: Features, values: dict[str, str]) -> dict[str, tuple[str, str]]:
+    """name -> (off value, owner key) for every current value (``values``) that a careful feature or mode sets: the
+    feature's off value, for a careful mode the real robot's default mode's value. Options without an off value of
+    their own are left out."""
+    result: dict[str, tuple[str, str]] = {}
+    for key, feature in features.features.items():
+        if feature.careful:
+            for name, value in feature.on.items():
+                if values.get(name) == str(value) and name in feature.off:
+                    result.setdefault(name, (str(feature.off[name]), key))
+    for group, modes in features.modes.items():
+        default = modes.get(features.default_mode(group))
+        for key, mode in modes.items():
+            if mode.careful and default is not None and not default.careful:
+                for name, value in mode.sets.items():
+                    if values.get(name) == str(value) and name in default.sets:
+                        result.setdefault(name, (str(default.sets[name]), key))
+    return result
+
+
 def gate_careful_options(features: Features, values: dict[str, str], gated: dict[str, str],
                          allowed: set[str]) -> tuple[dict[str, str], dict[str, dict[str, str]]]:
     """The final argument values with the careful gate applied to plain options too: a value a careful feature or mode

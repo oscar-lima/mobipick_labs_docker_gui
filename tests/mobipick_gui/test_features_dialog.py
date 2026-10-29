@@ -42,6 +42,16 @@ def _window(monkeypatch, tmp_path, rules=None):
     return app, window
 
 
+def _finish_host_tasks(app):
+    """Let the host threads a remote-master switch started end before the window goes: a thread that reports into a
+    window being torn down can crash the test process."""
+    import threading
+    for thread in threading.enumerate():
+        if thread.name.startswith('mobipick-host-task-'):
+            thread.join(10)
+    app.processEvents()
+
+
 def _values(window):
     return {entry['name']: entry['value'] for entry in window.generic_args() if entry['name'] != 'world'}
 
@@ -289,5 +299,30 @@ def test_remote_args_and_dropdowns_cannot_switch_careful_features_on_on_the_real
         adapter.set_args({'box_padding': '0.01'})   # off is always allowed
         assert _values(window)['box_padding'] == '0.01'
     finally:
+        _finish_host_tasks(app)
+        window.close()
+        app.processEvents()
+
+
+def test_switching_to_the_real_robot_switches_careful_values_from_the_sim_off(monkeypatch, tmp_path):
+    from PyQt5.QtCore import Qt
+    monkeypatch.setattr('mobipick_gui.main_window.save_user_config_update', lambda updates: {})
+    app, window = _window(monkeypatch, tmp_path)
+    try:
+        window.set_generic_args({'skip_untangle': 'true', 'box_padding': '0.005', 'align_jaw': 'true',
+                                 'cable_monitor': 'true'})   # the sim: careful ones on
+        window.remote_master_checkbox.setChecked(True)
+        assert _values(window) == {'skip_untangle': 'false', 'align_jaw': 'true', 'narrow_side': _values(window)[
+            'narrow_side'], 'box_padding': '0.01', 'cable_monitor': 'true'}   # safe ones and plain options stay
+        assert 'box_padding=0.005 switched to 0.01 (careful: padding)' in window._careful_notice.text()
+        note = window._careful_notice
+        assert note.parent() is None and note.windowModality() == Qt.NonModal and note.isVisible()
+        assert 'careful features start off' in note.text() and 'Features window' in note.text()
+        note.close()
+
+        window.remote_master_checkbox.setChecked(False)   # back to the sim: nothing switches on by itself
+        assert _values(window)['box_padding'] == '0.01' and _values(window)['skip_untangle'] == 'false'
+    finally:
+        _finish_host_tasks(app)
         window.close()
         app.processEvents()
