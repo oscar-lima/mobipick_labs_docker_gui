@@ -515,6 +515,19 @@ def test_shell_session_exit_marks_session_closed():
 
 
 @pytestmark_bash
+def test_shell_session_close_returns_after_the_exit_is_reported():
+    exited = []
+
+    def on_exit(session):
+        time.sleep(0.2)
+        exited.append(session.id)
+
+    session = _local_shell(on_exit=on_exit)
+    session.close()
+    assert exited == [1]
+
+
+@pytestmark_bash
 def test_shell_session_close_does_not_block_the_caller():
     # A shell still running a foreground command ignores the "exit" and has
     # to be terminated after the timeout; the caller (the GUI thread when a

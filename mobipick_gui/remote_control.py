@@ -797,9 +797,12 @@ class RemoteShellSession:
                         self.proc.kill()
                     except Exception:
                         pass
-            # The reader thread reports the exit code once it sees EOF; a
-            # process that had to be killed may leave it hanging, so the
-            # session counts as closed from here on either way.
+            # The reader thread reports the exit (code, exit callback) once it
+            # has read the last output: give it a moment, so a caller that
+            # waits for the close sees the exit reported. A process that had to
+            # be killed may leave it hanging, so the session counts as closed
+            # from here on either way.
+            self._reader.join(timeout=1.0)
             with self._cond:
                 self._closed = True
                 self._cond.notify_all()
