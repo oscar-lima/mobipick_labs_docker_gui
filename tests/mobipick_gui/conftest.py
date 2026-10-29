@@ -14,6 +14,7 @@ D-Bus glow client is stubbed for every test so no call reaches GNOME Shell.
 """
 from __future__ import annotations
 
+import gc
 import os
 import sys
 import tempfile
@@ -29,6 +30,13 @@ if 'mobipick_gui.config' in sys.modules:  # pragma: no cover - import order guar
 TEST_CONFIG_HOME = tempfile.mkdtemp(prefix='mobipick-gui-tests-config-')
 os.environ['XDG_CONFIG_HOME'] = TEST_CONFIG_HOME
 
+# Each test builds real windows and drops them; they are cyclic garbage, so the garbage collector frees them,
+# and it runs in whichever thread happens to allocate at that moment: a host-task thread, a remote API request
+# thread or the main thread in the middle of a later test. Destroying Qt widgets outside the Qt thread, or in the
+# middle of another test's Qt calls, corrupts memory and crashes the run at a random later place. Automatic
+# collection is off for the suite; ``_collect_test_garbage`` collects after each test, on the main thread.
+gc.disable()
+
 
 @pytest.fixture(autouse=True)
 def _no_desktop_glow(monkeypatch):
@@ -41,6 +49,14 @@ def _no_desktop_glow(monkeypatch):
     from mobipick_gui.window_control import GnomeAppGlow
 
     monkeypatch.setattr(GnomeAppGlow, '_call', lambda self, method, *args: None)
+
+
+@pytest.fixture(autouse=True)
+def _collect_test_garbage():
+    """Free the windows a test dropped at its own teardown, on the main thread (automatic collection is off). Defined
+    before ``_finish_host_tasks``, so it runs after that one has delivered the test's host tasks."""
+    yield
+    gc.collect()
 
 
 @pytest.fixture(autouse=True)
