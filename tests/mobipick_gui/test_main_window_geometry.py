@@ -574,7 +574,7 @@ def test_long_entries_do_not_pin_a_combo_to_a_huge_minimum_width():
     app = QApplication.instance() or QApplication([])
     combo = QComboBox()
     combo.addItem(
-        'ozkrelo/x_mobipick_labs:local_gpt_from_oscar_user  [workspace match]'
+        'ozkrelo/x_mobipick_labs:local_gpt_from_host_user  [workspace match]'
     )
     natural = combo.sizeHint().width()
 

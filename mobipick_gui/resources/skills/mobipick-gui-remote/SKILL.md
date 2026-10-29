@@ -421,7 +421,7 @@ the evidence snapshots and returns when the agent has spoken and gone quiet.
 
 ```bash
 # in a remote shell, after starting the recorder of section 8; wait:false, then follow the log
-rosrun mobipick_gpt agent_experiment.py 'Grab the sugar box from table 1 and insert it into the box on table 2.' --log /home/oscar/ros_ws/claude_tmp/run.log
+rosrun mobipick_gpt agent_experiment.py 'Grab the sugar box from table 1 and insert it into the box on table 2.' --log "$HOME"/ros_ws/claude_tmp/run.log
 ```
 
 **Take what the agent says with a pinch of salt**: it sometimes hallucinates
