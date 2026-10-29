@@ -916,7 +916,7 @@ click with a wait without missing events.
 | `GET /dialogs`, `POST /dialogs/dismiss` | Inspect or close the active modal dialog (`{"button": "Continue"}`, `accept`, `reject`). |
 | `POST /command` | Run text through the GUI custom command box. |
 | `POST /shell` | Open a shell session (`{"name", "stream", "root", "robot"}`); blocks until ready. The ROS tool container is the default; `"robot": true` ssh-es onto the robot PC instead (remote ROS master mode only) to debug that machine. `GET /status` reports the choice under `shell`. |
-| `POST /shell/{id}/exec` | Run a command: `{"command", "stream", "tail", "grep", "max_lines", "timeout", "wait"}`. |
+| `POST /shell/{id}/exec` | Run a command: `{"command", "stream", "tail", "grep", "max_lines", "timeout", "wait"}`. In a local container shell the command runs against the GUI's current ROS master (a shell opened before roscore ran moves from `http://mobipick:11311` to the roscore container), unless the shell exported its own `ROS_MASTER_URI`; the reply's `master_uri` names the master the command ran against, and `master_uri_gui` plus `master_uri_note` appear when it differs from the GUI's. |
 | `GET /shell/{id}/output?since=N&command=ID&tail=N&grep=RE` | Buffered output; `follow=1` streams NDJSON until the command finishes. |
 | `POST /shell/{id}/interrupt` | Send `INT` (default), `TERM`, `KILL`, or `HUP` to the foreground command. |
 | `POST /shell/{id}/settings`, `DELETE /shell/{id}` | Change the session `stream` default; close the session and its container (a robot shell: end the ssh connection and kill what it left running). |

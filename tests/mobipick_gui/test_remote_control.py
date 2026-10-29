@@ -303,6 +303,94 @@ def test_exec_line_encodes_command_and_marker():
     assert '</dev/null' in line
 
 
+def test_exec_line_moves_to_the_gui_master_only_when_given():
+    plain = build_exec_line('rosnode list', 'abc123')
+    assert 'export ROS_MASTER_URI' not in plain
+    assert '__MPRC_MASTER_%s__' in plain
+    synced = build_exec_line('rosnode list', 'abc123', 'http://mobipick-roscore:11311')
+    assert 'export ROS_MASTER_URI=http://mobipick-roscore:11311' in synced
+    assert synced.index('export ROS_MASTER_URI') < synced.index('base64 -d')
+
+
+@pytestmark_bash
+def test_shell_follows_the_gui_master_but_keeps_a_user_export():
+    """A shell opened before roscore ran must not keep the fallback master."""
+    env = dict(os.environ, ROS_MASTER_URI='http://mobipick:11311')
+    session = _local_shell(env=env)
+    try:
+        # the baseline a container shell's init sets
+        _run(session, '__MPRC_GUI_MASTER="$ROS_MASTER_URI"')
+        record, output = _run(session, 'echo "$ROS_MASTER_URI"')
+        assert output == ['http://mobipick:11311']
+        assert record.master_uri == 'http://mobipick:11311'
+
+        record = session.run('echo "$ROS_MASTER_URI"', master_uri='http://mobipick-roscore:11311')
+        assert session.wait(record, 10)
+        lines, _, _ = session.lines(since=record.first_seq, until=record.last_seq)
+        assert [entry['text'] for entry in lines] == ['http://mobipick-roscore:11311']
+        assert record.master_uri == 'http://mobipick-roscore:11311'
+        assert record.describe()['master_uri'] == 'http://mobipick-roscore:11311'
+
+        # the user's own export wins over a later GUI master
+        record = session.run('export ROS_MASTER_URI=http://mine:11311', master_uri='http://mobipick-roscore:11311')
+        assert session.wait(record, 10)
+        record = session.run('echo "$ROS_MASTER_URI"', master_uri='http://other:11311')
+        assert session.wait(record, 10)
+        lines, _, _ = session.lines(since=record.first_seq, until=record.last_seq)
+        assert [entry['text'] for entry in lines] == ['http://mine:11311']
+        assert record.master_uri == 'http://mine:11311'
+
+        # back to the GUI value: the shell follows the GUI again
+        record = session.run('export ROS_MASTER_URI=http://other:11311', master_uri='http://other:11311')
+        assert session.wait(record, 10)
+        record = session.run('echo "$ROS_MASTER_URI"', master_uri='http://third:11311')
+        assert session.wait(record, 10)
+        assert record.master_uri == 'http://third:11311'
+    finally:
+        session.close()
+
+
+@pytestmark_bash
+def test_exec_reply_names_the_master_and_flags_a_mismatch():
+    class _MasterAdapter(FakeAdapter):
+        master = 'http://mobipick:11311'
+
+        def shell_master_uri(self, session):
+            return self.master
+
+    adapter = _MasterAdapter()
+    server = RemoteControlServer(
+        adapter, host='127.0.0.1', port=0, invoker=DirectInvoker(),
+        default_exec_timeout=10.0,
+    )
+    adapter.server = server
+    host, port = server.start()
+    try:
+        api = _Api(f'http://{host}:{port}')
+        status, payload = api('POST', '/shell', {'name': 'agent'})
+        assert status == 200 and payload['ready'], payload
+        session_id = payload['session']['id']
+
+        status, payload = api('POST', f'/shell/{session_id}/exec', {'command': 'echo "$ROS_MASTER_URI"'})
+        assert payload['output'] == ['http://mobipick:11311']
+        assert payload['master_uri'] == 'http://mobipick:11311'
+        assert 'master_uri_gui' not in payload
+
+        adapter.master = 'http://mobipick-roscore:11311'     # roscore came up
+        status, payload = api('POST', f'/shell/{session_id}/exec', {'command': 'echo "$ROS_MASTER_URI"'})
+        assert payload['output'] == ['http://mobipick-roscore:11311']
+        assert payload['master_uri'] == 'http://mobipick-roscore:11311'
+        assert payload['command']['master_uri'] == 'http://mobipick-roscore:11311'
+
+        api('POST', f'/shell/{session_id}/exec', {'command': 'export ROS_MASTER_URI=http://mine:11311'})
+        status, payload = api('POST', f'/shell/{session_id}/exec', {'command': 'true'})
+        assert payload['master_uri'] == 'http://mine:11311'
+        assert payload['master_uri_gui'] == 'http://mobipick-roscore:11311'
+        assert 'export ROS_MASTER_URI=http://mobipick-roscore:11311' in payload['master_uri_note']
+    finally:
+        server.stop()
+
+
 def test_clean_output_line_strips_escapes_and_overwrites():
     assert clean_output_line('\x1b[31mred\x1b[0m') == 'red'
     assert clean_output_line('progress 10%\rprogress 100%') == 'progress 100%'

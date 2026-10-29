@@ -59,6 +59,12 @@ END_MARKER_PREFIX = '__MPRC_END_'
 PID_MARKER = '__MPRC_PID__'
 _END_MARKER_RE = re.compile(r'^__MPRC_END_([0-9a-f]+)__ (-?\d+)\s*$')
 _PID_MARKER_RE = re.compile(r'^__MPRC_PID__ (\d+)\s*$')
+MASTER_MARKER_PREFIX = '__MPRC_MASTER_'
+_MASTER_MARKER_RE = re.compile(r'^__MPRC_MASTER_([0-9a-f]+)__ ?(.*?)\s*$')
+# Shell variable that remembers the ROS_MASTER_URI the GUI last put into a
+# session. A ROS_MASTER_URI that differs from it was exported by the user of
+# the shell and is left alone (see build_exec_line).
+GUI_MASTER_VAR = '__MPRC_GUI_MASTER'
 _LINE_SPLIT_RE = re.compile(r'\r?\n')
 
 
@@ -308,16 +314,39 @@ def clean_output_line(line: str) -> str:
     return line
 
 
-def build_exec_line(command: str, token: str) -> str:
+def build_exec_line(command: str, token: str, master_uri: str | None = None) -> str:
     """Return the single shell line that runs ``command`` and prints a marker.
 
     The command is base64-encoded so arbitrary quoting, newlines, and shell
     syntax survive transport through the session's stdin pipe. Standard input
     of the command is redirected from ``/dev/null`` so commands that read the
     terminal fail fast instead of consuming later API requests.
+
+    With ``master_uri`` (the GUI's current ROS master) the line first moves the
+    shell's ``ROS_MASTER_URI`` to it, so a shell opened before roscore ran does
+    not keep the fallback master forever. A value the user exported in the
+    shell (one that differs from what the GUI last set, kept in
+    ``GUI_MASTER_VAR``) is left alone until the user exports the GUI's master
+    again. Every line also prints a hidden marker
+    with the ``ROS_MASTER_URI`` the command starts with.
     """
     encoded = base64.b64encode(command.encode('utf-8')).decode('ascii')
+    sync = ''
+    if master_uri:
+        quoted = shlex.quote(str(master_uri))
+        # follow the GUI while the shell still has the value the GUI set, or
+        # the GUI master of the previous command (a user who exported that
+        # one asked to follow the GUI again)
+        sync = (
+            f'if [ -z "${{{GUI_MASTER_VAR}+x}}" ] || '
+            f'[ "${{ROS_MASTER_URI:-}}" = "${GUI_MASTER_VAR}" ] || '
+            f'[ "${{ROS_MASTER_URI:-}}" = "${{{GUI_MASTER_VAR}_SEEN:-}}" ]; then '
+            f'export ROS_MASTER_URI={quoted}; {GUI_MASTER_VAR}={quoted}; fi; '
+            f'{GUI_MASTER_VAR}_SEEN={quoted}; '
+        )
     return (
+        sync
+        + f"printf '{MASTER_MARKER_PREFIX}%s__ %s\\n' {shlex.quote(token)} \"${{ROS_MASTER_URI:-}}\"; "
         f'eval "$(printf %s {shlex.quote(encoded)} | base64 -d)" </dev/null; '
         '__mprc_rc=$?; '
         f"printf '\\n{END_MARKER_PREFIX}%s__ %d\\n' {shlex.quote(token)} \"$__mprc_rc\"\n"
@@ -337,6 +366,7 @@ class ShellCommand:
     timed_out: bool = False
     interrupted: bool = False
     session_closed: bool = False
+    master_uri: str | None = None
 
     @property
     def running(self) -> bool:
@@ -357,6 +387,7 @@ class ShellCommand:
             'last_seq': self.last_seq,
             'interrupted': self.interrupted,
             'session_closed': self.session_closed,
+            'master_uri': self.master_uri,
         }
 
 
@@ -518,6 +549,12 @@ class RemoteShellSession:
                 if pid_match:
                     self.shell_pid = int(pid_match.group(1))
                     continue
+                master_match = _MASTER_MARKER_RE.match(line)
+                if master_match:
+                    current = self._current
+                    if current is not None and current.token == master_match.group(1):
+                        current.master_uri = master_match.group(2)
+                    continue
                 end_match = _END_MARKER_RE.match(line)
                 if end_match:
                     token, code = end_match.group(1), int(end_match.group(2))
@@ -568,8 +605,12 @@ class RemoteShellSession:
 
     # -- commands ----------------------------------------------------------
 
-    def run(self, command: str) -> ShellCommand:
-        """Start ``command`` and return its record without waiting."""
+    def run(self, command: str, *, master_uri: str | None = None) -> ShellCommand:
+        """Start ``command`` and return its record without waiting.
+
+        ``master_uri`` is the GUI's current ROS master the command should run
+        against (see :func:`build_exec_line`); ``None`` keeps the shell's own.
+        """
         with self._cond:
             if self._closed:
                 raise Conflict('shell session is closed')
@@ -595,7 +636,7 @@ class RemoteShellSession:
                 oldest = sorted(self._commands)[: len(self._commands) - 200]
                 for key in oldest:
                     self._commands.pop(key, None)
-        line = build_exec_line(command, token)
+        line = build_exec_line(command, token, master_uri)
         try:
             assert self.proc.stdin is not None
             self.proc.stdin.write(line.encode('utf-8'))
@@ -838,7 +879,7 @@ API_INDEX = [
     ('GET', '/shell', 'Open remote shell sessions.'),
     ('POST', '/shell', 'Open a shell. Body: {"name": "", "stream": true, "root": null, "robot": null}. Default: the ROS tool container, which is where ROS work belongs. "robot": true ssh-es onto the robot PC instead (remote ROS master mode only) for debugging that machine; see /status "shell".'),
     ('GET', '/shell/{id}', 'Session details and its current command.'),
-    ('POST', '/shell/{id}/exec', 'Run a command. Body: {"command", "stream", "tail", "grep", "timeout", "wait"}.'),
+    ('POST', '/shell/{id}/exec', 'Run a command. Body: {"command", "stream", "tail", "grep", "timeout", "wait"}. A local container shell follows the GUI\'s current ROS master unless it exported its own; the reply\'s master_uri is the master the command ran against (master_uri_gui and master_uri_note when that differs from the GUI\'s).'),
     ('GET', '/shell/{id}/output?since=N&tail=N&grep=RE&command=ID&follow=1&timeout=s', 'Fetch or stream buffered output.'),
     ('POST', '/shell/{id}/interrupt', 'Send SIGINT (or {"signal": "TERM"}) to the running command.'),
     ('POST', '/shell/{id}/settings', 'Change session defaults. Body: {"stream": bool}.'),
@@ -1206,6 +1247,9 @@ class RemoteControlServer:
             'ready': ready and not session.closed and init.exit_code == 0,
             'startup_output': [entry['text'] for entry in init_lines],
         }
+        notice = str(spec.get('notice') or '').strip()
+        if notice:
+            result['notice'] = notice
         if not result['ready']:
             result['error'] = (
                 'shell session exited during startup'
@@ -1579,7 +1623,8 @@ class RemoteControlServer:
         tail = _int_param(body.get('tail'), None)
         grep = body.get('grep') or None
         max_lines = _int_param(body.get('max_lines'), self.max_output_lines)
-        record = session.run(command)
+        gui_master = self._shell_master_uri(session)
+        record = session.run(command, master_uri=gui_master)
         if not wait:
             return {'command': record.describe(), 'session_id': session.id, 'waited': False}
         finished = session.wait(record, timeout)
@@ -1588,7 +1633,15 @@ class RemoteControlServer:
             'session_id': session.id,
             'waited': True,
             'timed_out': not finished,
+            'master_uri': record.master_uri,
         }
+        if gui_master and record.master_uri is not None and record.master_uri != gui_master:
+            result['master_uri_gui'] = gui_master
+            result['master_uri_note'] = (
+                f'the command ran against ROS_MASTER_URI={record.master_uri or "(unset)"}, '
+                f'which this shell exported itself, but the GUI master is {gui_master}; '
+                f'run "export ROS_MASTER_URI={gui_master}" to follow the GUI again'
+            )
         lines, total, truncated = session.lines(
             since=record.first_seq,
             until=record.last_seq,
@@ -1611,6 +1664,19 @@ class RemoteControlServer:
                 'command still running; poll /output, wait again, or POST /interrupt'
             )
         return result
+
+    def _shell_master_uri(self, session: RemoteShellSession) -> str | None:
+        """Return the GUI's current ROS master for ``session``, or ``None``.
+
+        ``None`` means the shell keeps its own value (a shell on the robot, the
+        remote ROS master mode, or an adapter without a master). A failure to
+        ask the GUI must not block the command, so it also gives ``None``.
+        """
+        try:
+            value = self._invoke(lambda: self.adapter.shell_master_uri(session))
+        except Exception:
+            return None
+        return str(value) if value else None
 
     def _output(self, session: RemoteShellSession, query: dict[str, str]) -> dict:
         since = _int_param(query.get('since'), 0)
@@ -1937,6 +2003,13 @@ class GuiAdapter:
         ``target``, ``runs_on`` and ``signal_prefix``.
         """
         raise NotImplementedError
+
+    def shell_master_uri(self, session: RemoteShellSession) -> str | None:
+        """Return the ROS master a command in ``session`` should run against.
+
+        ``None`` (the default) leaves the shell's own ``ROS_MASTER_URI``.
+        """
+        return None
 
     def mirror_shell_output(self, session: RemoteShellSession, text: str) -> None:
         pass

@@ -132,6 +132,42 @@ def test_the_container_is_the_default_even_with_a_remote_master():
     assert spec['ensure_docker_network'] == 'mobipick'
 
 
+def test_a_container_shell_opened_without_roscore_says_so_in_its_tab():
+    window, _, html = _window(remote=False, master='http://mobipick:11311')
+    window._roscore_container_name = 'mobipick-roscore'
+
+    spec = _spec(window)
+
+    assert 'no roscore is running' in spec['notice']
+    assert 'ROS_MASTER_URI=http://mobipick:11311' in spec['notice']
+    assert any('no roscore is running' in text for _, text in html)
+    assert '__MPRC_GUI_MASTER="${ROS_MASTER_URI:-}"' in spec['init_command']
+
+
+def test_a_container_shell_opened_with_roscore_has_no_notice():
+    window, _, html = _window(remote=False, master='http://mobipick-roscore:11311')
+    window._roscore_container_name = 'mobipick-roscore'
+
+    spec = _spec(window)
+
+    assert not spec['notice']
+    assert not any('no roscore' in text for _, text in html)
+
+
+def test_only_local_container_shells_follow_the_gui_master():
+    master = {'uri': 'http://mobipick-roscore:11311'}
+    local, _, _ = _window(remote=False)
+    local._current_master_uri = lambda: master['uri']
+    adapter = MainWindowRemoteAdapter(local)
+    container = SimpleNamespace(runs_on='container')
+    robot = SimpleNamespace(runs_on='robot')
+    assert adapter.shell_master_uri(container) == 'http://mobipick-roscore:11311'
+    assert adapter.shell_master_uri(robot) is None
+
+    remote, _, _ = _window(remote=True)
+    assert MainWindowRemoteAdapter(remote).shell_master_uri(container) is None
+
+
 def test_explicit_robot_request_opens_the_shell_on_the_robot():
     window, _, _ = _window()
 

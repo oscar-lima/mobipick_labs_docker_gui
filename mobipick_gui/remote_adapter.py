@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 from PyQt5.QtWidgets import QApplication, QDialog, QMessageBox, QPushButton
 
 from .remote_control import (
+    GUI_MASTER_VAR,
     Conflict,
     GuiAdapter,
     NotFound,
@@ -620,6 +621,9 @@ class MainWindowRemoteAdapter(GuiAdapter):
             f'<i>Remote shell {session_id} starting in container '
             f'{html.escape(container_name)}: {html.escape(" ".join(argv))}</i>',
         )
+        notice = self._no_roscore_notice(session_id)
+        if notice:
+            window._append_gui_html(tab_key, f'<i>{html.escape(notice)}</i>')
         window._focus_tab(tab_key)
         window._log_info(f'remote control: opening shell {session_id} ({container_name})')
         return {
@@ -631,14 +635,51 @@ class MainWindowRemoteAdapter(GuiAdapter):
             'tab_key': tab_key,
             'target': container_name,
             'runs_on': 'container',
+            'notice': notice,
             'init_command': (
                 f'source {CONTAINER_SCRIPTS_DIR}/terminal.bashrc; '
+                # the master the GUI started this shell with; a later
+                # ROS_MASTER_URI that differs from it was exported by the
+                # user and is not moved to the GUI's master (shell_master_uri)
+                f'{GUI_MASTER_VAR}="${{ROS_MASTER_URI:-}}"; '
                 'echo "remote shell workspace: ${MOBIPICK_WORKSPACE_NAME:-Docker image default}'
                 ' (ROS_WORKSPACE=${ROS_WORKSPACE:-unset})"; '
                 'echo "remote shell workspace chain: ${MOBIPICK_WORKSPACE_DEVEL_PATHS:-none}"; '
                 'echo "remote shell ROS_MASTER_URI=${ROS_MASTER_URI:-unset} ROS_IP=${ROS_IP:-unset}"'
             ),
         }
+
+    def _no_roscore_notice(self, session_id: int) -> str:
+        """Return a warning when a local container shell opens without roscore.
+
+        Such a shell starts with the fallback master; commands sent through
+        ``/shell/<id>/exec`` follow the GUI's master once roscore runs.
+        """
+        window = self.window
+        if window._remote_master_enabled():
+            return ''
+        master = window._current_master_uri()
+        container = getattr(window, '_roscore_container_name', 'mobipick-roscore')
+        running_master = f'http://{container}:11311'
+        if master == running_master:
+            return ''
+        return (
+            f'Remote shell {session_id}: no roscore is running right now, so '
+            f'this shell starts with ROS_MASTER_URI={master}. Commands sent '
+            f'through /shell/{session_id}/exec switch to {running_master} '
+            'once roscore runs, unless you export ROS_MASTER_URI yourself.'
+        )
+
+    def shell_master_uri(self, session: RemoteShellSession) -> str | None:
+        """Return the GUI's current master for a local container shell.
+
+        A shell on the robot and every shell in remote ROS master mode keep
+        their own ``ROS_MASTER_URI`` (``None``).
+        """
+        window = self.window
+        if session.runs_on != 'container' or window._remote_master_enabled():
+            return None
+        return window._current_master_uri() or None
 
     def mirror_shell_output(self, session: RemoteShellSession, text: str) -> None:
         window = self.window
