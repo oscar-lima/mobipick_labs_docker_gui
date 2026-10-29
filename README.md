@@ -782,7 +782,10 @@ Features dialog, confirmed in a question window that does not block either
 window and moves on its own (e-stop in hand); `allow_careful` in a remote
 request and `careful_on_real` in a preset file are ignored and reported. The
 plain `options` of a preset or a remote request cannot get around this: a value
-that an unticked careful feature or mode sets is refused and reported. The
+that an unticked careful feature or mode sets is refused and reported. The same
+holds for single options: `POST /args` refuses such a value (HTTP 400, nothing
+selected), and choosing it in a toolbar or Advanced Launch Options dropdown puts
+the dropdown back with a note that moves on its own and blocks nothing. The
 option rules still have the last word. The Features dialog is a top-level
 window of its own, so it can be moved aside from the main window.
 

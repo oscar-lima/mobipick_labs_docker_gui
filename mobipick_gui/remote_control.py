@@ -859,7 +859,7 @@ API_INDEX = [
     ('POST', '/buttons/{key}/start', 'Press only when the button is not running. Same body and headless window refusal as click.'),
     ('POST', '/buttons/{key}/stop', 'Press only when the button is running.'),
     ('GET', '/args', 'Launch arguments and world with values, choices, descriptions, invalid choices, and applicable buttons.'),
-    ('POST', '/args', 'Select argument values without touching the profile. Body: {"anygrasp_mode": "real", "world": "moelk_tables"}.'),
+    ('POST', '/args', 'Select argument values without touching the profile. Body: {"anygrasp_mode": "real", "world": "moelk_tables"}. On a remote ROS master a value that switches a careful feature or mode on is refused (400) and nothing is selected: only a tick in the Features dialog switches one on there.'),
     ('GET', '/features', 'Features of the button profile (features file beside it): groups with each mode or feature, its class, whether it is on, the options it sets, options the profile lacks and choices the rules refuse; the target (sim or real), the presets, the loaded preset and the options that differ from it.'),
     ('POST', '/features', 'Switch features relative to the current state. Body: {"on": [keys], "off": [keys], "modes": {"group": "mode"}, "options": {"name": "value"}}. On a remote ROS master careful features and modes stay off (only a tick in the Features dialog there switches one on; an allow_careful field is ignored and reported; an option that would set a value of such an unticked careful feature or mode is refused). Reports applied, refused (rules), missing and careful_kept_off.'),
     ('GET', '/preset', 'The loaded preset and the presets there are.'),

@@ -241,3 +241,53 @@ def test_careful_tick_on_the_real_robot_asks_in_a_non_modal_top_level_window(mon
     finally:
         window.close()
         app.processEvents()
+
+
+def test_remote_args_and_dropdowns_cannot_switch_careful_features_on_on_the_real_robot(monkeypatch, tmp_path):
+    import pytest
+    from PyQt5.QtCore import Qt
+    from mobipick_gui.remote_control import RemoteControlError
+    # the choices below would be saved: keep them out of the settings the later tests share
+    monkeypatch.setattr('mobipick_gui.main_window.save_user_config_update', lambda updates: {})
+    app, window = _window(monkeypatch, tmp_path)
+    try:
+        adapter = MainWindowRemoteAdapter(window)
+        adapter.set_args({'box_padding': '0.005'})   # the sim: any value
+        assert _values(window)['box_padding'] == '0.005'
+        adapter.set_args({'box_padding': '0.01', 'skip_untangle': 'false', 'cable_monitor': 'false'})
+        window.remote_master_checkbox.setChecked(True)
+
+        # POST /args: a careful feature's or mode's on-value is refused with the reason, and nothing else is selected
+        for body, label in (({'cable_monitor': 'true', 'box_padding': '0.005'}, 'Box padding 0.5 cm'),
+                            ({'skip_untangle': 'true'}, 'Cable-aware')):
+            with pytest.raises(RemoteControlError) as refused:
+                adapter.set_args(body)
+            assert f'switches on the careful feature "{label}"' in str(refused.value)
+            assert 'only a tick in the Features window' in str(refused.value)
+        assert _values(window)['box_padding'] == '0.01' and _values(window)['cable_monitor'] == 'false'
+        assert _values(window)['skip_untangle'] == 'false'
+        adapter.set_args({'cable_monitor': 'true', 'align_jaw': 'false'})   # safe options still work
+        assert _values(window)['cable_monitor'] == 'true'
+
+        # a dropdown: the user's careful choice goes back, with a non-modal note without a parent
+        combo = next(c for c in window._generic_arg_inputs.values() if c.property('arg_name') == 'box_padding')
+        combo.setCurrentIndex(combo.findText('0.005'))
+        combo.activated.emit(combo.currentIndex())
+        assert combo.currentText() == '0.01'
+        note = window._careful_notice
+        assert note.parent() is None and note.windowModality() == Qt.NonModal and note.isVisible()
+        assert 'Features window' in note.text()
+        note.close()
+
+        # ticked in the Features window: on, and neither a repeated choice of it nor the same value over the API undo it
+        window.apply_feature_selection(Selection({'cable_handling': 'hack'}, {'padding'}), ticked_careful={'padding'})
+        app.processEvents()
+        assert _values(window)['box_padding'] == '0.005'
+        combo.activated.emit(combo.currentIndex())
+        adapter.set_args({'box_padding': '0.005'})
+        assert _values(window)['box_padding'] == '0.005'
+        adapter.set_args({'box_padding': '0.01'})   # off is always allowed
+        assert _values(window)['box_padding'] == '0.01'
+    finally:
+        window.close()
+        app.processEvents()
