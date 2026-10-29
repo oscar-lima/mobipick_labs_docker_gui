@@ -85,6 +85,8 @@ from PyQt5.QtWidgets import (
 
 from .start_reminders import StartReminderDialog
 from .launch_arguments_dialog import LaunchArgumentsDialog
+from . import features as feature_sets
+from .features_dialog import FeaturesDialog
 
 from .ansi import CSI_SEQ_RE, OSC_SEQ_RE, ansi_to_html
 from .async_tasks import AsyncTaskRunner
@@ -96,6 +98,7 @@ from .config import (
     DEFAULT_BUTTON_COMMANDS,
     DEFAULT_ADVANCED_ARG_NAMES,
     DEFAULT_YAML_PATH,
+    FEATURE_PRESET_DIR,
     GENERIC_BUTTON_ARG_SLOTS,
     PROJECT_ROOT,
     SCRIPT_CLEAN,
@@ -3931,6 +3934,17 @@ class MainWindow(QMainWindow):
         edit_advanced_button.clicked.connect(
             self._open_launch_arguments_dialog
         )
+        self._advanced_features_button = advanced_buttons.addButton(
+            'Features...', QDialogButtonBox.ActionRole
+        )
+        self._advanced_features_button.clicked.connect(
+            lambda: MainWindow._show_features_dialog(self)
+        )
+        self._advanced_features_button.setVisible(False)
+        self._advanced_preset_label = QLabel('')
+        self._advanced_preset_label.setWordWrap(True)
+        self._advanced_preset_label.setVisible(False)
+        advanced_root.insertWidget(0, self._advanced_preset_label)
         advanced_buttons.rejected.connect(self.advanced_launch_dialog.close)
         advanced_root.addWidget(advanced_buttons)
         actions.addWidget(self.generic_arg_controls)
@@ -3939,6 +3953,16 @@ class MainWindow(QMainWindow):
             lambda: MainWindow._show_advanced_launch_dialog(self)
         )
         actions.addWidget(self.advanced_launch_button)
+        self.features_button = QPushButton('Features...')
+        self.features_button.setToolTip(
+            'Switch whole features on or off and load or save presets '
+            '(the features file beside the button profile)'
+        )
+        self.features_button.clicked.connect(
+            lambda: MainWindow._show_features_dialog(self)
+        )
+        self.features_button.setVisible(False)
+        actions.addWidget(self.features_button)
         self._refresh_generic_arg_controls()
 
         self.image_combo = QComboBox()
@@ -8784,6 +8808,7 @@ CMD ["bash"]
         advanced_button = getattr(self, 'advanced_launch_button', None)
         if advanced_button is not None:
             advanced_button.setVisible(True)
+        MainWindow._apply_preferred_at_load(self)
         MainWindow._apply_option_rules(self)
 
     def _apply_advanced_filter(self) -> None:
@@ -8832,6 +8857,7 @@ CMD ["bash"]
         """Show the Advanced Launch Options dialog as wide as its columns need (at most the screen), as tall as the
         options need (at most the screen, then it scrolls)."""
         dialog = self.advanced_launch_dialog
+        MainWindow._refresh_features_controls(self)
         if not dialog.isVisible():
             columns = getattr(self, '_advanced_columns', 1)
             screen = dialog.screen().availableGeometry() if dialog.screen() else None
@@ -14833,6 +14859,11 @@ CMD ["bash"]
             self._resolved_button_config_path()
         )
         self._option_rules_reported = False
+        # prefer rules matching at load keep the saved choices of a remembered preset; without one the next
+        # build of the dropdowns applies them once, so an older saved config does not silently run a feature off
+        self._preferred_rules_matched = None
+        MainWindow._load_features(self)
+        self._prefer_at_load_pending = not getattr(self, '_feature_preset', None)
 
     def _option_rule_combos(self) -> dict[str, QComboBox]:
         """Dropdowns rules can name: ``world`` and each toolbar argument."""
@@ -14998,6 +15029,7 @@ CMD ["bash"]
         self._applying_option_rules = True
         switches: list[str] = []
         try:
+            switches += MainWindow._apply_preferred_options(self, rules)
             # A switch can change what another rule forbids; settle it.
             for _attempt in range(4):
                 invalid = MainWindow._invalid_options(self)
@@ -15040,6 +15072,68 @@ CMD ["bash"]
             MainWindow._show_rule_popup(
                 self, 'Option changed', '.\n'.join(switches) + '.'
             )
+        MainWindow._refresh_features_controls(self)
+
+    def _apply_preferred_options(self, rules) -> list[str]:
+        """Move dropdowns to the values of ``prefer`` rules that started to match since the last evaluation."""
+        combos = MainWindow._option_rule_combos(self)
+        matched = rules.preferred_values(
+            MainWindow._option_rule_state(self, rules, combos)
+        )
+        before = getattr(self, '_preferred_rules_matched', None)
+        self._preferred_rules_matched = set(matched)
+        if before is None:
+            return []
+        switches: list[str] = []
+        for index, (values, reason) in matched.items():
+            if index in before:
+                continue
+            for name, value in values.items():
+                combo = combos.get(name)
+                if combo is None or combo.currentText().strip() == value:
+                    continue
+                position = combo.findText(value)
+                if position < 0:
+                    continue
+                previous = combo.currentText().strip()
+                combo.setCurrentIndex(position)
+                message = f'{name}={previous} switched to {value} ({reason})'
+                self._log_info(message)
+                switches.append(message)
+        return switches
+
+    def _apply_preferred_at_load(self) -> None:
+        """Once after a load without a remembered preset: move the saved choices to the matching ``prefer`` values."""
+        if not getattr(self, '_prefer_at_load_pending', False):
+            return
+        self._prefer_at_load_pending = False
+        combos = MainWindow._option_rule_combos(self)
+        for name, values in MainWindow._against_preferred(self).items():
+            combo = combos[name]
+            position = combo.findText(values['value'])
+            if position < 0:
+                continue
+            combo.setCurrentIndex(position)
+            self._log_info(
+                f'{name}={values["current"]} switched to {values["value"]} '
+                f'(no preset remembered; {values["reason"]})'
+            )
+
+    def _against_preferred(self) -> dict[str, dict[str, str]]:
+        """Return ``{dropdown: {value, current, reason}}`` for dropdowns set against a matching ``prefer`` rule."""
+        rules = getattr(self, '_option_rules', None)
+        if rules is None or not rules.rules:
+            return {}
+        combos = MainWindow._option_rule_combos(self)
+        result: dict[str, dict[str, str]] = {}
+        matched = rules.preferred_values(MainWindow._option_rule_state(self, rules, combos))
+        for values, reason in matched.values():
+            for name, value in values.items():
+                combo = combos.get(name)
+                current = combo.currentText().strip() if combo is not None else value
+                if current != value:
+                    result.setdefault(name, {'value': value, 'current': current, 'reason': reason})
+        return result
 
     # -- generic toolbar arguments (remote control) ----------------------
 
@@ -15053,6 +15147,7 @@ CMD ["bash"]
         )
         invalid = MainWindow._invalid_options(self)
         disabled = MainWindow._disabled_options(self)
+        against = MainWindow._against_preferred(self)
         entries: list[dict] = []
         for slot in GENERIC_BUTTON_ARG_SLOTS:
             widget = inputs.get(slot)
@@ -15069,6 +15164,7 @@ CMD ["bash"]
                     'options': [widget.itemText(i) for i in range(widget.count())],
                     'invalid': invalid.get(name, {}),
                     'disabled': disabled.get(name, ''),
+                    'against_prefer': against.get(name, {}),
                     'buttons': [
                         key
                         for key, config in self._config_buttons.items()
@@ -15140,6 +15236,263 @@ CMD ["bash"]
             self._log_info(f'remote control: set {name}={text}')
         self._apply_option_rules()
         return self.generic_args()
+
+    # -- features and presets (Features dialog, remote control) ----------
+
+    def _load_features(self) -> None:
+        """Load the features file and the presets that belong to the button profile."""
+        profile = self._resolved_button_config_path()
+        self._features = feature_sets.load_features(profile)
+        self._feature_presets: dict = {}
+        errors = list(self._features.errors)
+        if self._features:
+            self._feature_presets, preset_errors = feature_sets.load_presets(
+                profile, MainWindow._user_presets_dir(self)
+            )
+            errors += preset_errors
+            for preset in self._feature_presets.values():
+                errors += [
+                    f'preset {preset.name}: {problem}'
+                    for problem in feature_sets.preset_problems(self._features, preset)
+                ]
+            self._log_info(
+                f'loaded {len(self._features.features)} feature(s) and '
+                f'{len(self._feature_presets)} preset(s) from {self._features.path}'
+            )
+        for error in errors:
+            self._append_log_html(
+                '<span style="color:#ff6e6e">' + html.escape(f'features: {error}') + '</span>'
+            )
+        if not hasattr(self, '_feature_preset'):
+            saved = getattr(self, '_saved_selections', {}) or {}
+            self._feature_preset = str(saved.get('feature_preset') or '').strip() or None
+        MainWindow._refresh_features_controls(self)
+
+    def _user_presets_dir(self) -> Path:
+        profile = self._resolved_button_config_path()
+        return FEATURE_PRESET_DIR / (Path(profile).stem if profile else 'default')
+
+    def _refresh_features_controls(self) -> None:
+        available = bool(getattr(self, '_features', None))
+        for name in ('features_button', '_advanced_features_button'):
+            widget = getattr(self, name, None)
+            if widget is not None:
+                widget.setVisible(available)
+        label = getattr(self, '_advanced_preset_label', None)
+        if label is not None:
+            lines = [MainWindow._preset_difference_text(self) if available else '']
+            against = MainWindow._against_preferred(self)
+            if against:
+                listed = ', '.join(
+                    f'{name}={values["current"]} (default {values["value"]}: {values["reason"]})'
+                    for name, values in sorted(against.items()))
+                lines.append(f'{len(against)} option(s) set against their default here: {listed}.')
+            text = '\n'.join(line for line in lines if line)
+            label.setText(text)
+            label.setVisible(bool(text))
+
+    def _feature_option_values(self) -> dict[str, str]:
+        return {entry['name']: entry['value'] for entry in self.generic_args()}
+
+    def _preset_differences(self) -> dict[str, dict[str, str]]:
+        """option -> {preset, current} where the arguments differ from the loaded preset"""
+        preset = getattr(self, '_feature_presets', {}).get(getattr(self, '_feature_preset', None) or '')
+        if preset is None:
+            return {}
+        current = MainWindow._feature_option_values(self)
+        wanted = feature_sets.preset_values(self._features, preset)
+        return {
+            name: {'preset': value, 'current': current[name]}
+            for name, value in wanted.items()
+            if name in current and current[name] != value
+        }
+
+    def _preset_difference_text(self) -> str:
+        name = getattr(self, '_feature_preset', None)
+        if not name:
+            return ''
+        differs = MainWindow._preset_differences(self)
+        if not differs:
+            return f'Preset {name}: every option as the preset sets it.'
+        listed = ', '.join(f'{option}={values["current"]}' for option, values in sorted(differs.items()))
+        return f'Preset {name}: {len(differs)} option(s) differ from the preset: {listed}.'
+
+    def feature_status(self) -> dict:
+        """The features, the current selection, the presets and what differs (Features dialog, GET /features)."""
+        features = getattr(self, '_features', None)
+        if not features:
+            return {'available': False, 'path': None, 'errors': list(getattr(features, 'errors', []) or [])}
+        values = MainWindow._feature_option_values(self)
+        selection, mixed = feature_sets.current_selection(features, values, sim=not self._remote_master_enabled())
+        missing = feature_sets.missing_options(features, set(values))
+        invalid = MainWindow._invalid_options(self)
+        real = self._remote_master_enabled()
+
+        def refused(wanted: dict[str, str]) -> dict[str, str]:
+            return {name: invalid[name][value] for name, value in wanted.items()
+                    if value in invalid.get(name, {})}
+
+        groups = []
+        for group in features.groups:
+            if group.kind == 'modes':
+                members = [{
+                    'key': mode.key, 'label': mode.label, 'class': mode.cls, 'default': mode.default,
+                    'sim_default': mode.sim_default,
+                    'on': selection.modes.get(group.key) == mode.key, 'sets': dict(mode.sets),
+                    'missing': missing.get(mode.key, []), 'refused': refused(mode.sets),
+                    'pending': dict(mode.pending), 'pending_on': mode.pending_on,
+                } for mode in features.modes[group.key].values()]
+            else:
+                members = [{
+                    'key': feature.key, 'label': feature.label, 'class': feature.cls,
+                    'description': feature.description, 'parent': feature.parent,
+                    'on': key in selection.features_on, 'mixed': mixed.get(key, ''),
+                    'set_on': dict(feature.on), 'set_off': dict(feature.off),
+                    'missing': missing.get(key, []), 'refused': refused(feature.on),
+                } for key, feature in ((k, features.features[k]) for k in group.members)]
+            groups.append({'key': group.key, 'name': group.name, 'kind': group.kind,
+                           'description': group.description, 'mixed': mixed.get(group.key, ''),
+                           'members': members})
+        return {
+            'available': True,
+            'path': str(features.path),
+            'errors': list(features.errors),
+            'target': 'real' if real else 'sim',
+            'preset': getattr(self, '_feature_preset', None),
+            'differs': MainWindow._preset_differences(self),
+            'presets': [
+                {'name': preset.name, 'description': preset.description, 'target': preset.target,
+                 'user': preset.user, 'path': str(preset.path) if preset.path else None}
+                for preset in getattr(self, '_feature_presets', {}).values()
+            ],
+            'groups': groups,
+        }
+
+    def apply_feature_selection(
+        self,
+        selection,
+        *,
+        options: dict | None = None,
+        preset: str | None = None,
+        ticked_careful=(),
+        source: str = 'Features dialog',
+    ) -> dict:
+        """Select the argument values of a feature selection (every mode group, every feature on or off) plus plain
+        ``options``. On a remote ROS master careful features and modes stay off unless ``ticked_careful`` names them:
+        only the Features dialog passes it, with the keys the user confirmed there by a tick; the gate also holds for
+        the plain options (a preset's or the remote API's), which cannot set a value an unticked careful one sets.
+        Values the profile lacks, the rules refuse or a disabled dropdown keeps are reported, not raised."""
+        features = self._features
+        careful_off: list[str] = []
+        remote = self._remote_master_enabled()
+        if remote:
+            selection, careful_off = feature_sets.without_careful(features, selection, set(ticked_careful))
+        gated = feature_sets.selection_values(features, selection)
+        values = dict(gated)
+        values.update({str(name): str(value) for name, value in dict(options or {}).items()})
+        refused: dict[str, dict[str, str]] = {}
+        if remote:
+            # the final values, plain options included: an option must not switch an unticked careful one back on
+            values, refused = feature_sets.gate_careful_options(features, values, gated, set(ticked_careful))
+        entries = {entry['name']: entry for entry in self.generic_args()}
+        inputs = getattr(self, '_generic_arg_inputs', {})
+        applied: dict[str, str] = {}
+        missing: list[str] = []
+        for name, value in values.items():
+            entry = entries.get(name)
+            if entry is None:
+                missing.append(name)
+                continue
+            if entry['value'] == value:
+                continue
+            reason = (
+                f'disabled: {entry["disabled"]}' if entry['disabled']
+                else '' if value in entry['options'] else f'not one of {entry["options"]}'
+            ) or entry['invalid'].get(value, '')
+            if reason:
+                refused[name] = {'value': value, 'reason': reason}
+                continue
+            combo = self.world_combo if entry['slot'] == 'world' else inputs[entry['slot']]
+            combo.setCurrentIndex(entry['options'].index(value))
+            applied[name] = value
+        self._apply_option_rules()
+        after = MainWindow._feature_option_values(self)
+        for name, value in applied.items():
+            if after.get(name) != value:
+                refused[name] = {'value': value, 'reason': f'the option rules switched it to {after.get(name)}'}
+        self._feature_preset = preset
+        summary = (
+            f'{source}: {"preset " + preset if preset else "features"} set {len(applied)} option(s)'
+            + (f', refused {", ".join(f"{n}={r["value"]} ({r["reason"]})" for n, r in refused.items())}'
+               if refused else '')
+            + (f', careful kept off on the real robot: {", ".join(careful_off)}' if careful_off else '')
+            + (f', not in this profile: {", ".join(missing)}' if missing else '')
+        )
+        self._log_info(summary)
+        MainWindow._refresh_features_controls(self)
+        return {'preset': preset, 'applied': applied, 'refused': refused, 'missing': missing,
+                'careful_kept_off': careful_off, 'summary': summary}
+
+    def load_feature_preset(self, name: str, *, source: str = 'Features dialog') -> dict:
+        """Apply a preset by name; on a remote ROS master its careful features and modes stay off (a tick in the
+        Features dialog is the only way to switch one on there)."""
+        preset = getattr(self, '_feature_presets', {}).get(name)
+        if preset is None:
+            raise ValueError(
+                f'unknown preset {name!r}; known: {", ".join(sorted(getattr(self, "_feature_presets", {}))) or "none"}'
+            )
+        report = MainWindow.apply_feature_selection(
+            self,
+            feature_sets.selection_of(self._features, preset),
+            options=preset.options,
+            preset=name,
+            source=source,
+        )
+        target = 'real' if self._remote_master_enabled() else 'sim'
+        report['target_mismatch'] = (
+            f'preset {name} is for the {preset.target}, the GUI is on the {target}'
+            if preset.target != target else ''
+        )
+        if report['target_mismatch']:
+            self._log_info(report['target_mismatch'])
+        return report
+
+    def save_feature_preset(self, name: str, description: str = '', selection=None, options=None) -> dict:
+        """Save the current (or given) selection as the user's preset ``name``."""
+        features = self._features
+        if selection is None:
+            selection, _mixed = feature_sets.current_selection(features, MainWindow._feature_option_values(self),
+                                                               sim=not self._remote_master_enabled())
+        preset = feature_sets.Preset(
+            name=name.strip(),
+            description=description.strip(),
+            target='real' if self._remote_master_enabled() else 'sim',
+            modes=dict(selection.modes),
+            features_on=tuple(sorted(selection.features_on)),
+            options=dict(options or {}),
+        )
+        path = feature_sets.save_preset(preset, MainWindow._user_presets_dir(self))
+        self._feature_presets[preset.name] = preset
+        self._feature_preset = preset.name
+        self._log_info(f'saved preset {preset.name} to {path}')
+        MainWindow._refresh_features_controls(self)
+        return {'name': preset.name, 'path': str(path)}
+
+    def _show_features_dialog(self) -> None:
+        if not getattr(self, '_features', None):
+            return
+        dialog = getattr(self, '_features_dialog', None)
+        if dialog is None:
+            dialog = FeaturesDialog(self)
+            self._features_dialog = dialog
+        dialog.refresh()
+        dialog.show()
+        dialog.raise_()
+
+    def _apply_features_and_auto_launch(self) -> None:
+        if self._toggle_states.get('auto_launch') == 'green':
+            return
+        self._on_auto_launch_toggle_clicked()
 
     def _disable_toggle_preserving_visual(self, key: str, button: QPushButton | None):
         current_state = self._toggle_states.get(key, 'red')
@@ -16911,6 +17264,10 @@ CMD ["bash"]
                 generic_args[str(slot)] = {'name': name, 'value': value}
         if generic_args:
             selections['generic_args'] = generic_args
+
+        preset = getattr(self, '_feature_preset', None)
+        if preset:
+            selections['feature_preset'] = preset
 
         return selections
 

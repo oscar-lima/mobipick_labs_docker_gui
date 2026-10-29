@@ -100,6 +100,7 @@ def default_user_config_path() -> Path:
 USER_CONFIG_FILE = default_user_config_path()
 USER_DATA_DIR = default_user_data_dir()
 LAUNCH_SEQUENCE_DIR = default_user_config_dir() / 'launch_sequences'
+FEATURE_PRESET_DIR = default_user_config_dir() / 'feature_presets'
 BUTTON_PROFILE_DIR = default_user_config_dir() / 'button_profiles'
 DOCKER_CP_PROFILE_DIR = default_user_config_dir() / 'docker_cp_profiles'
 WINDOW_LAYOUT_FILE = default_user_config_dir() / 'window_layout.yaml'

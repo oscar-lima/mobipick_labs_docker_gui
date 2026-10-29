@@ -519,3 +519,114 @@ def test_shared_rules_grey_out_every_sim_only_option_on_the_real_robot():
     }
     assert all(reason.startswith('sim only, ') for reason in disabled.values())
     assert rules.disabled_options({'remote_master': False}) == {}
+
+
+SCAN_PREFERRED_IN_SIM = {
+    'when': {'remote_master': False},
+    'prefer': {'table_scan': 'true'},
+    'reason': 'the sim exercises the table scan',
+}
+
+
+def test_prefer_rule_parses_and_reports_its_values_while_it_matches():
+    rules = parse_option_rules({'rules': [SCAN_PREFERRED_IN_SIM]})
+    assert rules.errors == []
+    assert rules.preferred_values({'remote_master': False}) == {
+        0: ({'table_scan': 'true'}, 'the sim exercises the table scan')}
+    assert rules.preferred_values({'remote_master': True}) == {}
+    assert rules.invalid_options({'remote_master': False}, {'table_scan': ['true', 'false']}) == {}
+
+
+def test_prefer_rule_moves_a_choice_only_when_it_starts_to_match(monkeypatch, tmp_path):
+    app, window = _create_window(monkeypatch, tmp_path)
+    try:
+        window._option_rules = parse_option_rules({'rules': [SCAN_PREFERRED_IN_SIM]})
+        window._preferred_rules_matched = None
+        window._button_layout = [{
+            'key': 'sim', 'arg_1_name': 'table_scan', 'arg_1_options': ['false', 'true'],
+            'arg_1_advanced': True,
+        }]
+        window._refresh_generic_arg_controls()
+        combo = window._generic_arg_inputs[1]
+        assert combo.currentText() == 'false'   # matching at load keeps the saved choice
+
+        window.set_generic_args({'table_scan': 'false'})
+        assert combo.currentText() == 'false'   # a choice in the sim is allowed and kept
+
+        window.remote_master_checkbox.setChecked(True)
+        window.set_generic_args({'table_scan': 'false'})
+        window.remote_master_checkbox.setChecked(False)
+        assert combo.currentText() == 'true'    # back in the sim: the rule started to match again
+
+        window.set_generic_args({'table_scan': 'false'})
+        assert combo.currentText() == 'false'
+    finally:
+        window.close()
+        app.processEvents()
+
+
+def test_a_choice_against_a_prefer_rule_is_marked_in_args_and_the_advanced_dialog(monkeypatch, tmp_path):
+    app, window = _create_window(monkeypatch, tmp_path)
+    try:
+        window._option_rules = parse_option_rules({'rules': [SCAN_PREFERRED_IN_SIM]})
+        window._button_layout = [{
+            'key': 'sim', 'arg_1_name': 'table_scan', 'arg_1_options': ['false', 'true'],
+            'arg_1_advanced': True,
+        }]
+        window._refresh_generic_arg_controls()
+        window.set_generic_args({'table_scan': 'true'})
+        entry = next(e for e in window.generic_args() if e['name'] == 'table_scan')
+        assert entry['against_prefer'] == {}
+        assert not window._advanced_preset_label.text()
+
+        window.set_generic_args({'table_scan': 'false'})
+        entry = next(e for e in window.generic_args() if e['name'] == 'table_scan')
+        assert entry['against_prefer'] == {
+            'value': 'true', 'current': 'false', 'reason': 'the sim exercises the table scan'}
+        assert 'table_scan=false (default true' in window._advanced_preset_label.text()
+
+        window.remote_master_checkbox.setChecked(True)   # the rule no longer matches on the real robot
+        window.set_generic_args({'table_scan': 'false'})
+        assert next(e for e in window.generic_args() if e['name'] == 'table_scan')['against_prefer'] == {}
+    finally:
+        window.close()
+        app.processEvents()
+
+
+def _load_with_saved_scan_off(window, preset):
+    window._option_rules = parse_option_rules({'rules': [SCAN_PREFERRED_IN_SIM]})
+    window._feature_preset = preset
+    window._preferred_rules_matched = None
+    window._prefer_at_load_pending = not preset
+    window._generic_arg_inputs = {}
+    window._saved_selections = {'generic_args': {'1': {'name': 'table_scan', 'value': 'false'}}}
+    window._button_layout = [{
+        'key': 'sim', 'arg_1_name': 'table_scan', 'arg_1_options': ['true', 'false'],
+        'arg_1_advanced': True,
+    }]
+    window._refresh_generic_arg_controls()
+    return window._generic_arg_inputs[1]
+
+
+def test_load_without_a_remembered_preset_applies_the_prefer_values_once(monkeypatch, tmp_path):
+    app, window = _create_window(monkeypatch, tmp_path)
+    try:
+        combo = _load_with_saved_scan_off(window, None)
+        assert combo.currentText() == 'true'    # an older saved config does not run the sim with the scan off
+        window.set_generic_args({'table_scan': 'false'})
+        window._refresh_generic_arg_controls()
+        assert combo.currentText() == 'false'   # only once per load: the user's later choice stays
+    finally:
+        window.close()
+        app.processEvents()
+
+
+def test_load_with_a_remembered_preset_keeps_the_saved_choices(monkeypatch, tmp_path):
+    app, window = _create_window(monkeypatch, tmp_path)
+    try:
+        combo = _load_with_saved_scan_off(window, 'sim-baseline')
+        assert combo.currentText() == 'false'
+        assert next(e for e in window.generic_args() if e['name'] == 'table_scan')['against_prefer']
+    finally:
+        window.close()
+        app.processEvents()

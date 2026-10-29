@@ -46,6 +46,18 @@ button starts, so one button runs right in every mode::
           start_keyframe_node: false
       reason: the keyframe node runs on the robot PC
 
+A rule can prefer a value without forbidding the others. ``prefer`` maps
+argument names to one value each; when the rule starts to match during a
+session (e.g. the remote master is switched off), the GUI moves those
+dropdowns to the preferred value, and the user or a preset may then pick
+another one. Matching rules at load leave the saved choices alone::
+
+    - when:
+        remote_master: false
+      prefer:
+        table_scan: 'true'
+      reason: the sim exercises the table scan
+
 A rule can grey out a whole dropdown while it matches. ``disable`` lists
 the toolbar or advanced argument names; the dropdown keeps its value, cannot
 be changed (also not over the remote API) and shows the ``reason`` under
@@ -95,6 +107,7 @@ class OptionRule:
     clipboard: str = ''
     start_args: dict[str, tuple[tuple[str, str], ...]] = field(default_factory=dict)
     disable: tuple[str, ...] = ()
+    prefer: dict[str, str] = field(default_factory=dict)
 
     def _names(self, keys: tuple[str, ...], key: str) -> bool:
         if key in self.block_start_except:
@@ -177,6 +190,15 @@ class OptionRules:
                 for name in rule.disable:
                     result.setdefault(name, rule.describe())
         return result
+
+    def preferred_values(self, state: dict) -> dict[int, tuple[dict[str, str], str]]:
+        """Return ``{rule index: ({name: value}, reason)}`` of the ``prefer`` rules that match."""
+        normalized = {name: _text(value) for name, value in state.items()}
+        return {
+            index: (dict(rule.prefer), rule.describe())
+            for index, rule in enumerate(self.rules)
+            if rule.prefer and rule.matches(normalized)
+        }
 
     def invalid_options(
         self,
@@ -271,6 +293,13 @@ def parse_option_rules(data, path: Path | None = None) -> OptionRules:
         start_args = _start_args_map(
             item.get('start_args'), loaded.errors, index
         )
+        prefer = {
+            name: values[0]
+            for name, values in _choice_map(
+                item.get('prefer'), 'prefer', loaded.errors, index
+            ).items()
+            if values
+        }
         raw_disable = item.get('disable')
         disable = _values(raw_disable) if raw_disable is not None else ()
         notice = str(item.get('notice') or '').strip()
@@ -280,11 +309,11 @@ def parse_option_rules(data, path: Path | None = None) -> OptionRules:
             continue
         if (
             not invalid and not only and not block_start and not remind_start
-            and not start_args and not disable
+            and not start_args and not disable and not prefer
         ):
             loaded.errors.append(
                 f'rule {index}: needs "invalid", "only", "block_start", '
-                '"remind_start", "start_args" or "disable"'
+                '"remind_start", "start_args", "disable" or "prefer"'
             )
             continue
         loaded.rules.append(
@@ -300,6 +329,7 @@ def parse_option_rules(data, path: Path | None = None) -> OptionRules:
                 clipboard=str(item.get('clipboard') or '').strip(),
                 start_args=start_args,
                 disable=disable,
+                prefer=prefer,
             )
         )
     return loaded

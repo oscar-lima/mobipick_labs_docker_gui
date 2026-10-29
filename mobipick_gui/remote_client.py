@@ -188,6 +188,15 @@ def _build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser('headless', help='Show headless mode, or switch it on/off for the next launches (no windows)')
     p.add_argument('state', nargs='?', choices=('on', 'off'), help='omit to only show the state')
 
+    p = sub.add_parser('features', help='Show the features, or switch some: features +key -key mode_group=mode')
+    p.add_argument('changes', nargs='*', metavar='+KEY|-KEY|GROUP=MODE',
+                   help='+key switches a feature on, -key off, group=mode picks a mode; the rest stay as they are')
+
+    p = sub.add_parser('preset', help='Show the presets, load one (preset sim-full) or save the current setup')
+    p.add_argument('name', nargs='?', help='the preset to load; omit to list them')
+    p.add_argument('--save', metavar='NAME', help='save the current selection as your preset NAME')
+    p.add_argument('--description', default='', help='one line for --save')
+
     for name, help_text in (
         ('click', 'Press a toolbar button'),
         ('start', 'Press a button only if it is not running'),
@@ -321,6 +330,27 @@ def main(argv: Sequence[str] | None = None) -> int:
                 payload = client.call('POST', '/headless', body={'enabled': args.state == 'on'})
             else:
                 payload = client.call('GET', '/headless')
+        elif cmd == 'features':
+            if args.changes:
+                body = {'on': [], 'off': [], 'modes': {}}
+                for change in args.changes:
+                    if '=' in change:
+                        group, _, mode = change.partition('=')
+                        body['modes'][group] = mode
+                    elif change[:1] in '+-' and len(change) > 1:
+                        body['on' if change[0] == '+' else 'off'].append(change[1:])
+                    else:
+                        raise SystemExit(f'not +key, -key or group=mode: {change}')
+                payload = client.call('POST', '/features', body=body)
+            else:
+                payload = client.call('GET', '/features')
+        elif cmd == 'preset':
+            if args.save:
+                payload = client.call('POST', '/preset', body={'save': args.save, 'description': args.description})
+            elif args.name:
+                payload = client.call('POST', '/preset', body={'name': args.name})
+            else:
+                payload = client.call('GET', '/preset')
         elif cmd in {'click', 'start', 'stop'}:
             body: dict = {}
             if args.wait_for:

@@ -860,6 +860,10 @@ API_INDEX = [
     ('POST', '/buttons/{key}/stop', 'Press only when the button is running.'),
     ('GET', '/args', 'Launch arguments and world with values, choices, descriptions, invalid choices, and applicable buttons.'),
     ('POST', '/args', 'Select argument values without touching the profile. Body: {"anygrasp_mode": "real", "world": "moelk_tables"}.'),
+    ('GET', '/features', 'Features of the button profile (features file beside it): groups with each mode or feature, its class, whether it is on, the options it sets, options the profile lacks and choices the rules refuse; the target (sim or real), the presets, the loaded preset and the options that differ from it.'),
+    ('POST', '/features', 'Switch features relative to the current state. Body: {"on": [keys], "off": [keys], "modes": {"group": "mode"}, "options": {"name": "value"}}. On a remote ROS master careful features and modes stay off (only a tick in the Features dialog there switches one on; an allow_careful field is ignored and reported; an option that would set a value of such an unticked careful feature or mode is refused). Reports applied, refused (rules), missing and careful_kept_off.'),
+    ('GET', '/preset', 'The loaded preset and the presets there are.'),
+    ('POST', '/preset', 'Load a preset: {"name": "sim-full"} sets every feature and mode of it (careful ones stay off on a remote ROS master); or save the current selection as your preset: {"save": "name", "description": "..."}.'),
     ('GET', '/presence', 'Clients that declared they are using the GUI (lights the window icon). Any number of differently named agents may be present at once.'),
     ('POST', '/presence', 'Declare that you are using the GUI. Body: {"name": "<agent>", "ttl_s": 600, "note": ""}. Every later request refreshes it (name yourself with the X-Client-Name header or a "client" field when several agents are present), as does a running shell command or an open stream; ttl_s (max 1800) idle time without any of those lapses it and the GUI stops what you started.'),
     ('DELETE', '/presence', 'Declare that you are done; stops what you started unless {"keep": true}. Body: {"name": "<agent>", "token": "<token from the first POST /presence reply>"}; a wrong token is refused (409) so two agents with the same name cannot withdraw each other.'),
@@ -1395,6 +1399,7 @@ class RemoteControlServer:
                     'client_disconnected', 'config_reloaded', 'gui_closing',
                     'recording_started', 'recording_paused', 'recording_resumed',
                     'recording_stopped', 'recording_exported', 'headless_changed',
+                    'preset_applied',
                 ],
             }
         head = parts[0]
@@ -1449,6 +1454,21 @@ class RemoteControlServer:
                 if not values:
                     raise RemoteControlError('body must map argument names to values')
                 return {'args': self._invoke(lambda: self.adapter.set_args(values))}
+            raise RemoteControlError('method not allowed', status=HTTPStatus.METHOD_NOT_ALLOWED)
+        if head == 'features' and len(parts) == 1:
+            if method == 'GET':
+                return {'features': self._invoke(self.adapter.features)}
+            if method == 'POST':
+                return {'features': self._invoke(lambda: self.adapter.set_features(dict(body)))}
+            raise RemoteControlError('method not allowed', status=HTTPStatus.METHOD_NOT_ALLOWED)
+        if head == 'preset' and len(parts) == 1:
+            if method == 'GET':
+                status = self._invoke(self.adapter.features)
+                return {'preset': status.get('preset'), 'presets': status.get('presets', [])}
+            if method == 'POST':
+                result = self._invoke(lambda: self.adapter.set_preset(dict(body)))
+                self.emit('preset_applied', preset=result.get('preset') or result.get('name'))
+                return {'preset': result}
             raise RemoteControlError('method not allowed', status=HTTPStatus.METHOD_NOT_ALLOWED)
         if head == 'headless' and len(parts) == 1:
             if method == 'GET':
@@ -1985,6 +2005,15 @@ class GuiAdapter:
 
     def headless(self) -> dict:
         return {'enabled': False, 'skipped_by_auto_launch': [], 'headless_args': {}}
+
+    def features(self) -> dict:
+        return {'available': False, 'path': None, 'errors': []}
+
+    def set_features(self, body: dict) -> dict:
+        raise RemoteControlError('this GUI has no features')
+
+    def set_preset(self, body: dict) -> dict:
+        raise RemoteControlError('this GUI has no presets')
 
     def set_headless(self, enabled: bool) -> dict:
         raise RemoteControlError('this GUI has no headless mode')

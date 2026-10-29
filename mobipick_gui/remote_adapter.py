@@ -253,6 +253,60 @@ class MainWindowRemoteAdapter(GuiAdapter):
         except ValueError as exc:
             raise RemoteControlError(str(exc)) from exc
 
+    # -- features and presets ---------------------------------------------
+
+    def features(self) -> dict:
+        return self.window.feature_status()
+
+    def _require_features(self):
+        if not getattr(self.window, '_features', None):
+            raise RemoteControlError('this button profile has no features file')
+        return self.window._features
+
+    def set_features(self, body: dict) -> dict:
+        """Switch features relative to the current state: {"on": [keys], "off": [keys], "modes": {group: mode},
+        "options": {name: value}}. On a remote ROS master careful features and modes stay off: only a tick in the
+        Features dialog there switches one on, so an ``allow_careful`` field is ignored and reported."""
+        from .features import current_selection
+        features = self._require_features()
+        selection, _mixed = current_selection(features, self.window._feature_option_values(),
+                                              sim=not self.window._remote_master_enabled())
+        on, off = set(body.get('on') or ()), set(body.get('off') or ())
+        modes = dict(body.get('modes') or {})
+        unknown = sorted(key for key in on | off if key not in features.features)
+        unknown += sorted(f'{group}: {mode}' for group, mode in modes.items()
+                          if mode not in features.modes.get(group, {}))
+        if unknown:
+            raise RemoteControlError(f'unknown features or modes: {", ".join(unknown)}')
+        selection.features_on = (selection.features_on | on) - off
+        selection.modes.update(modes)
+        report = self.window.apply_feature_selection(
+            selection, options=body.get('options') or None, source='remote control')
+        return self._report_ignored_careful(body, report)
+
+    def set_preset(self, body: dict) -> dict:
+        """{"name": preset} loads a preset; {"save": name, "description": text} saves the current selection as the
+        user's preset."""
+        self._require_features()
+        try:
+            if body.get('save'):
+                return self.window.save_feature_preset(str(body['save']), str(body.get('description') or ''))
+            if not body.get('name'):
+                raise RemoteControlError('body must be {"name": "<preset>"} or {"save": "<name>"}')
+            report = self.window.load_feature_preset(str(body['name']), source='remote control')
+            return self._report_ignored_careful(body, report)
+        except (OSError, ValueError) as exc:
+            raise RemoteControlError(str(exc)) from exc
+
+    def _report_ignored_careful(self, body: dict, report: dict) -> dict:
+        if body.get('allow_careful'):
+            report['ignored'] = (
+                'allow_careful is ignored: a careful feature goes on on the real robot only by a tick in the '
+                'Features dialog there'
+            )
+            self.window._log_info(f'remote control: {report["ignored"]}')
+        return report
+
     def _leftover_process(self, key: str, before: dict) -> str:
         '''why a command button that does not show green still has a process: its tab's client or container is
         alive (a launch that is dying, or one the GUI lost track of); '' when there is none. The click handler

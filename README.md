@@ -725,6 +725,16 @@ its rule holds, after the toolbar arguments, so one button runs correctly in
 simulation and on the real robot. The arguments are read when the button
 starts (a running process keeps what it started with) and show in the
 remote API's `full_command`.
+`prefer` maps argument names to one value each without forbidding the
+others: when its rule starts to hold during a session (e.g. the remote master
+checkbox is switched off), the dropdowns move to the preferred values, and the
+user or a preset may then choose another value. A rule that already holds when
+the GUI loads leaves the saved choices alone. Use it for a default per mode
+(the simulation runs a feature unless a preset switches it off); keep `only`
+for what must never happen (a careful feature on the real robot). A
+dropdown set against a `prefer` rule that holds is never silent: the top of
+Advanced Launch Options lists it with the preferred value and the reason, and
+`GET /args` reports it as `against_prefer` (`value`, `current`, `reason`).
 `disable` greys out whole argument dropdowns while its rule holds: each keeps
 its value, shows the `reason` under it (Advanced Launch Options) and in its
 tooltip, and `POST /args` refuses to change it; `GET /args` reports the reason
@@ -732,6 +742,48 @@ as `disabled`.
 `running.*` conditions are read when a start or dropdown change is evaluated,
 not polled. Malformed rules are skipped and reported in the GUI log. The
 profile editor does not rewrite the rules file.
+
+### Features and presets
+
+A profile can group its generic arguments into whole features with a
+features file beside it, `<profile stem>_features.yaml` (format in
+`mobipick_gui/features.py`; a workspace usually generates it from its own
+feature list). **Features...** (beside **Advanced Launch Options...**, and in
+that dialog) then opens the Features dialog: a radio choice per mode group,
+of which exactly one mode is on (the group's `default` mode on the real robot;
+a mode marked `sim_default` is the sim's default instead, e.g. a careful mode
+the sim always tests), and a tick box per feature with its class
+(`safe` or `careful`), its description and the `name:=value` options it sets.
+A feature can need a parent feature on. Ticks change nothing until **Apply**
+(or **Apply and Auto Launch**), which selects the options through the same
+path as the dropdowns, so option rules, saved selections and `GET /args` see
+the same values. A feature whose option the profile lacks is shown greyed as
+"not in this profile"; one whose values the rules refuse shows the rule's
+reason.
+
+A preset names one mode per group and the features that are on; every other
+feature goes off, and its `options` set plain arguments. Presets ship in
+`<profile stem>_presets/<name>.yaml` beside the profile; **Save as...** and
+**Load file...** keep the user's own in
+`~/.config/mobipick-labs-docker-gui/feature_presets/<profile stem>/` (a user
+preset of the same name wins). The loaded preset is remembered across
+restarts; the Advanced Launch Options dialog says which options differ from
+it, and the Features dialog counts them.
+
+With **Use remote ROS master** on (the real robot) careful features and
+careful modes stay off: loading a preset, applying the dialog or the remote
+API switches them off. The only way to switch one on there is a tick in the
+Features dialog, confirmed in a question window that does not block either
+window and moves on its own (e-stop in hand); `allow_careful` in a remote
+request and `careful_on_real` in a preset file are ignored and reported. The
+plain `options` of a preset or a remote request cannot get around this: a value
+that an unticked careful feature or mode sets is refused and reported. The
+option rules still have the last word. The Features dialog is a top-level
+window of its own, so it can be moved aside from the main window.
+
+Without a remembered preset, loading the GUI moves the saved choices to the
+values of the `prefer` rules that hold (and logs each move), so an older saved
+configuration does not silently run the simulation with a feature off.
 
 The GUI normalizes all entries and creates matching process tabs and
 start/stop visual state.
@@ -911,6 +963,8 @@ click with a wait without missing events.
 | `GET /buttons` | Toolbar buttons with `state` (`red` stopped, `green` running, `yellow` busy, `grey` unavailable), `tooltip`, `runs_on` (`host` or `container`), the log `tab` key, the toolbar `args` the button receives and the resulting `full_command`, plus readiness from the auto-launch estimates: `startup_seconds` (the plan's `duration_seconds`, `null` when the button has none), `started_at`, `ready_at`, `ready_in_s` and `ready` (running and past the estimate). |
 | `POST /buttons/{key}/click`, `/start`, `/stop` | Press a button. `start`/`stop` are idempotent. Body may contain `args` (`{"anygrasp_mode": "real"}`, selected before the press), `wait_for` (event names), `timeout` and `allow_window`. While headless mode is on, a press that would start a window button is refused with 409 (`"refused": "headless_window"`, nothing is pressed and no `args` are changed); `"allow_window": true` (CLI `--allow-window`) presses anyway and is meant only for when the user explicitly asked to watch the window. Keyed events (`button_state`, `button_ready`, `process_finished`) only match this button; waiting for `button_ready` on a button that is already running and past its estimate returns at once with `already_ready: true`. |
 | `GET /args`, `POST /args` | The launch argument selectors (generic `arg_N` slots from the button profile) and world: `name`, current `value`, `options`, `description`, `option_descriptions`, and applicable `buttons`. `POST` selects values by name (`{"anygrasp_mode": "real", "world": "moelk_tables"}`); unknown names or values are rejected. `invalid` maps choices forbidden by option rules to their reasons, and `POST` rejects them too; `disabled` is the reason a rule greys out the whole selector (empty otherwise), and `POST` refuses to change it. |
+| `GET /features`, `POST /features` | The features of the profile: per group each mode or feature with its class, whether it is on, the options it sets, `missing` options the profile lacks and choices the rules `refused`; the `target` (sim or real), the presets, the loaded `preset` and the options that `differs` from it. `POST {"on": [keys], "off": [keys], "modes": {"group": "mode"}, "options": {...}}` switches features relative to the current state and reports `applied`, `refused`, `missing` and `careful_kept_off` (careful ones stay off on a remote ROS master; an `allow_careful` field is ignored and reported as `ignored`). |
+| `GET /preset`, `POST /preset` | The loaded preset and the presets there are. `POST {"name": "sim-full"}` loads a preset (careful features stay off on a remote ROS master) and emits `preset_applied`; `POST {"save": "name", "description": "..."}` saves the current selection as the user's preset. |
 | `GET /presence`, `POST /presence`, `DELETE /presence` | Declare that a client is using the GUI (`{"name": "<agent>", "ttl_s": 600, "note": ""}`; the name is chosen by the client, so any agent can use its own, and several may be present at once) or withdraw it. The first `POST` for a name returns a `token` that the `DELETE` must carry (`{"name": ..., "token": ...}`); a refresh by a namesake gets no token and its bye is refused with 409, so two agents that picked the same name cannot withdraw and clean up after each other. While a client is present the window icon glows bright and the GUI log records who is working. Presence is kept alive by activity, not by heartbeats: every request the client sends refreshes it (with several clients present, name yourself with the `X-Client-Name` header or a `client` field; an anonymous request refreshes the client present the longest, the one that also owns new processes), and so does a shell command it started that is still running or an `follow=1` stream it keeps open. Only `ttl_s` (default 10 min, max 30 min) of complete idleness lapses it. The server remembers every button, custom command, and shell the client started; when the client withdraws (without `"keep": true`) or lapses, the GUI stops those and logs the cleanup, so a crashed agent cannot leave the simulator running. Clients should not run a separate presence-refresh process: one that outlives its owner keeps a dead agent "present" for hours. |
 | `POST /reload` | Re-read `gui_settings.yaml` and the workspace button profile without restarting the GUI. Button commands, labels, tooltips and argument slots are picked up for the next press; running processes and their tabs are preserved. |
 | `GET /recording`, `POST /recording/{start\|pause\|resume\|stop}` | Screen recording state (`active`, `paused`, `segments`, `recorded_s`, `video_path`, `video_speedup_path`) and its control without Auto Launch. A recording started by a client is stopped when that client leaves. |
@@ -935,8 +989,8 @@ configured `duration_seconds`; immediate for buttons without an estimate),
 its ready time), `window_layout_applied` (the saved layout was replayed, which
 is the usual "everything is up" signal), `auto_launch_stopped`,
 `shell_opened`, `shell_exited`, `shell_closed`, `client_connected`,
-`client_disconnected` (with `expired: true` when a TTL ran out), and
-`gui_closing`.
+`client_disconnected` (with `expired: true` when a TTL ran out),
+`preset_applied`, and `gui_closing`.
 
 ### Window icon glow
 
