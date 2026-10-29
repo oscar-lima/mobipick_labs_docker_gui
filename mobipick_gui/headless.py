@@ -3,6 +3,8 @@
 When the main window's Headless switch is on, Auto Launch skips the buttons
 that open a window (RViz, RQt, viewers) and every button press appends the
 button's ``headless_args`` (for example ``gui:=false`` for the simulator).
+A remote API press that would open a window is refused unless the request
+says ``allow_window``; presses with the mouse are never blocked.
 The helpers here are pure so they can be tested without Qt.
 """
 
@@ -22,6 +24,34 @@ def button_opens_window(config: dict) -> bool:
     if explicit is not None:
         return bool(explicit)
     return str(config.get('action') or '') in WINDOW_ACTIONS
+
+
+# Builtin toolbar buttons outside the profile that open a desktop window.
+WINDOW_BUILTIN_KEYS = frozenset({'terminal'})
+
+
+def remote_press_opens_window(key: str, config: dict) -> bool:
+    """Return whether a remote press of button ``key`` starts a desktop window.
+
+    Profile buttons follow :func:`button_opens_window`; the builtin Terminal
+    button opens a terminal window on the desktop.
+    """
+    if key in WINDOW_BUILTIN_KEYS and not config:
+        return True
+    return button_opens_window(config)
+
+
+def headless_window_refusal(key: str, label: str) -> str:
+    """Human-readable reason a remote press of a window button is refused."""
+    name = f'{label} ({key})' if label and label != key else key
+    return (
+        f'refused: headless mode is on and pressing {name} would open a window '
+        "on the user's desktop. To see what it shows, (a) look off-screen: run "
+        'the tool on a virtual display (e.g. Xvfb) and take screenshots there, '
+        'or read the ROS topics, images or logs directly; or (b) only when the '
+        'user explicitly asked to watch this window, repeat the request with '
+        '"allow_window": true in the body (CLI: --allow-window).'
+    )
 
 
 def normalize_headless_args(raw: object) -> dict[str, str]:

@@ -208,8 +208,12 @@ marks `opens_window`, the simulator starts without gzclient and its rqt window
 (`gui:=false` from the profile's `headless_args`; about 1 GB less GPU memory),
 and the window layout is not replayed. `GET /headless` lists what is skipped
 and which args are added. It affects the next launches only: a process that
-already runs keeps its window until it is restarted. Need to look at
-something? Press that one window button, and stop it afterwards. Leave the
+already runs keeps its window until it is restarted. While headless is on,
+pressing a window button (RViz, RQt, viewers, Terminal) over the API is
+refused (409, `"refused": "headless_window"`): look off-screen instead (a
+virtual display such as Xvfb, the ROS image topics, logs). Only when the user
+explicitly asks to watch a window, press it with `"allow_window": true` (CLI
+`--allow-window`), and stop it afterwards. Leave the
 switch as you found it when you hand over unless the user wants it on.
 
 ```bash

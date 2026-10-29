@@ -254,8 +254,9 @@ windows or show Auto Launch progress, and every button starts with its
 headless arguments from the profile (`headless_args`, for example the
 simulator without the Gazebo window). It
 changes the next launches only; stop and start a process to apply it. A
-window button you press yourself still opens its window. The GUI remembers
-the setting.
+window button you press yourself still opens its window, but agents pressing
+one over the remote API are refused unless they say the user asked to watch
+it. The GUI remembers the setting.
 
 ## Recording Controls
 

@@ -198,6 +198,8 @@ def _build_parser() -> argparse.ArgumentParser:
         p.add_argument('--wait', dest='wait_for', default=None, help='comma-separated event names to wait for after pressing, e.g. button_ready')
         p.add_argument('--timeout', type=float, default=180.0, help='seconds to wait for the event')
         p.add_argument('--arg', dest='args', action='append', default=[], metavar='NAME=VALUE', help='select a toolbar argument before pressing (repeatable)')
+        if name != 'stop':
+            p.add_argument('--allow-window', action='store_true', help='start a button that opens a desktop window even in headless mode; only when the user explicitly asked to watch it')
 
     p = sub.add_parser('wait', help='Block until an event arrives')
     p.add_argument('events', help='comma-separated event names, e.g. window_layout_applied,auto_launch_complete')
@@ -325,6 +327,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 body = {'wait_for': _events_list(args.wait_for), 'timeout': args.timeout}
             if args.args:
                 body['args'] = _arg_values(args.args)
+            if getattr(args, 'allow_window', False):
+                body['allow_window'] = True
             payload = client.call('POST', f'/buttons/{args.key}/{cmd}', body=body, timeout=long_timeout(args.timeout))
         elif cmd == 'wait':
             body = {'events': _events_list(args.events), 'timeout': args.timeout}

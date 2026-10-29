@@ -22,6 +22,7 @@ from .remote_control import (
     RemoteControlError,
     RemoteShellSession,
 )
+from .headless import headless_window_refusal, remote_press_opens_window
 from .version import __version__
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -275,6 +276,23 @@ class MainWindowRemoteAdapter(GuiAdapter):
         if key not in getattr(self.window, '_config_buttons', {}):
             return []
         return _running_containers_with_tab(key)
+
+    def window_press_refusal(self, key: str, action: str) -> dict | None:
+        '''refusal for a remote press that would open a window while headless, else None'''
+        window = self.window
+        if action == 'stop' or not getattr(window, '_headless_mode', False):
+            return None
+        if self._button_widget(key) is None:
+            return None  # press_button reports the unknown key
+        config = getattr(window, '_config_buttons', {}).get(key, {})
+        if not remote_press_opens_window(key, config):
+            return None
+        before = self._describe_button(key)
+        if before['running']:
+            return None  # a click stops it; start answers "already running"
+        reason = headless_window_refusal(key, before['label'])
+        window._log_info(f'remote control: {action} {key} refused: headless, it opens a window')
+        return {'accepted': False, 'reason': reason, 'button': before}
 
     def press_button(self, key: str, action: str = 'click') -> dict:
         widget = self._button_widget(key)

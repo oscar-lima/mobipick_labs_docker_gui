@@ -855,8 +855,8 @@ API_INDEX = [
     ('GET', '/', 'This endpoint list.'),
     ('GET', '/status', 'GUI summary: workspace, image, running state, buttons, tabs, shells; "shell" says where POST /shell opens (container vs robot) and the robot target.'),
     ('GET', '/buttons', 'Toolbar buttons with their color state, text, args, full_command and readiness (startup_seconds, ready_in_s, ready).'),
-    ('POST', '/buttons/{key}/click', 'Press a button. Body: {"args": {"name": "value"}, "wait_for": [events], "timeout": s}. Events with a key only match this button; "button_ready" returns at once when it is already ready.'),
-    ('POST', '/buttons/{key}/start', 'Press only when the button is not running.'),
+    ('POST', '/buttons/{key}/click', 'Press a button. Body: {"args": {"name": "value"}, "wait_for": [events], "timeout": s, "allow_window": false}. Events with a key only match this button; "button_ready" returns at once when it is already ready. While headless mode is on, starting a button that opens a desktop window (RViz, RQt, viewers, Terminal) is refused with 409 and refused "headless_window"; take screenshots off-screen (e.g. a virtual display) or pass "allow_window": true only when the user explicitly asked to watch it.'),
+    ('POST', '/buttons/{key}/start', 'Press only when the button is not running. Same body and headless window refusal as click.'),
     ('POST', '/buttons/{key}/stop', 'Press only when the button is running.'),
     ('GET', '/args', 'Launch arguments and world with values, choices, descriptions, invalid choices, and applicable buttons.'),
     ('POST', '/args', 'Select argument values without touching the profile. Body: {"anygrasp_mode": "real", "world": "moelk_tables"}.'),
@@ -1544,6 +1544,18 @@ class RemoteControlServer:
         args = body.get('args')
         if args is not None and not isinstance(args, dict):
             raise RemoteControlError('"args" must map argument names to values')
+        allow_window = _bool_param(body.get('allow_window'), False)
+        if not allow_window and action != 'stop':
+            # headless: an agent must not pop a window up on the user's desktop
+            refusal = self._invoke(lambda: self.adapter.window_press_refusal(key, action))
+            if refusal:
+                raise RemoteControlError(
+                    str(refusal.get('reason') or 'refused: the button opens a window'),
+                    status=HTTPStatus.CONFLICT,
+                    accepted=False,
+                    refused='headless_window',
+                    button=refusal.get('button'),
+                )
         since = self.events.last_seq
         if args and action != 'stop':
             self._invoke(lambda: self.adapter.set_args(args))
@@ -1942,6 +1954,13 @@ class GuiAdapter:
 
     def press_button(self, key: str, action: str) -> dict:
         raise NotImplementedError
+
+    def window_press_refusal(self, key: str, action: str) -> dict | None:
+        """Refusal for a remote press that would open a window while headless.
+
+        Returns ``{'accepted': False, 'reason': ..., 'button': ...}`` or None.
+        """
+        return None
 
     def args(self) -> list[dict]:
         return []
