@@ -1,4 +1,5 @@
 import os
+import time
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
@@ -408,7 +409,10 @@ def test_window_layout_dialog_closes_after_successful_save(tmp_path, monkeypatch
     )
 
     window._on_save_window_state_clicked()
-    app.processEvents()
+    # the save runs as a background host task: under load its result needs more than one event loop pass
+    deadline = time.monotonic() + 5.0
+    while dialog.isVisible() and time.monotonic() < deadline:
+        app.processEvents()
 
     assert not dialog.isVisible()
 
