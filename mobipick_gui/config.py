@@ -687,6 +687,8 @@ def _normalize_button_entry(item: dict) -> dict | None:
             if item.get('opens_window') is not None else None
         ),
         'headless_args': normalize_headless_args(item.get('headless_args')),
+        # containers the button's command starts itself (no GUI label): Stop and Exit stop them too
+        'owned_containers': normalize_name_list(item.get('owned_containers')),
     }
     for slot in GENERIC_BUTTON_ARG_SLOTS:
         normalized[f'arg_{slot}_name'] = str(
@@ -730,6 +732,11 @@ def _normalize_button_entry(item: dict) -> dict | None:
 
 def normalize_old_names(raw) -> list[str]:
     """Return the former names of a launch option as a clean list (a comma separated string works too)."""
+    return normalize_name_list(raw)
+
+
+def normalize_name_list(raw) -> list[str]:
+    """Return names as a clean list without duplicates (a comma separated string works too)."""
     if isinstance(raw, str):
         raw = raw.split(',')
     if not isinstance(raw, (list, tuple)):
@@ -878,6 +885,9 @@ def _button_entry_for_save(entry: dict) -> dict:
     headless_args = normalize_headless_args(entry.get('headless_args'))
     if headless_args:
         saved['headless_args'] = headless_args
+    owned_containers = normalize_name_list(entry.get('owned_containers'))
+    if owned_containers:
+        saved['owned_containers'] = owned_containers
     for slot in GENERIC_BUTTON_ARG_SLOTS:
         arg_name = str(entry.get(f'arg_{slot}_name') or '').strip()
         if arg_name:

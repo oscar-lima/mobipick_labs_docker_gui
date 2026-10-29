@@ -1,6 +1,9 @@
 import subprocess
 from types import MethodType, SimpleNamespace
 
+import yaml
+
+from mobipick_gui.config import load_button_layout, save_button_layout
 from mobipick_gui.main_window import MainWindow
 
 # docker ps -a --format '{{.ID}}|{{.Names}}|{{.Image}}|{{.Labels}}|{{.Status}}' (#300)
@@ -17,9 +20,10 @@ PS_ROWS = [
 ]
 
 
-def _harness(owned_names=()):
+def _harness(owned_names=(), buttons=None):
     harness = SimpleNamespace(
         _images_cfg={'owned_container_names': list(owned_names)},
+        _config_buttons=dict(buttons or {}),
         _ros_shutdown_grace_s=0.0,
         _sp_run=lambda *args, **kwargs: subprocess.CompletedProcess(
             args, 0, stdout='\n'.join(PS_ROWS) + '\n', stderr=''),
@@ -62,3 +66,37 @@ def test_ownership_needs_the_label_not_a_name_or_image_substring():
     assert not harness._gui_owns_container('anything', 'com.docker.compose.project=mobipick2')
     assert not harness._gui_owns_container('mobipick-run-by-hand', '')
     assert not harness._gui_owns_container('x', 'note=mobipick.exec')
+
+
+def test_a_button_owned_container_is_stopped_also_when_its_script_died():
+    buttons = {
+        'anygrasp': {'key': 'anygrasp', 'kind': 'command', 'host': True, 'owned_containers': ['mobipick-graspness']},
+        'viewer': {'key': 'viewer', 'kind': 'command'},
+    }
+    commands = MainWindow._stop_all_related(_harness(buttons=buttons), None, grace_s=0.0)
+    assert _stopped_ids(commands) == ['a1', 'a2', 'b2']   # the button's tab is not running: its stop_command alone would miss it
+
+
+def test_button_owned_containers_match_exact_names_only():
+    harness = _harness(buttons={'anygrasp': {'owned_containers': ['mobipick-graspness']}})
+    assert harness._gui_owns_container('mobipick-graspness', '')
+    assert not harness._gui_owns_container('mobipick-graspness-test', '')
+    assert not harness._gui_owns_container('graspness', '')
+
+
+def test_the_profile_keeps_owned_containers(tmp_path):
+    source = tmp_path / 'buttons.yaml'
+    source.write_text(yaml.safe_dump({'buttons': [
+        {'key': 'anygrasp', 'kind': 'command', 'command': 'launch.sh', 'host': True,
+         'owned_containers': 'mobipick-graspness, mobipick-graspness'},
+        {'key': 'viewer', 'kind': 'command', 'command': 'viewer'},
+    ]}))
+    entries = {entry['key']: entry for entry in load_button_layout(source)}
+    assert entries['anygrasp']['owned_containers'] == ['mobipick-graspness']
+    assert entries['viewer']['owned_containers'] == []
+
+    saved_path = tmp_path / 'saved.yaml'
+    save_button_layout(saved_path, list(entries.values()))
+    saved = {entry['key']: entry for entry in yaml.safe_load(saved_path.read_text())['buttons']}
+    assert saved['anygrasp']['owned_containers'] == ['mobipick-graspness']
+    assert 'owned_containers' not in saved['viewer']

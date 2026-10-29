@@ -92,6 +92,7 @@ from .ansi import CSI_SEQ_RE, OSC_SEQ_RE, ansi_to_html
 from .async_tasks import AsyncTaskRunner
 from .bug_report import BugReportDialog
 from .config import (
+    normalize_name_list,
     saved_option_value,
     BUTTON_CONFIG_FILE,
     CONFIG,
@@ -9002,6 +9003,9 @@ CMD ["bash"]
                 'headless_args': normalize_headless_args(
                     entry.get('headless_args')
                 ),
+                'owned_containers': normalize_name_list(
+                    entry.get('owned_containers')
+                ),
             }
             for slot in GENERIC_BUTTON_ARG_SLOTS:
                 normalized[f'arg_{slot}_name'] = str(
@@ -14554,9 +14558,11 @@ CMD ["bash"]
     def _gui_owns_container(self, name: str, labels: str) -> bool:
         """True for a container this GUI started (#300): it carries the GUI's own
         ``mobipick.exec`` label, belongs to the GUI's compose project, or its
-        name is listed in ``images.owned_container_names``. A container that only
-        runs a Mobipick image or has "mobipick" in its name (an agent's or a
-        user's throwaway test container) is not the GUI's to stop."""
+        name is listed in ``images.owned_container_names`` or in a profile
+        button's ``owned_containers`` (a container the button's own script starts
+        without the GUI's labels, stopped also after that script died). A
+        container that only runs a Mobipick image or has "mobipick" in its name
+        (an agent's or a user's throwaway test container) is not the GUI's to stop."""
         keys: dict[str, str] = {}
         for item in (labels or '').split(','):
             key, _, value = item.strip().partition('=')
@@ -14567,7 +14573,12 @@ CMD ["bash"]
         project = CONFIG['process']['qprocess_env'].get('COMPOSE_PROJECT_NAME', '')
         if project and keys.get('com.docker.compose.project') == project:
             return True
-        return name in (self._images_cfg.get('owned_container_names') or [])
+        if name in (self._images_cfg.get('owned_container_names') or []):
+            return True
+        return any(
+            name in (config.get('owned_containers') or [])
+            for config in (getattr(self, '_config_buttons', None) or {}).values()
+        )
 
     def _stop_all_related(
         self,

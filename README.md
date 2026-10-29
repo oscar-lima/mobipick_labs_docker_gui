@@ -599,7 +599,12 @@ Command entries can declare:
   builtin RViz and RQt buttons count as windows;
 - `headless_args`, a mapping of ROS arguments the button gets while headless
   mode is on, e.g. `{gui: 'false'}` for the simulator. A name that is also a
-  generic argument slot replaces the selected value; the others are appended.
+  generic argument slot replaces the selected value; the others are appended;
+- `owned_containers`, the exact names of containers the button's command starts
+  itself, without the GUI's labels (e.g. a host script that runs `docker run
+  --name ...`). Stop and Exit stop them with the GUI's own containers, also
+  when the script has already died and left its container running. Other
+  containers are never stopped by name.
 
 ### Headless mode
 
