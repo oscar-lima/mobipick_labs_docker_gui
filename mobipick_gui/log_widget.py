@@ -5,7 +5,7 @@ from collections import deque
 from typing import Deque
 
 from PyQt5.QtCore import QTimer
-from PyQt5.QtGui import QTextCursor
+from PyQt5.QtGui import QTextBlockFormat, QTextCharFormat, QTextCursor
 from PyQt5.QtWidgets import QTextEdit
 
 from .config import CONFIG
@@ -83,21 +83,29 @@ class LogTextEdit(QTextEdit):
         cursor = QTextCursor(doc)
         cursor.movePosition(QTextCursor.End)
         try:
-            if self._dropped_pending:
-                dropped, self._dropped_pending = self._dropped_pending, 0
-                cursor.insertHtml(
-                    f'<span style="color:{NOTICE_COLOR}"><i>... dropped '
-                    f'{dropped} buffered lines; the log widget cannot keep '
-                    'up with the process output</i></span><br>'
-                )
-            remaining = limit if limit is not None else len(self._buf)
-            while self._buf and remaining > 0:
-                is_html, s = self._buf.popleft()
-                remaining -= 1
-                if is_html:
-                    cursor.insertHtml(s)
-                else:
-                    cursor.insertText(s)
+            # One edit block per tick: Qt then drops the blocks beyond
+            # max_block_count and lays the document out once at its end,
+            # instead of after every line (seconds per tick on a full tab).
+            cursor.beginEditBlock()
+            try:
+                if self._dropped_pending:
+                    dropped, self._dropped_pending = self._dropped_pending, 0
+                    self._insert_html(
+                        cursor,
+                        f'<span style="color:{NOTICE_COLOR}"><i>... dropped '
+                        f'{dropped} buffered lines; the log widget cannot keep '
+                        'up with the process output</i></span><br>',
+                    )
+                remaining = limit if limit is not None else len(self._buf)
+                while self._buf and remaining > 0:
+                    is_html, s = self._buf.popleft()
+                    remaining -= 1
+                    if is_html:
+                        self._insert_html(cursor, s)
+                    else:
+                        cursor.insertText(s)
+            finally:
+                cursor.endEditBlock()
             self._trim_document(doc)
             if at_bottom:
                 bar.setValue(bar.maximum())
@@ -108,6 +116,23 @@ class LogTextEdit(QTextEdit):
             self.setUpdatesEnabled(True)
             if not self._buf:
                 self._flush_timer.stop()
+
+    @staticmethod
+    def _insert_html(cursor: QTextCursor, text: str) -> None:
+        # A <br> breaks the line inside its block, and Qt lays a block out
+        # again on every insert: thousands of coloured lines in one block made
+        # a single flush tick take tens of seconds on the GUI thread. Each
+        # trailing <br> becomes a block of its own, in the default format so
+        # the colour of one line does not carry over to the next.
+        body = text
+        breaks = 0
+        while body.endswith('<br>'):
+            body = body[:-len('<br>')]
+            breaks += 1
+        if body:
+            cursor.insertHtml(body)
+        for _ in range(breaks):
+            cursor.insertBlock(QTextBlockFormat(), QTextCharFormat())
 
     def _trim_document(self, doc) -> None:
         if not self._max_characters:
