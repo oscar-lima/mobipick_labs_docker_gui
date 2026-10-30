@@ -1301,7 +1301,7 @@ class ImageSetupWizard(PersistentWindowStateMixin, QWizard):
     def _show_dependency_check_details(self) -> None:
         if self._dependency_details_dialog is not None:
             self._dependency_details_dialog.close()
-        dialog = QDialog(self)
+        dialog = QDialog(None)   # top-level: moves independently
         dialog.setWindowTitle('Host Dependency Check Details')
         dialog.resize(760, 520)
         layout = QVBoxLayout(dialog)
@@ -1423,7 +1423,7 @@ class ImageSetupWizard(PersistentWindowStateMixin, QWizard):
     def _show_setup_options_help(self) -> None:
         if self._setup_options_dialog is not None:
             self._setup_options_dialog.close()
-        dialog = QDialog(self)
+        dialog = QDialog(None)   # top-level: moves independently
         dialog.setWindowTitle('Setup Guide Choice Details')
         dialog.resize(720, 500)
         layout = QVBoxLayout(dialog)

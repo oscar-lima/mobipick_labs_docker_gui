@@ -62,3 +62,25 @@ def test_every_blocking_dialog_has_no_parent():
         if given and not all(isinstance(a, ast.Constant) and a.value is None for a in given):
             with_parent.append(where)
     assert with_parent == []
+
+
+# their argument is the main window they work on, not a parent: they open without one
+TAKES_THE_MAIN_WINDOW = {'FeaturesDialog'}
+
+
+def windows_built_on_the_main_window():
+    '''(where, call) of every dialog or wizard built with `self` as its parent, shown or run: a parent makes it a
+    transient window that GNOME always stacks above the main window, so the user cannot put the main window in front'''
+    for path in sorted(PACKAGE.glob('*.py')):
+        for node in ast.walk(ast.parse(path.read_text(), str(path))):
+            func = getattr(node, 'func', None)
+            if not (isinstance(node, ast.Call) and isinstance(func, ast.Name) and func.id.endswith(('Dialog', 'Wizard'))
+                    and func.id not in TAKES_THE_MAIN_WINDOW):
+                continue
+            given = [k.value for k in node.keywords if k.arg == 'parent'] + list(node.args)
+            if any(isinstance(a, ast.Name) and a.id == 'self' for a in given):
+                yield f'{path.name}:{node.lineno}'
+
+
+def test_no_dialog_or_wizard_has_the_main_window_as_parent():
+    assert list(windows_built_on_the_main_window()) == []

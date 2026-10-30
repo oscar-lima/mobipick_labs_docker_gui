@@ -3906,7 +3906,7 @@ class MainWindow(QMainWindow):
             self.generic_arg_controls
         )
         self._generic_arg_inputs: dict[int, QComboBox] = {}
-        self.advanced_launch_dialog = QDialog(self)
+        self.advanced_launch_dialog = QDialog(None)   # top-level: moves independently
         self.advanced_launch_dialog.setWindowTitle('Advanced Launch Options')
         self.advanced_launch_dialog.setMinimumWidth(400)
         advanced_root = QVBoxLayout(self.advanced_launch_dialog)
@@ -4861,7 +4861,7 @@ class MainWindow(QMainWindow):
         if self._config_paths_dialog:
             self.bring_window_to_front(self._config_paths_dialog)
             return
-        dialog = QDialog(self)
+        dialog = QDialog(None)   # top-level: moves independently
         dialog.setWindowTitle('Configuration Paths')
         layout = QVBoxLayout(dialog)
         legend = QLabel(
@@ -5010,7 +5010,7 @@ class MainWindow(QMainWindow):
     ) -> None:
         if self._config_path_contents_dialog:
             self._config_path_contents_dialog.close()
-        dialog = QDialog(self)
+        dialog = QDialog(None)   # top-level: moves independently
         dialog.setWindowTitle(title)
         dialog.resize(900, 620)
         layout = QVBoxLayout(dialog)
@@ -5160,7 +5160,7 @@ class MainWindow(QMainWindow):
             return
         dialog = DocumentationDialog(
             PROJECT_ROOT / 'gui_user_documentation.md',
-            self,
+            None,   # top-level: moves independently
         )
         dialog.finished.connect(self._on_documentation_dialog_closed)
         self._documentation_dialog = dialog
@@ -5173,7 +5173,7 @@ class MainWindow(QMainWindow):
         if self._bug_report_dialog:
             self.bring_window_to_front(self._bug_report_dialog)
             return
-        dialog = BugReportDialog(self._build_bug_report_context, self)
+        dialog = BugReportDialog(self._build_bug_report_context, None)   # top-level: moves independently
         dialog.finished.connect(self._on_bug_report_dialog_closed)
         self._bug_report_dialog = dialog
         dialog.show()
@@ -7326,7 +7326,7 @@ class MainWindow(QMainWindow):
             simulation_test_report_handler=(
                 self._open_setup_simulation_report
             ),
-            parent=self,
+            parent=None,   # top-level: moves independently
         )
         wizard.set_setup_start_handler(
             lambda selection: self._apply_setup_wizard(
@@ -7366,7 +7366,7 @@ class MainWindow(QMainWindow):
             self._bug_report_dialog.close()
         dialog = BugReportDialog(
             _context,
-            self,
+            None,   # top-level: moves independently
             initial_notes='Host dependency checks failed during setup.',
             initial_checked_keys={
                 'ubuntu_version',
@@ -7396,7 +7396,7 @@ class MainWindow(QMainWindow):
             self._bug_report_dialog.close()
         dialog = BugReportDialog(
             _context,
-            self,
+            None,   # top-level: moves independently
             initial_notes=(
                 'The setup wizard simulation test failed before Gazebo '
                 f'started: {launch_failure}'
@@ -14997,7 +14997,7 @@ CMD ["bash"]
             return
         dialog = getattr(self, '_start_reminder_dialog', None)
         if dialog is None:
-            dialog = StartReminderDialog(self)
+            dialog = StartReminderDialog(None)   # top-level: moves independently
             # closing ends it at once (deletion itself is deferred)
             dialog.finished.connect(
                 lambda *_: setattr(self, '_start_reminder_dialog', None)
