@@ -8,6 +8,7 @@ os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 import pytest
 from PyQt5.QtWidgets import QApplication, QMessageBox
 
+from mobipick_gui import popups
 from mobipick_gui.config import CONFIG
 import mobipick_gui.main_window as main_window_module
 from mobipick_gui.main_window import MainWindow
@@ -194,7 +195,7 @@ buttons:
     ).output
 
     monkeypatch.setattr(
-        QMessageBox,
+        popups,
         'question',
         lambda *args, **kwargs: QMessageBox.Cancel,
     )
@@ -203,7 +204,7 @@ buttons:
     assert 'custom-stale' in window.tasks
 
     monkeypatch.setattr(
-        QMessageBox,
+        popups,
         'question',
         lambda *args, **kwargs: QMessageBox.Yes,
     )
@@ -272,7 +273,7 @@ def test_workspace_switch_reloads_workspace_window_layout(tmp_path, monkeypatch)
         lambda self, force=False: None,
     )
     monkeypatch.setattr(
-        QMessageBox,
+        popups,
         'question',
         lambda *args, **kwargs: QMessageBox.Yes,
     )
@@ -364,7 +365,7 @@ def test_workspace_switch_selects_first_matching_image(tmp_path, monkeypatch):
         lambda self, force=False: None,
     )
     monkeypatch.setattr(
-        QMessageBox,
+        popups,
         'question',
         lambda *args, **kwargs: QMessageBox.Yes,
     )

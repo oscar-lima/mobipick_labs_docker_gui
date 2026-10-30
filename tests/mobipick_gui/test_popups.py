@@ -103,3 +103,32 @@ def test_the_remote_control_answers_the_newest_box_first():
     app().processEvents()
     assert adapter.active_dialog()['title'] == 'First'
     close_open_boxes()
+
+
+def test_a_question_waits_for_its_answer_in_a_box_without_a_parent(monkeypatch):
+    # the caller needs the answer, so the box stays modal, but as a window of its own
+    app()
+    asked = []
+
+    def answer(box):
+        asked.append((box.parent(), box.icon(), box.text()))
+        return QMessageBox.Yes
+
+    monkeypatch.setattr(popups.QMessageBox, 'exec_', answer)
+    assert popups.question(QWidget(), 'Remove Workspace', 'Remove gpt_ws?') == QMessageBox.Yes
+    assert popups.ask(QMessageBox.Warning, 'Clean stale ROS nodes', 'Continue?') == QMessageBox.Yes
+    assert asked == [
+        (None, QMessageBox.Question, 'Remove gpt_ws?'),
+        (None, QMessageBox.Warning, 'Continue?'),
+    ]
+
+
+def test_a_launch_option_rule_notice_opens_in_its_own_window():
+    from mobipick_gui.main_window import MainWindow
+
+    app()
+    MainWindow._show_rule_popup(SimpleNamespace(), 'Launch options', 'gzclient needs the sim.')
+
+    box, = popups.open_boxes()
+    assert box.parent() is None and not box.isModal() and box.isVisible()
+    assert box.text() == 'gzclient needs the sim.'

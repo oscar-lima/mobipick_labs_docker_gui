@@ -4789,7 +4789,7 @@ class MainWindow(QMainWindow):
         )
         if not master:
             return
-        answer = QMessageBox.question(
+        answer = popups.question(
             self,
             'Import Settings',
             'Importing will replace the configured workspace list and active '
@@ -4820,7 +4820,7 @@ class MainWindow(QMainWindow):
         paths_text = '\n'.join(
             f'  - {path.expanduser()}' for path in user_state_reset_paths()
         )
-        message = QMessageBox(self)
+        message = QMessageBox(None)  # top-level: not attached to the main window
         message.setIcon(QMessageBox.Warning)
         message.setWindowTitle('Copy Full Reset Command')
         message.setText(
@@ -5883,7 +5883,7 @@ class MainWindow(QMainWindow):
 
         workspace = self._workspace_mismatch_workspace_key()
         image = self._selected_image or '(none)'
-        message = QMessageBox(self)
+        message = QMessageBox(None)  # top-level: not attached to the main window
         message.setIcon(QMessageBox.Warning)
         message.setWindowTitle('Workspace/Image Mismatch')
         message.setText(
@@ -6109,7 +6109,7 @@ class MainWindow(QMainWindow):
             or self._workspace_image(name)
         )
         if target_image and target_image not in self._image_choices:
-            message = QMessageBox(self)
+            message = QMessageBox(None)  # top-level: not attached to the main window
             message.setIcon(QMessageBox.Warning)
             message.setWindowTitle('ROS 1 Workspace')
             message.setText(
@@ -6131,7 +6131,7 @@ class MainWindow(QMainWindow):
 
         current_name = self._workspace_registry.active or 'Docker image default'
         target_name = name or 'Docker image default'
-        answer = QMessageBox.question(
+        answer = popups.question(
             self,
             'Switch ROS 1 Workspace',
             f'Switch from "{current_name}" to "{target_name}"?\n\n'
@@ -8034,7 +8034,7 @@ class MainWindow(QMainWindow):
 
     def _confirm_host_image_pull(self, images: list[str]) -> bool:
         commands = '\n'.join(f'docker pull {image}' for image in images)
-        message = QMessageBox(self)
+        message = QMessageBox(None)  # top-level: not attached to the main window
         message.setIcon(QMessageBox.Question)
         message.setWindowTitle('Pull Docker Images')
         message.setText(
@@ -9959,8 +9959,8 @@ CMD ["bash"]
                 'This cleanup is only needed while using a remote ROS master.',
             )
             return
-        answer = QMessageBox.warning(
-            self,
+        answer = popups.ask(
+            QMessageBox.Warning,
             'Clean stale ROS nodes',
             'This checks the remote ROS master and unregisters nodes that '
             'cannot be reached. Temporarily unavailable nodes may also be '
@@ -12483,7 +12483,7 @@ CMD ["bash"]
         processes = plan.get('processes') or []
         launch_entries = processes if advanced else timeline
         if not launch_entries:
-            message = QMessageBox(self)
+            message = QMessageBox(None)  # top-level: not attached to the main window
             message.setIcon(QMessageBox.Information)
             message.setWindowTitle('Auto Launch')
             text = (
@@ -15015,10 +15015,8 @@ CMD ["bash"]
         message: str,
         icon: QMessageBox.Icon = QMessageBox.Warning,
     ) -> None:
-        """Show a rule notice without blocking the event loop."""
-        box = QMessageBox(icon, title, message, QMessageBox.Ok, self)
-        box.setAttribute(Qt.WA_DeleteOnClose)
-        box.open()
+        """Show a rule notice in its own window, without blocking the event loop."""
+        popups.show_box(icon, title, message)
 
     def _invalid_options(self) -> dict[str, dict[str, str]]:
         """Return ``{dropdown: {option: reason}}`` under the current state."""

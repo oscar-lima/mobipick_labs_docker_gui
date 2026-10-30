@@ -561,7 +561,7 @@ class WorkspaceManagerDialog(QDialog):
         workspace = self._selected_workspace()
         if not workspace:
             return
-        answer = QMessageBox.question(
+        answer = popups.question(
             self,
             'Remove Workspace',
             f'Remove {workspace.name} from the GUI registry?\n'
@@ -617,7 +617,7 @@ class WorkspaceManagerDialog(QDialog):
             return True
         workspace = self._selected_workspace()
         name = workspace.name if workspace else 'the selected workspace'
-        message = QMessageBox(self)
+        message = QMessageBox(None)  # top-level: not attached to the window behind it
         message.setIcon(QMessageBox.Warning)
         message.setWindowTitle('Unsaved Workspace Settings')
         message.setText(
@@ -711,7 +711,7 @@ class WorkspaceManagerDialog(QDialog):
         )
         if not master:
             return
-        answer = QMessageBox.question(
+        answer = popups.question(
             self,
             'Import Settings',
             'Importing will replace the configured workspace list and active '

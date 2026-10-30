@@ -2,6 +2,7 @@ from types import MethodType, SimpleNamespace
 
 from PyQt5.QtWidgets import QMessageBox
 
+from mobipick_gui import popups
 from mobipick_gui.main_window import MainWindow
 
 
@@ -149,8 +150,8 @@ def test_remote_ros_cleanup_runs_in_remote_tool_service(monkeypatch):
         harness,
     )
     monkeypatch.setattr(
-        QMessageBox,
-        'warning',
+        popups,
+        'ask',
         lambda *args, **kwargs: QMessageBox.Yes,
     )
 

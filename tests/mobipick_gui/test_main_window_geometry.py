@@ -455,7 +455,7 @@ def test_copy_full_reset_command_uses_warning_dialog(monkeypatch):
 
     assert clipboard_text == [command]
     assert information_calls
-    assert created_messages[0].parent is window
+    assert created_messages[0].parent is None   # top-level: not attached to the main window
     assert created_messages[0].detailed_text == command
     assert '/tmp/mobipick config' in created_messages[0].informative_text
     assert (
