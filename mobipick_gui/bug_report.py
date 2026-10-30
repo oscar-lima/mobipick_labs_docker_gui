@@ -587,7 +587,7 @@ class BugReportDialog(QDialog):
             + '.txt'
         )
         path, _ = QFileDialog.getSaveFileName(
-            self,
+            None,   # top-level: moves independently
             'Save Bug Report',
             default_name,
             'Text Files (*.txt);;Markdown Files (*.md);;All Files (*)',

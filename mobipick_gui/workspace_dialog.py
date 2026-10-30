@@ -444,7 +444,7 @@ class WorkspaceManagerDialog(QDialog):
     def _choose_master_folder(self) -> None:
         start = self.registry.master_folder or str(Path.home())
         selected = QFileDialog.getExistingDirectory(
-            self,
+            None,   # top-level: moves independently
             'Choose ROS workspace master folder',
             start,
         )
@@ -456,14 +456,14 @@ class WorkspaceManagerDialog(QDialog):
 
     def _create_master_folder(self) -> None:
         parent = QFileDialog.getExistingDirectory(
-            self,
+            None,   # top-level: moves independently
             'Choose parent folder',
             str(Path.home()),
         )
         if not parent:
             return
         name, accepted = QInputDialog.getText(
-            self,
+            None,   # top-level: moves independently
             'Create Master Folder',
             'Folder name:',
             text='ros1_ws',
@@ -506,7 +506,7 @@ class WorkspaceManagerDialog(QDialog):
     def _add_existing(self) -> None:
         start = self.registry.master_folder or str(Path.home())
         selected = QFileDialog.getExistingDirectory(
-            self,
+            None,   # top-level: moves independently
             'Choose existing catkin workspace',
             start,
         )
@@ -533,7 +533,7 @@ class WorkspaceManagerDialog(QDialog):
 
     def _create_workspace(self) -> None:
         name, accepted = QInputDialog.getText(
-            self,
+            None,   # top-level: moves independently
             'Create Workspace',
             'Workspace name:',
         )
@@ -542,7 +542,7 @@ class WorkspaceManagerDialog(QDialog):
         parent: Path | None = None
         if not self.registry.master_folder:
             selected = QFileDialog.getExistingDirectory(
-                self,
+                None,   # top-level: moves independently
                 'Choose workspace parent folder',
                 str(Path.home()),
             )
@@ -649,7 +649,7 @@ class WorkspaceManagerDialog(QDialog):
     def _browse_yaml(self, target: QComboBox) -> None:
         start = self._combo_text(target) or str(Path.home())
         selected, _ = QFileDialog.getOpenFileName(
-            self,
+            None,   # top-level: moves independently
             'Choose YAML configuration',
             start,
             'YAML files (*.yaml *.yml);;All files (*)',
@@ -669,7 +669,7 @@ class WorkspaceManagerDialog(QDialog):
 
     def _export_settings(self) -> None:
         selected, _ = QFileDialog.getSaveFileName(
-            self,
+            None,   # top-level: moves independently
             'Export Mobipick GUI settings',
             str(Path.home() / 'mobipick-gui-settings.yaml'),
             'YAML files (*.yaml *.yml)',
@@ -696,7 +696,7 @@ class WorkspaceManagerDialog(QDialog):
             )
             return
         selected, _ = QFileDialog.getOpenFileName(
-            self,
+            None,   # top-level: moves independently
             'Import Mobipick GUI settings',
             str(Path.home()),
             'YAML files (*.yaml *.yml);;All files (*)',
@@ -705,7 +705,7 @@ class WorkspaceManagerDialog(QDialog):
             return
         start = self.registry.master_folder or str(Path.home())
         master = QFileDialog.getExistingDirectory(
-            self,
+            None,   # top-level: moves independently
             'Choose the workspace master folder for imported settings',
             start,
         )
@@ -740,7 +740,7 @@ class WorkspaceManagerDialog(QDialog):
         )
 
     def _show_graph(self) -> None:
-        dialog = QDialog(self)
+        dialog = QDialog(None)   # top-level: moves independently
         dialog.setWindowTitle('ROS 1 Workspace Graph')
         dialog.resize(1000, 650)
         layout = QVBoxLayout(dialog)

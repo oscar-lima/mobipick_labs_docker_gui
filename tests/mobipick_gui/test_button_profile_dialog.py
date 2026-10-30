@@ -355,7 +355,7 @@ def test_button_profile_dialog_configures_args_in_popup(monkeypatch, tmp_path):
     class FakeArgumentsDialog:
         def __init__(self, entry, parent):
             assert entry['key'] == 'demo'
-            assert parent is dialog
+            assert parent is None   # top-level: GNOME does not glue it to the profile dialog
 
         def exec_(self):
             return QDialog.Accepted
@@ -478,7 +478,7 @@ def test_button_profile_dialog_cherry_picks_workspace_buttons(
     class FakeSelectionDialog:
         def __init__(self, workspace_name, entries, parent):
             assert workspace_name == 'source_ws'
-            assert parent is dialog
+            assert parent is None   # top-level: GNOME does not glue it to the profile dialog
             self.entries = entries
 
         def exec_(self):

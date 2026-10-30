@@ -272,7 +272,7 @@ class LaunchArgumentsDialog(QDialog):
         argument = self._selected_argument()
         if argument is None:
             return
-        dialog = LaunchArgumentDetailsDialog(argument, self._buttons, self)
+        dialog = LaunchArgumentDetailsDialog(argument, self._buttons, None)   # top-level: moves independently
         if dialog.exec_() != QDialog.Accepted:
             return
         updated = dialog.argument()
@@ -289,7 +289,7 @@ class LaunchArgumentsDialog(QDialog):
             'slot': slot, 'name': '', 'options': [], 'description': '',
             'option_descriptions': {}, 'advanced': True, 'buttons': set(),
         }
-        dialog = LaunchArgumentDetailsDialog(argument, self._buttons, self)
+        dialog = LaunchArgumentDetailsDialog(argument, self._buttons, None)   # top-level: moves independently
         if dialog.exec_() == QDialog.Accepted:
             self._arguments.append(dialog.argument())
             self._refresh_table(slot)

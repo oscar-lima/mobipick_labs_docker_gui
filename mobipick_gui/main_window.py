@@ -1381,7 +1381,7 @@ class ButtonProfileDialog(QDialog):
                         (candidate.get(field) for candidate in entries
                          if candidate.get(field)), default,
                     )
-        dialog = ButtonArgumentsDialog(entry, self)
+        dialog = ButtonArgumentsDialog(entry, None)   # top-level: moves independently
         if dialog.exec_() != QDialog.Accepted:
             return
         configured = dialog.arguments()
@@ -1437,7 +1437,7 @@ class ButtonProfileDialog(QDialog):
         if entries is None:
             return
         path, _selected_filter = QFileDialog.getSaveFileName(
-            self,
+            None,   # top-level: moves independently
             'Export Toolbar Button Profile',
             self._profile_dialog_start_dir(),
             'YAML files (*.yaml *.yml);;All files (*)',
@@ -1464,7 +1464,7 @@ class ButtonProfileDialog(QDialog):
 
     def _load_profile(self) -> None:
         path, _selected_filter = QFileDialog.getOpenFileName(
-            self,
+            None,   # top-level: moves independently
             'Load Toolbar Button Profile',
             self._profile_dialog_start_dir(),
             'YAML files (*.yaml *.yml);;All files (*)',
@@ -1493,7 +1493,7 @@ class ButtonProfileDialog(QDialog):
         if not names:
             return
         name, accepted = QInputDialog.getItem(
-            self,
+            None,   # top-level: moves independently
             'Import Toolbar Buttons',
             'Copy buttons from workspace:',
             names,
@@ -1523,7 +1523,7 @@ class ButtonProfileDialog(QDialog):
         selection_dialog = ButtonImportSelectionDialog(
             str(name),
             entries,
-            self,
+            None,   # top-level: moves independently
         )
         if selection_dialog.exec_() != QDialog.Accepted:
             return
@@ -2274,7 +2274,7 @@ class AutoLaunchWizard(QDialog):
     def _import_config(self) -> None:
         """Replace the shown settings with those of a YAML file."""
         path, _selected_filter = QFileDialog.getOpenFileName(
-            self,
+            None,   # top-level: moves independently
             'Import Auto Launch Configuration',
             self._file_dialog_start_dir(),
             'YAML files (*.yaml *.yml);;All files (*)',
@@ -2334,7 +2334,7 @@ class AutoLaunchWizard(QDialog):
         if not self._validate():
             return
         path, _selected_filter = QFileDialog.getSaveFileName(
-            self,
+            None,   # top-level: moves independently
             'Export Auto Launch Configuration',
             self._file_dialog_start_dir(),
             'YAML files (*.yaml *.yml);;All files (*)',
@@ -2641,7 +2641,7 @@ class DockerCpConfigDialog(QDialog):
             ),
             container_options_provider=self._container_options_for_selected_workspace,
             container_path_provider=self._container_path_provider,
-            parent=self,
+            parent=None,   # top-level: moves independently
         )
         if dialog.exec_() != QDialog.Accepted:
             return
@@ -2931,7 +2931,7 @@ class DockerCpPathDialog(QDialog):
         current = self.host_path_edit.text().strip()
         start = str(self._host_browse_start(current, self._host_start_path))
         selected, _filter = QFileDialog.getOpenFileName(
-            self,
+            None,   # top-level: moves independently
             'Select Host File',
             start,
         )
@@ -2955,7 +2955,7 @@ class DockerCpPathDialog(QDialog):
         if self._container_options_provider and self._container_path_provider:
             dialog = DockerCpContainerSelectDialog(
                 self._container_options_provider(),
-                self,
+                None,   # top-level: moves independently
             )
             if dialog.exec_() != QDialog.Accepted:
                 return
@@ -2970,7 +2970,7 @@ class DockerCpPathDialog(QDialog):
                 return
 
         selected, _filter = QFileDialog.getOpenFileName(
-            self,
+            None,   # top-level: moves independently
             'Select Container File',
             self._container_browse_start(),
         )
@@ -4747,7 +4747,7 @@ class MainWindow(QMainWindow):
 
     def _export_all_settings(self) -> None:
         selected, _ = QFileDialog.getSaveFileName(
-            self,
+            None,   # top-level: moves independently
             'Export Mobipick GUI settings',
             str(Path.home() / 'mobipick-gui-settings.yaml'),
             'YAML files (*.yaml *.yml)',
@@ -4774,7 +4774,7 @@ class MainWindow(QMainWindow):
             )
             return
         selected, _ = QFileDialog.getOpenFileName(
-            self,
+            None,   # top-level: moves independently
             'Import Mobipick GUI settings',
             str(Path.home()),
             'YAML files (*.yaml *.yml);;All files (*)',
@@ -4783,7 +4783,7 @@ class MainWindow(QMainWindow):
             return
         start = self._workspace_registry.master_folder or str(Path.home())
         master = QFileDialog.getExistingDirectory(
-            self,
+            None,   # top-level: moves independently
             'Choose the workspace master folder for imported settings',
             start,
         )
@@ -5115,7 +5115,7 @@ class MainWindow(QMainWindow):
             controls.setVisible(bool(visible))
 
     def _show_about_dialog(self) -> None:
-        dialog = QDialog(self)
+        dialog = QDialog(None)   # top-level: moves independently
         dialog.setWindowTitle('About Mobipick Labs Control')
         dialog.setModal(True)
 
@@ -5326,7 +5326,7 @@ class MainWindow(QMainWindow):
         source_path = self._resolved_button_config_path()
         save_path = self._button_profile_save_path(source_path)
         dialog = LaunchArgumentsDialog(
-            self._button_layout_for_editor(), self
+            self._button_layout_for_editor(), None   # top-level: moves independently
         )
         if dialog.exec_() != QDialog.Accepted:
             return
@@ -5354,7 +5354,7 @@ class MainWindow(QMainWindow):
             self._button_layout_for_editor(),
             source_path,
             save_path,
-            self,
+            None,   # top-level: moves independently
             workspace_profiles=self._workspace_button_profile_sources(),
         )
         if dialog.exec_() != QDialog.Accepted:
@@ -5755,7 +5755,7 @@ class MainWindow(QMainWindow):
             images,
             [workspace.name for workspace in self._workspace_registry.workspaces],
             self._workspace_match_map(images),
-            self,
+            None,   # top-level: moves independently
         )
         if dialog.exec_() != QDialog.Accepted:
             return
@@ -7660,7 +7660,7 @@ class MainWindow(QMainWindow):
             self._image_discovery_filters(),
             image_refs,
             self._image_ref_matches_pattern,
-            self,
+            None,   # top-level: moves independently
         )
         if dialog.exec_() != QDialog.Accepted:
             return
@@ -8055,7 +8055,7 @@ class MainWindow(QMainWindow):
 
     def _confirm_manual_image_pull(self, images: list[str]) -> bool:
         commands = '\n'.join(f'docker pull {image}' for image in images)
-        dialog = QDialog(self)
+        dialog = QDialog(None)   # top-level: moves independently
         dialog.setWindowTitle('Manual Docker Pull')
 
         layout = QVBoxLayout(dialog)
@@ -11446,7 +11446,7 @@ CMD ["bash"]
             self._recording_window.hide()
 
     def _open_recording_options(self) -> None:
-        dialog = QDialog(self)
+        dialog = QDialog(None)   # top-level: moves independently
         dialog.setWindowTitle('Recording Options')
         layout = QVBoxLayout(dialog)
 
@@ -11491,7 +11491,7 @@ CMD ["bash"]
 
         def _browse() -> None:
             selected = QFileDialog.getExistingDirectory(
-                dialog,
+                None,   # top-level: moves independently
                 'Choose recording folder',
                 path_edit.text().strip() or str(self._recording_output_root),
             )
@@ -11739,7 +11739,7 @@ CMD ["bash"]
         title: str,
         remember_default: bool,
     ) -> tuple[Path, bool] | None:
-        dialog = QDialog(self)
+        dialog = QDialog(None)   # top-level: moves independently
         dialog.setWindowTitle(title)
         layout = QVBoxLayout(dialog)
 
@@ -11774,7 +11774,7 @@ CMD ["bash"]
 
         def _browse() -> None:
             selected = QFileDialog.getExistingDirectory(
-                dialog,
+                None,   # top-level: moves independently
                 'Choose recording folder',
                 path_edit.text().strip() or str(self._recording_output_root),
             )
@@ -12912,7 +12912,7 @@ CMD ["bash"]
             self._launch_plan.get('processes', []) if isinstance(self._launch_plan, dict) else [],
             self._launch_plan.get('mode', 'legacy') if isinstance(self._launch_plan, dict) else 'legacy',
             self._start_auto_launch_measurement,
-            self,
+            None,   # top-level: moves independently
             process_settings=(
                 self._launch_plan.get('process_settings')
                 if isinstance(self._launch_plan, dict)
@@ -16372,7 +16372,7 @@ CMD ["bash"]
         timestamp = datetime.now().strftime('%d-%m-%Y-%H-%M-%S')
         timestamp_tag = f'{display_base_tag}--{timestamp}'
 
-        dialog = QDialog(self)
+        dialog = QDialog(None)   # top-level: moves independently
         dialog.setWindowTitle('Commit Current Tab')
 
         layout = QVBoxLayout(dialog)
@@ -16455,7 +16455,7 @@ CMD ["bash"]
             )
 
         def _show_mounts_dialog():
-            mounts_dialog = QDialog(dialog)
+            mounts_dialog = QDialog(None)   # top-level: moves independently
             mounts_dialog.setWindowTitle('Container Mounts')
             mounts_layout = QVBoxLayout(mounts_dialog)
             mounts_text = QTextEdit(mounts_dialog)
@@ -16533,7 +16533,7 @@ CMD ["bash"]
     def manage_images(self):
         self._log_button_click(self.manage_images_button, 'Manage Images')
 
-        dialog = QDialog(self)
+        dialog = QDialog(None)   # top-level: moves independently
         dialog.setWindowTitle('Manage Images')
         dialog.setModal(True)
 
@@ -16820,7 +16820,7 @@ CMD ["bash"]
             self._docker_cp_setup_container_options,
             self._docker_cp_container_path_from_setup,
             self._docker_cp_host_start_path,
-            self,
+            None,   # top-level: moves independently
         )
         if dialog.exec_() != QDialog.Accepted:
             return
@@ -16860,7 +16860,7 @@ CMD ["bash"]
         label = self.tabs.tabText(index).strip() or f'tab{index + 1}'
         default_name = self._suggest_log_filename(label)
         path, _ = QFileDialog.getSaveFileName(
-            self,
+            None,   # top-level: moves independently
             'Save Current Log',
             default_name,
             'HTML Files (*.html);;All Files (*)',
@@ -16872,7 +16872,7 @@ CMD ["bash"]
 
     def load_log_file(self):
         path, _ = QFileDialog.getOpenFileName(
-            self,
+            None,   # top-level: moves independently
             'Load Log',
             '',
             'HTML Files (*.html);;All Files (*)',
@@ -16937,7 +16937,7 @@ CMD ["bash"]
         if not entries:
             popups.information(self, 'Save Logs', 'There are no logs to save.')
             return
-        directory = QFileDialog.getExistingDirectory(self, 'Select folder to save logs')
+        directory = QFileDialog.getExistingDirectory(None, 'Select folder to save logs')   # top-level: moves independently
         if not directory:
             return
         saved = self._save_logs_to_directory(Path(directory), entries=entries)
