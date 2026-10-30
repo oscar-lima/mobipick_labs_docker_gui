@@ -14898,6 +14898,8 @@ CMD ["bash"]
         # prefer rules matching at load keep the saved choices of a remembered preset; without one the next
         # build of the dropdowns applies them once, so an older saved config does not silently run a feature off
         self._preferred_rules_matched = None
+        # {dropdown: (the user's value, the value a rule moved it to)} for each choice a rule made invalid
+        self._rule_overridden: dict[str, tuple[str, str]] = {}
         MainWindow._load_features(self)
         self._prefer_at_load_pending = not getattr(self, '_feature_preset', None)
 
@@ -15066,6 +15068,7 @@ CMD ["bash"]
         switches: list[str] = []
         try:
             switches += MainWindow._apply_preferred_options(self, rules)
+            switches += MainWindow._restore_rule_overridden(self)
             # A switch can change what another rule forbids; settle it.
             for _attempt in range(4):
                 invalid = MainWindow._invalid_options(self)
@@ -15089,6 +15092,9 @@ CMD ["bash"]
                     if fallback < 0:
                         continue
                     combo.setCurrentIndex(fallback)
+                    overridden = getattr(self, '_rule_overridden', None)
+                    if overridden is not None and name not in overridden:
+                        overridden[name] = (current, combo.itemText(fallback).strip())
                     message = (
                         f'{name}={current} is invalid '
                         f'({forbidden[current]}); '
@@ -15109,6 +15115,33 @@ CMD ["bash"]
                 self, 'Option changed', '.\n'.join(switches) + '.'
             )
         MainWindow._refresh_features_controls(self)
+
+    def _restore_rule_overridden(self) -> list[str]:
+        """Give each dropdown a rule moved off a choice that choice back once no rule forbids it any more (e.g. the
+        sim's AnyGrasp mockup after a real-robot round trip). A dropdown whose value changed while the rule held (the
+        user's choice or a ``prefer`` rule) keeps it: only a dropdown still at the value the rule picked goes back."""
+        overridden = getattr(self, '_rule_overridden', None)
+        if not overridden:
+            return []
+        combos = MainWindow._option_rule_combos(self)
+        invalid = MainWindow._invalid_options(self)
+        switches: list[str] = []
+        for name, (value, forced) in list(overridden.items()):
+            combo = combos.get(name)
+            if combo is None or combo.currentText().strip() != forced:
+                del overridden[name]
+                continue
+            if value in invalid.get(name, {}):
+                continue
+            del overridden[name]
+            position = combo.findText(value)
+            if position < 0:
+                continue
+            combo.setCurrentIndex(position)
+            message = f'{name}={forced} switched back to {value} (the rule that forbade {value} no longer applies)'
+            self._log_info(message)
+            switches.append(message)
+        return switches
 
     def _apply_preferred_options(self, rules) -> list[str]:
         """Move dropdowns to the values of ``prefer`` rules that started to match since the last evaluation."""

@@ -714,7 +714,12 @@ argument name; `when` can also read `remote_master` and
 `running.<button key>`. Every condition of a rule must hold. Invalid options
 are greyed out with the reason as tooltip. A selection that becomes invalid
 switches to the first valid option; when the user's own change (a dropdown or
-the remote master checkbox) caused it, a non-modal popup explains it.
+the remote master checkbox) caused it, a non-modal popup explains it. Once no
+rule forbids the old selection any more (e.g. the remote master checkbox is
+switched off again), it comes back, so a real-robot round trip leaves the
+simulation as it was; a dropdown whose value changed while the rule held (by
+the user, the remote API or a `prefer` rule) keeps that value. The GUI keeps
+these old selections in memory only: a restart forgets them.
 `block_start` refuses starting toolbar buttons, Roscore and Terminal (never
 stopping them) with a popup. Pressing Auto Launch checks every step first,
 treating the run's own steps as running (so a rule waiting for a step of

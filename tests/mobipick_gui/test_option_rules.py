@@ -630,3 +630,85 @@ def test_load_with_a_remembered_preset_keeps_the_saved_choices(monkeypatch, tmp_
     finally:
         window.close()
         app.processEvents()
+
+
+def test_unticking_the_remote_master_gives_back_the_world_a_rule_moved_off(monkeypatch, tmp_path):
+    popups = _record_popups(monkeypatch)
+    app, window = _create_window(monkeypatch, tmp_path)
+    try:
+        window._option_rules = parse_option_rules(REAL_ROBOT_RULES)
+        window._rule_overridden = {}
+        combo = window.world_combo
+        combo.setCurrentIndex(combo.findText('moelk_tables'))
+
+        window.remote_master_checkbox.setChecked(True)
+        assert window._current_world() == 'cic_tables'
+
+        window.remote_master_checkbox.setChecked(False)
+
+        assert window._current_world() == 'moelk_tables'
+        assert 'world=cic_tables switched back to moelk_tables' in popups[-1][1]
+        assert window._rule_overridden == {}
+    finally:
+        window.close()
+        app.processEvents()
+
+
+MODE_RULES = {
+    'rules': [
+        {
+            'when': {'remote_master': True},
+            'only': {'mode': ['cpu', 'real']},
+            'reason': 'the real robot has no mockup',
+        }
+    ]
+}
+
+
+def _mode_window(monkeypatch, tmp_path):
+    app, window = _create_window(monkeypatch, tmp_path)
+    window._option_rules = parse_option_rules(MODE_RULES)
+    window._rule_overridden = {}
+    window._button_layout = [{
+        'key': 'anygrasp', 'arg_1_name': 'mode', 'arg_1_options': ['mockup', 'cpu', 'real'],
+        'arg_1_advanced': True, 'arg_1_description': 'How the grasps are made',
+    }]
+    window._refresh_generic_arg_controls()
+    window.set_generic_args({'mode': 'mockup'})   # saved values of an earlier test may have set another start value
+    return app, window, window._generic_arg_inputs[1]
+
+
+def test_a_choice_made_while_the_rule_held_is_kept_after_unticking(monkeypatch, tmp_path):
+    _record_popups(monkeypatch)
+    app, window, combo = _mode_window(monkeypatch, tmp_path)
+    try:
+        assert combo.currentText() == 'mockup'
+        window.remote_master_checkbox.setChecked(True)
+        assert combo.currentText() == 'cpu'
+        window.set_generic_args({'mode': 'real'})   # chosen on the real robot
+
+        window.remote_master_checkbox.setChecked(False)
+
+        assert combo.currentText() == 'real'
+        assert window._rule_overridden == {}
+    finally:
+        window.close()
+        app.processEvents()
+
+
+def test_the_overridden_choice_comes_back_only_once(monkeypatch, tmp_path):
+    _record_popups(monkeypatch)
+    app, window, combo = _mode_window(monkeypatch, tmp_path)
+    try:
+        window.remote_master_checkbox.setChecked(True)
+        window.remote_master_checkbox.setChecked(False)
+        assert combo.currentText() == 'mockup'
+
+        window.set_generic_args({'mode': 'cpu'})   # a later sim choice is the user's, not the rule's
+        window.remote_master_checkbox.setChecked(True)
+        window.remote_master_checkbox.setChecked(False)
+
+        assert combo.currentText() == 'cpu'
+    finally:
+        window.close()
+        app.processEvents()
