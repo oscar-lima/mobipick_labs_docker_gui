@@ -189,6 +189,7 @@ from .window_control import (
 from .window_layout import WindowLayoutManager
 from .workspace_dialog import WorkspaceManagerDialog
 from .workspaces import RosWorkspace, WorkspaceRegistry
+from . import popups
 
 _SIGINT_TRIGGERED = False
 ABOUT_MAINTAINER_NAME = 'Oscar Lima'
@@ -939,7 +940,7 @@ class ButtonArgumentsDialog(QDialog):
                 self._applies_checks[slot].isChecked()
                 and not self._name_inputs[slot].text().strip()
             ):
-                QMessageBox.warning(
+                popups.warning(
                     self,
                     'Toolbar Button Arguments',
                     f'Argument {slot} needs a name when it applies.',
@@ -952,7 +953,7 @@ class ButtonArgumentsDialog(QDialog):
                     for value in self._options_inputs[slot].text().split(',')
                 )
             ):
-                QMessageBox.warning(
+                popups.warning(
                     self,
                     'Toolbar Button Arguments',
                     f'Argument {slot} needs at least one combo option.',
@@ -970,7 +971,7 @@ class ButtonArgumentsDialog(QDialog):
                     continue
                 value, separator, text = line.partition('|')
                 if not separator or value.strip() not in options or not text.strip():
-                    QMessageBox.warning(
+                    popups.warning(
                         self, 'Toolbar Button Arguments',
                         f'Argument {slot}: use "value | description" '
                         'with one of its selectable values.',
@@ -1050,7 +1051,7 @@ class ButtonImportSelectionDialog(QDialog):
 
     def accept(self) -> None:
         if not self.selected_entries():
-            QMessageBox.information(
+            popups.information(
                 self,
                 'Import Toolbar Buttons',
                 'Select at least one button to import.',
@@ -1335,7 +1336,7 @@ class ButtonProfileDialog(QDialog):
     def _configure_selected_arguments(self) -> None:
         row = self._selected_row()
         if row < 0:
-            QMessageBox.information(
+            popups.information(
                 self,
                 'Toolbar Button Arguments',
                 'Select a toolbar button first.',
@@ -1427,7 +1428,7 @@ class ButtonProfileDialog(QDialog):
         entries = self.button_layout()
         error = self._validation_error(entries)
         if error:
-            QMessageBox.warning(self, 'Toolbar Buttons', error)
+            popups.warning(self, 'Toolbar Buttons', error)
             return None
         return entries
 
@@ -1449,13 +1450,13 @@ class ButtonProfileDialog(QDialog):
         try:
             saved_path = save_button_layout(target, entries)
         except OSError as exc:
-            QMessageBox.warning(
+            popups.warning(
                 self,
                 'Toolbar Buttons',
                 f'Failed to export toolbar button profile:\n{exc}',
             )
             return
-        QMessageBox.information(
+        popups.information(
             self,
             'Toolbar Buttons',
             f'Exported toolbar button profile to:\n{saved_path}',
@@ -1474,7 +1475,7 @@ class ButtonProfileDialog(QDialog):
         try:
             entries = load_button_layout(source)
         except Exception as exc:
-            QMessageBox.warning(
+            popups.warning(
                 self,
                 'Toolbar Buttons',
                 f'Failed to load toolbar button profile:\n{exc}',
@@ -1503,7 +1504,7 @@ class ButtonProfileDialog(QDialog):
             return
         source = self._workspace_profiles[str(name)]
         if not source.is_file():
-            QMessageBox.warning(
+            popups.warning(
                 self,
                 'Toolbar Buttons',
                 f'The button profile for workspace "{name}" does not exist:\n'
@@ -1513,7 +1514,7 @@ class ButtonProfileDialog(QDialog):
         try:
             entries = load_button_layout(source)
         except Exception as exc:
-            QMessageBox.warning(
+            popups.warning(
                 self,
                 'Toolbar Buttons',
                 f'Failed to import buttons from workspace "{name}":\n{exc}',
@@ -1554,7 +1555,7 @@ class ButtonProfileDialog(QDialog):
             return
         key = self._row_key(row)
         if key in self.REQUIRED_KEYS:
-            QMessageBox.information(
+            popups.information(
                 self,
                 'Toolbar Buttons',
                 'Sim and RViz cannot be removed.',
@@ -1718,7 +1719,7 @@ class ButtonProfileDialog(QDialog):
         entries = self.button_layout()
         error = self._validation_error(entries)
         if error:
-            QMessageBox.warning(self, 'Toolbar Buttons', error)
+            popups.warning(self, 'Toolbar Buttons', error)
             return
         super().accept()
 
@@ -2284,7 +2285,7 @@ class AutoLaunchWizard(QDialog):
         try:
             plan = read_launch_sequence_file(source)
         except (OSError, ValueError, yaml.YAMLError) as exc:
-            QMessageBox.warning(
+            popups.warning(
                 self,
                 'Auto Launch',
                 f'Failed to import auto launch configuration:\n{exc}',
@@ -2293,7 +2294,7 @@ class AutoLaunchWizard(QDialog):
         if not (
             plan['timeline'] or plan['processes'] or plan['process_settings']
         ):
-            QMessageBox.warning(
+            popups.warning(
                 self,
                 'Auto Launch',
                 f'{source} does not define any auto launch steps.',
@@ -2321,7 +2322,7 @@ class AutoLaunchWizard(QDialog):
         )
         unknown = sorted(referenced - known)
         if unknown:
-            QMessageBox.information(
+            popups.information(
                 self,
                 'Auto Launch',
                 'These processes are not toolbar buttons of the active '
@@ -2355,13 +2356,13 @@ class AutoLaunchWizard(QDialog):
                 process_settings=self.process_settings(),
             )
         except OSError as exc:
-            QMessageBox.warning(
+            popups.warning(
                 self,
                 'Auto Launch',
                 f'Failed to export auto launch configuration:\n{exc}',
             )
             return
-        QMessageBox.information(
+        popups.information(
             self,
             'Auto Launch',
             f'Exported auto launch configuration to:\n{saved_path}',
@@ -2386,7 +2387,7 @@ class AutoLaunchWizard(QDialog):
     def _start_ready_measurement(self, row: dict) -> None:
         """Launch one process and begin its interactive readiness timer."""
         if not self._measurement_launcher:
-            QMessageBox.warning(
+            popups.warning(
                 self,
                 'Measure Ready Time',
                 'Process launching is unavailable in this window.',
@@ -2469,7 +2470,7 @@ class AutoLaunchWizard(QDialog):
 
     def _validate(self) -> bool:
         if not self._selected_entries():
-            QMessageBox.warning(
+            popups.warning(
                 self,
                 'Auto Launch',
                 'Select at least one launch step before saving.',
@@ -2478,7 +2479,7 @@ class AutoLaunchWizard(QDialog):
         if self.mode() == 'advanced':
             error = self._advanced_validation_error()
             if error:
-                QMessageBox.warning(self, 'Auto Launch', error)
+                popups.warning(self, 'Auto Launch', error)
                 return False
         return True
 
@@ -2817,7 +2818,7 @@ class DockerCpConfigDialog(QDialog):
     def accept(self):
         key = self._selected_workspace_key()
         if not key:
-            QMessageBox.warning(
+            popups.warning(
                 self,
                 'Docker cp Paths',
                 'Select a workspace before saving.',
@@ -2826,7 +2827,7 @@ class DockerCpConfigDialog(QDialog):
         try:
             section = self._current_section()
         except ValueError as exc:
-            QMessageBox.warning(self, 'Docker cp Paths', str(exc))
+            popups.warning(self, 'Docker cp Paths', str(exc))
             return
         self._user_config[key] = section
         self._store_current_profile()
@@ -3012,7 +3013,7 @@ class DockerCpPathDialog(QDialog):
         host = self.host_path_edit.text().strip()
         container = self.container_path_edit.text().strip()
         if not host or not container:
-            QMessageBox.warning(
+            popups.warning(
                 self,
                 'Docker cp Paths',
                 'Choose both the host file and container path.',
@@ -3020,7 +3021,7 @@ class DockerCpPathDialog(QDialog):
             return
         host_path = Path(os.path.expanduser(os.path.expandvars(host)))
         if not host_path.is_file():
-            QMessageBox.warning(
+            popups.warning(
                 self,
                 'Docker cp Paths',
                 'Choose an existing host file.',
@@ -3060,7 +3061,7 @@ class DockerCpContainerSelectDialog(QDialog):
 
     def accept(self) -> None:
         if not self.container_ref():
-            QMessageBox.warning(
+            popups.warning(
                 self,
                 'Docker cp Paths',
                 'Select a running container or type the path manually.',
@@ -4389,7 +4390,7 @@ class MainWindow(QMainWindow):
         )
 
     def _show_remote_control_info(self) -> None:
-        QMessageBox.information(self, 'Remote Control', self._remote_control_info_text())
+        popups.information(self, 'Remote Control', self._remote_control_info_text())
 
     def _mark_auto_launch_ready(self, key: str, *, already_running: bool = False) -> None:
         """Record an auto-launch process as ready and notify remote clients."""
@@ -4756,9 +4757,9 @@ class MainWindow(QMainWindow):
         try:
             export_settings(Path(selected), self._workspace_registry)
         except (OSError, ValueError) as exc:
-            QMessageBox.critical(self, 'Export Settings', str(exc))
+            popups.critical(self, 'Export Settings', str(exc))
             return
-        QMessageBox.information(
+        popups.information(
             self,
             'Export Settings',
             f'Settings exported to:\n{selected}',
@@ -4766,7 +4767,7 @@ class MainWindow(QMainWindow):
 
     def _import_all_settings(self) -> None:
         if self._workspace_processes_running():
-            QMessageBox.warning(
+            popups.warning(
                 self,
                 'Import Settings',
                 'Stop running workspace processes before importing settings.',
@@ -4805,10 +4806,10 @@ class MainWindow(QMainWindow):
                 master_folder=Path(master),
             )
         except (OSError, ValueError, yaml.YAMLError) as exc:
-            QMessageBox.critical(self, 'Import Settings', str(exc))
+            popups.critical(self, 'Import Settings', str(exc))
             return
         self._apply_imported_workspace_settings()
-        QMessageBox.information(
+        popups.information(
             self,
             'Import Settings',
             'Settings imported. Restart the GUI to apply general GUI '
@@ -4850,7 +4851,7 @@ class MainWindow(QMainWindow):
         if message.clickedButton() != copy_button:
             return
         QApplication.clipboard().setText(command)
-        QMessageBox.information(
+        popups.information(
             self,
             'Copy Full Reset Command',
             'Reset command copied to the clipboard. Review it before running.',
@@ -5147,7 +5148,7 @@ class MainWindow(QMainWindow):
 
     def _open_about_link(self, link: str) -> None:
         if not open_external_url(link):
-            QMessageBox.warning(
+            popups.warning(
                 self,
                 'About',
                 'Unable to open the selected link.',
@@ -5336,7 +5337,7 @@ class MainWindow(QMainWindow):
                 saved_path, source_path, button_layout,
             )
         except (OSError, ValueError) as exc:
-            QMessageBox.warning(
+            popups.warning(
                 self, 'Launch Options',
                 f'Failed to save launch options:\n{exc}',
             )
@@ -5367,7 +5368,7 @@ class MainWindow(QMainWindow):
                 button_layout,
             )
         except (OSError, ValueError) as exc:
-            QMessageBox.warning(
+            popups.warning(
                 self,
                 'Toolbar Buttons',
                 f'Failed to save toolbar button profile:\n{exc}',
@@ -5744,7 +5745,7 @@ class MainWindow(QMainWindow):
     def _open_workspace_match_editor(self) -> None:
         images = list(self._image_choices)
         if not images:
-            QMessageBox.information(
+            popups.information(
                 self,
                 'Workspace Matches',
                 'No local Docker images are available to configure.',
@@ -5761,7 +5762,7 @@ class MainWindow(QMainWindow):
         try:
             self._save_workspace_match_map(dialog.matches())
         except Exception as exc:
-            QMessageBox.warning(
+            popups.warning(
                 self,
                 'Workspace Matches',
                 f'Failed to save workspace matches:\n{exc}',
@@ -5851,7 +5852,7 @@ class MainWindow(QMainWindow):
                 workspace.name,
             )
         except Exception as exc:
-            QMessageBox.warning(
+            popups.warning(
                 self,
                 'Build Workspace',
                 f'Failed to save image/workspace match:\n{exc}',
@@ -5911,7 +5912,7 @@ class MainWindow(QMainWindow):
             try:
                 self._mark_current_image_workspace_match()
             except Exception as exc:
-                QMessageBox.warning(
+                popups.warning(
                     self,
                     'Workspace Match',
                     f'Failed to save workspace match:\n{exc}',
@@ -6087,7 +6088,7 @@ class MainWindow(QMainWindow):
             return True
         workspace = self._workspace_registry.get(name) if name else None
         if name and workspace is None:
-            QMessageBox.warning(
+            popups.warning(
                 self,
                 'ROS 1 Workspace',
                 f'Workspace "{name}" is not configured.',
@@ -6095,7 +6096,7 @@ class MainWindow(QMainWindow):
             self._populate_workspace_combo()
             return False
         if self._workspace_processes_running():
-            QMessageBox.warning(
+            popups.warning(
                 self,
                 'ROS 1 Workspace',
                 'Stop running workspace processes before switching.',
@@ -6154,7 +6155,7 @@ class MainWindow(QMainWindow):
             self._workspace_registry.save()
         except (OSError, ValueError) as exc:
             self._workspace_registry.active = previous_name
-            QMessageBox.critical(self, 'ROS 1 Workspace', str(exc))
+            popups.critical(self, 'ROS 1 Workspace', str(exc))
             self._populate_workspace_combo()
             return False
 
@@ -7675,7 +7676,7 @@ class MainWindow(QMainWindow):
                 }
             )
         except OSError as exc:
-            QMessageBox.warning(
+            popups.warning(
                 self,
                 'Docker Image Filters',
                 f'Failed to save image filters:\n{exc}',
@@ -7700,7 +7701,7 @@ class MainWindow(QMainWindow):
         if selection.build_custom_image:
             validation_error = self._validate_custom_image_selection(selection)
             if validation_error:
-                QMessageBox.warning(self, 'Build Custom Image', validation_error)
+                popups.warning(self, 'Build Custom Image', validation_error)
                 return False
             profile = self._custom_image_profile(selection)
             self._upsert_runtime_image_profile(profile)
@@ -7709,7 +7710,7 @@ class MainWindow(QMainWindow):
                 selection
             )
             if validation_error:
-                QMessageBox.warning(
+                popups.warning(
                     self,
                     'Install mobipick_labs Source',
                     validation_error,
@@ -7762,7 +7763,7 @@ class MainWindow(QMainWindow):
         try:
             save_user_config_update(updates)
         except OSError as exc:
-            QMessageBox.warning(
+            popups.warning(
                 self,
                 'Setup Wizard',
                 f'Failed to save setup settings:\n{exc}',
@@ -8178,7 +8179,7 @@ class MainWindow(QMainWindow):
         if tab.is_running():
             if focus_tab:
                 self._focus_tab(key)
-            QMessageBox.information(
+            popups.information(
                 self,
                 'Pull Images',
                 'An image pull is already running.',
@@ -8219,7 +8220,7 @@ class MainWindow(QMainWindow):
         if tab.is_running():
             if focus_tab:
                 self._focus_tab(key)
-            QMessageBox.information(
+            popups.information(
                 self,
                 'Build Custom Image',
                 'A custom image build is already running.',
@@ -8228,7 +8229,7 @@ class MainWindow(QMainWindow):
         try:
             context_dir = self._write_custom_image_build_context(selection)
         except OSError as exc:
-            QMessageBox.warning(
+            popups.warning(
                 self,
                 'Build Custom Image',
                 f'Failed to prepare Docker build context:\n{exc}',
@@ -8274,7 +8275,7 @@ class MainWindow(QMainWindow):
         if tab.is_running():
             if focus_tab:
                 self._focus_tab(key)
-            QMessageBox.information(
+            popups.information(
                 self,
                 'Install mobipick_labs Source',
                 'A source workspace install is already running.',
@@ -8283,7 +8284,7 @@ class MainWindow(QMainWindow):
         try:
             workspace = self._prepare_source_workspace(selection)
         except (OSError, ValueError) as exc:
-            QMessageBox.warning(
+            popups.warning(
                 self,
                 'Install mobipick_labs Source',
                 f'Failed to prepare the source workspace:\n{exc}',
@@ -8544,7 +8545,7 @@ CMD ["bash"]
         if not workspace:
             return
         if not self._image_supports_host_workspaces(self._selected_image):
-            QMessageBox.warning(
+            popups.warning(
                 self,
                 'Build Workspace',
                 'The selected Docker image uses its baked workspace and '
@@ -8553,7 +8554,7 @@ CMD ["bash"]
             )
             return
         if self._workspace_processes_running():
-            QMessageBox.warning(
+            popups.warning(
                 self,
                 'Build Workspace',
                 'Stop running workspace processes before building.',
@@ -9187,12 +9188,12 @@ CMD ["bash"]
         elif action in {'refresh', 'refresh_status', 'refresh_sim'}:
             self._on_refresh_clicked()
         else:
-            QMessageBox.information(self, 'Buttons', f'No builtin action registered for "{action}".')
+            popups.information(self, 'Buttons', f'No builtin action registered for "{action}".')
 
     def _run_config_command(self, config: dict):
         command = str(config.get('command') or '').strip()
         if not command:
-            QMessageBox.information(self, 'Buttons', 'Command is missing for this button.')
+            popups.information(self, 'Buttons', 'Command is missing for this button.')
             return
         key = str(config.get('key') or '').strip() or 'command'
         button = self._get_button_widget(key)
@@ -9659,7 +9660,7 @@ CMD ["bash"]
             self.remote_master_input.setEnabled(checked)
             return
         if self._workspace_processes_running():
-            QMessageBox.warning(
+            popups.warning(
                 self,
                 'ROS Master',
                 'Stop running containers before changing the ROS master.',
@@ -9673,7 +9674,7 @@ CMD ["bash"]
                 self.remote_master_input.text()
             )
             if not normalized:
-                QMessageBox.warning(
+                popups.warning(
                     self,
                     'ROS Master',
                     'Enter a valid ROS master URI such as '
@@ -9704,7 +9705,7 @@ CMD ["bash"]
             self.remote_master_input.text()
         )
         if not normalized:
-            QMessageBox.warning(
+            popups.warning(
                 self,
                 'ROS Master',
                 'Enter a valid ROS master URI such as '
@@ -9718,7 +9719,7 @@ CMD ["bash"]
             normalized != self._remote_master_uri_value
             and self._workspace_processes_running()
         ):
-            QMessageBox.warning(
+            popups.warning(
                 self,
                 'ROS Master',
                 'Stop running containers before changing the ROS master.',
@@ -9952,7 +9953,7 @@ CMD ["bash"]
         """Run rosnode cleanup against the configured remote ROS master."""
         if not self._remote_master_enabled():
             self._clear_remote_ros_cleanup_offer()
-            QMessageBox.information(
+            popups.information(
                 self,
                 'Clean stale ROS nodes',
                 'This cleanup is only needed while using a remote ROS master.',
@@ -10709,7 +10710,7 @@ CMD ["bash"]
                 error_message or 'No image selected'
             )
             if error_message and show_feedback:
-                QMessageBox.warning(
+                popups.warning(
                     self,
                     'Images',
                     error_message,
@@ -10765,7 +10766,7 @@ CMD ["bash"]
         )
 
         if show_feedback and error_message:
-            QMessageBox.warning(self, 'Images', error_message)
+            popups.warning(self, 'Images', error_message)
 
         if show_feedback:
             self._console_log(2, f'Available images: {", ".join(ordered_choices)}')
@@ -10790,7 +10791,7 @@ CMD ["bash"]
             'The application will now exit.'
         )
         self._console_log(1, message)
-        QMessageBox.critical(self, 'Images', message)
+        popups.critical(self, 'Images', message)
         app = QApplication.instance()
         if app is not None:
             QTimer.singleShot(0, app.quit)
@@ -11170,7 +11171,7 @@ CMD ["bash"]
                 if self._window_layout_dialog:
                     self._window_layout_dialog.close()
                 return
-            QMessageBox.warning(
+            popups.warning(
                 self,
                 'Window Layout',
                 'Unable to capture window state. Ensure the window tools are '
@@ -11235,7 +11236,7 @@ CMD ["bash"]
             reason = self._auto_launch_start_refusal()
             if reason:
                 self._log_info(f'auto launch: not started: {reason}')
-                QMessageBox.information(self, 'Please Wait', reason)
+                popups.information(self, 'Please Wait', reason)
                 return
         self._toggle_auto_launch_stack()
 
@@ -11303,11 +11304,11 @@ CMD ["bash"]
 
     def toggle_script_execution(self):
         if not self._script_choices:
-            QMessageBox.information(self, 'Scripts', 'No scripts available. Click Refresh Scripts to update the list.')
+            popups.information(self, 'Scripts', 'No scripts available. Click Refresh Scripts to update the list.')
             return
         script = self.script_combo.currentText().strip()
         if not script or script not in self._script_choices:
-            QMessageBox.information(self, 'Scripts', 'Selected script is not available.')
+            popups.information(self, 'Scripts', 'Selected script is not available.')
             return
 
         active_key = self._script_active_tab_key
@@ -11500,7 +11501,7 @@ CMD ["bash"]
         def _save() -> None:
             raw = path_edit.text().strip()
             if not raw:
-                QMessageBox.warning(
+                popups.warning(
                     dialog,
                     'Recording Options',
                     'Choose a folder for recordings.',
@@ -11783,7 +11784,7 @@ CMD ["bash"]
         def _accept() -> None:
             raw = path_edit.text().strip()
             if not raw:
-                QMessageBox.warning(
+                popups.warning(
                     dialog,
                     'Recording Folder',
                     'Choose a folder for Auto Launch recordings.',
@@ -12379,7 +12380,7 @@ CMD ["bash"]
                 '<i>No recording video was produced. Check '
                 f'{html.escape(str(base_dir / "ffmpeg.log"))}.</i>',
             )
-            QMessageBox.warning(
+            popups.warning(
                 self,
                 'Recording',
                 f'No video file was produced. Check ffmpeg.log in {base_dir}.',
@@ -12934,7 +12935,7 @@ CMD ["bash"]
                 process_settings=dialog.process_settings(),
             )
         except OSError as exc:
-            QMessageBox.warning(
+            popups.warning(
                 self,
                 'Auto Launch',
                 f'Failed to save auto launch configuration:\n{exc}',
@@ -12952,21 +12953,21 @@ CMD ["bash"]
     def _start_auto_launch_measurement(self, key: str) -> bool:
         """Launch a process immediately for interactive readiness timing."""
         if self._auto_launch_running:
-            QMessageBox.warning(
+            popups.warning(
                 self,
                 'Measure Ready Time',
                 'Stop Auto Launch before measuring an individual process.',
             )
             return False
         if self._toggle_states.get(key) == 'yellow':
-            QMessageBox.warning(
+            popups.warning(
                 self,
                 'Measure Ready Time',
                 f'{key} is busy. Wait for it to finish changing state.',
             )
             return False
         if self._is_button_running(key):
-            QMessageBox.warning(
+            popups.warning(
                 self,
                 'Measure Ready Time',
                 f'{key} is already running. Stop it before measuring again.',
@@ -13259,7 +13260,7 @@ CMD ["bash"]
                 fh.write(html_content)
             return True
         except Exception as exc:
-            QMessageBox.critical(
+            popups.critical(
                 self,
                 'Save Log',
                 f"Failed to save log to {html.escape(path)}:\n{html.escape(str(exc))}",
@@ -13703,7 +13704,7 @@ CMD ["bash"]
             or key.startswith('terminal')
             or key.startswith('build-')
         ):
-            QMessageBox.information(self, 'Info', 'Only custom, terminal, and loaded log tabs can be closed.')
+            popups.information(self, 'Info', 'Only custom, terminal, and loaded log tabs can be closed.')
             return
         if tab.is_running():
             try:
@@ -15703,7 +15704,7 @@ CMD ["bash"]
             msg = 'Process is starting, please wait.'
         else:
             msg = 'Process is busy, please wait.'
-        QMessageBox.information(self, 'Please Wait', msg)
+        popups.information(self, 'Please Wait', msg)
         return False
 
     # ---------- Buffering control helper ----------
@@ -16338,29 +16339,29 @@ CMD ["bash"]
 
         key = self._current_tab_key()
         if not key:
-            QMessageBox.information(self, 'Commit Current Tab', 'Select a tab before committing its container.')
+            popups.information(self, 'Commit Current Tab', 'Select a tab before committing its container.')
             return
 
         tab = self.tasks.get(key)
         if not tab:
-            QMessageBox.information(self, 'Commit Current Tab', 'The selected tab is unavailable.')
+            popups.information(self, 'Commit Current Tab', 'The selected tab is unavailable.')
             return
 
         container_name = getattr(tab, 'container_name', None)
         if not container_name:
-            QMessageBox.information(self, 'Commit Current Tab', 'The current tab is not associated with a running container.')
+            popups.information(self, 'Commit Current Tab', 'The current tab is not associated with a running container.')
             return
 
         image_ref = (self._selected_image or '').strip()
         if not image_ref:
-            QMessageBox.information(self, 'Commit Current Tab', 'Choose a target image from the image list before committing.')
+            popups.information(self, 'Commit Current Tab', 'Choose a target image from the image list before committing.')
             return
 
         container_ref = container_name
 
         base_image, base_tag = self._split_image_ref(image_ref)
         if not base_image:
-            QMessageBox.warning(
+            popups.warning(
                 self,
                 'Commit Current Tab',
                 'Unable to determine the repository for the selected image.',
@@ -16417,10 +16418,10 @@ CMD ["bash"]
             repo = (target_repo or '').strip()
             tag = (target_tag or '').strip()
             if not repo:
-                QMessageBox.warning(dialog, 'Commit Current Tab', 'Image name is required to commit the container.')
+                popups.warning(dialog, 'Commit Current Tab', 'Image name is required to commit the container.')
                 return
             if not tag:
-                QMessageBox.warning(dialog, 'Commit Current Tab', 'Tag name is required to commit the container.')
+                popups.warning(dialog, 'Commit Current Tab', 'Tag name is required to commit the container.')
                 return
             target_ref = f'{repo}:{tag}'
             for control in (overwrite_button, timestamp_button, custom_button):
@@ -16439,7 +16440,7 @@ CMD ["bash"]
                     ).strip()
                     if stderr_text:
                         self._append_gui_html(key, html.escape(stderr_text))
-                    QMessageBox.warning(
+                    popups.warning(
                         dialog,
                         'Commit Current Tab',
                         'Failed to commit the current tab container. '
@@ -16715,7 +16716,7 @@ CMD ["bash"]
                 ref = str(entry.get('ref') or target)
                 selected_refs.append(ref)
             if not selected_targets:
-                QMessageBox.information(dialog, 'Manage Images', 'Select at least one image to remove.')
+                popups.information(dialog, 'Manage Images', 'Select at least one image to remove.')
                 return
 
             args = ['docker', 'rmi']
@@ -16728,7 +16729,7 @@ CMD ["bash"]
             def completed(cp: subprocess.CompletedProcess) -> None:
                 apply_button.setEnabled(True)
                 if cp.returncode not in (0, None):
-                    QMessageBox.warning(
+                    popups.warning(
                         dialog,
                         'Manage Images',
                         'Failed to remove one or more images. '
@@ -16738,7 +16739,7 @@ CMD ["bash"]
                     removed = ', '.join(selected_refs)
                     if removed:
                         self._log_info(f'Removed images: {removed}')
-                    QMessageBox.information(
+                    popups.information(
                         dialog,
                         'Manage Images',
                         'Selected images were removed.',
@@ -16766,27 +16767,27 @@ CMD ["bash"]
 
         key = self._current_tab_key()
         if not key:
-            QMessageBox.information(self, 'Execute Docker cp', 'Select a tab before copying from its container.')
+            popups.information(self, 'Execute Docker cp', 'Select a tab before copying from its container.')
             return
 
         tab = self.tasks.get(key)
         if not tab:
-            QMessageBox.information(self, 'Execute Docker cp', 'The selected tab is unavailable.')
+            popups.information(self, 'Execute Docker cp', 'The selected tab is unavailable.')
             return
 
         container_name = getattr(tab, 'container_name', None)
         if not container_name:
-            QMessageBox.information(self, 'Execute Docker cp', 'The current tab is not associated with a running container.')
+            popups.information(self, 'Execute Docker cp', 'The current tab is not associated with a running container.')
             return
 
         entries = self._docker_cp_entries('container_to_host')
         if not entries:
-            QMessageBox.information(self, 'Execute Docker cp', 'No docker cp paths configured for the selected image.')
+            popups.information(self, 'Execute Docker cp', 'No docker cp paths configured for the selected image.')
             return
 
         container_ref = container_name
         if not container_ref:
-            QMessageBox.warning(self, 'Execute Docker cp', 'Unable to determine the running container for the current tab.')
+            popups.warning(self, 'Execute Docker cp', 'Unable to determine the running container for the current tab.')
             return
 
         commands = self._build_container_to_host_commands(container_ref, entries, key)
@@ -16829,7 +16830,7 @@ CMD ["bash"]
                 save_path,
             )
         except Exception as exc:
-            QMessageBox.warning(
+            popups.warning(
                 self,
                 'Docker cp Paths',
                 f'Failed to save docker cp paths:\n{exc}',
@@ -16838,7 +16839,7 @@ CMD ["bash"]
         self._docker_cp_config = load_docker_cp_config(save_path)
         self._synced_container_refs.clear()
         self._log_info(f'docker cp paths saved to {saved_path}')
-        QMessageBox.information(
+        popups.information(
             self,
             'Docker cp Paths',
             f'Docker cp paths saved to:\n{saved_path}',
@@ -16850,11 +16851,11 @@ CMD ["bash"]
             return
         widget = self.tabs.widget(index)
         if not isinstance(widget, QTextEdit):
-            QMessageBox.information(self, 'Save Log', 'The current tab has no log to save.')
+            popups.information(self, 'Save Log', 'The current tab has no log to save.')
             return
         html = self._extract_widget_html(widget)
         if html is None:
-            QMessageBox.information(self, 'Save Log', 'Nothing to save in the current tab.')
+            popups.information(self, 'Save Log', 'Nothing to save in the current tab.')
             return
         label = self.tabs.tabText(index).strip() or f'tab{index + 1}'
         default_name = self._suggest_log_filename(label)
@@ -16882,10 +16883,10 @@ CMD ["bash"]
             with open(path, 'r', encoding='utf-8') as f:
                 html_content = f.read()
         except Exception as exc:
-            QMessageBox.critical(self, 'Load Log', f'Failed to load log file:\n{exc}')
+            popups.critical(self, 'Load Log', f'Failed to load log file:\n{exc}')
             return
         if not html_content.strip():
-            QMessageBox.information(self, 'Load Log', 'The selected log file is empty.')
+            popups.information(self, 'Load Log', 'The selected log file is empty.')
             return
         label = Path(path).stem or 'log'
         key = f'loadedlog_{uuid.uuid4().hex}'
@@ -16934,14 +16935,14 @@ CMD ["bash"]
     def save_all_logs(self):
         entries = self._collect_log_entries()
         if not entries:
-            QMessageBox.information(self, 'Save Logs', 'There are no logs to save.')
+            popups.information(self, 'Save Logs', 'There are no logs to save.')
             return
         directory = QFileDialog.getExistingDirectory(self, 'Select folder to save logs')
         if not directory:
             return
         saved = self._save_logs_to_directory(Path(directory), entries=entries)
         if saved:
-            QMessageBox.information(self, 'Save Logs', f'Saved {saved} log file(s).')
+            popups.information(self, 'Save Logs', f'Saved {saved} log file(s).')
 
     def _prepare_tab_for_origin(self, key: str, origin: str) -> ProcessTab:
         tab = self._ensure_tab(key, key.title(), closable=(key.startswith('custom')))
@@ -17043,7 +17044,7 @@ CMD ["bash"]
         if not pattern:
             return
         if not self._do_find(edit, pattern):
-            QMessageBox.information(self, 'Search', f"No match for '{pattern}'")
+            popups.information(self, 'Search', f"No match for '{pattern}'")
 
     def find_prev(self):
         edit = self._current_text_edit()
@@ -17053,7 +17054,7 @@ CMD ["bash"]
         if not pattern:
             return
         if not self._do_find(edit, pattern, QTextDocument.FindBackward):
-            QMessageBox.information(self, 'Search', f"No match for '{pattern}'")
+            popups.information(self, 'Search', f"No match for '{pattern}'")
 
     # ---------- Process completion callback ----------
 

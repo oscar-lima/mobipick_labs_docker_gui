@@ -151,7 +151,7 @@ def test_long_github_report_offers_copy_of_remaining_text(monkeypatch):
         lambda url: opened.setdefault('url', bytes(url.toEncoded())) or True,
     )
     monkeypatch.setattr(
-        bug_report.QMessageBox,
+        bug_report.popups,
         'information',
         lambda _parent, title, message: messages.append((title, message)),
     )

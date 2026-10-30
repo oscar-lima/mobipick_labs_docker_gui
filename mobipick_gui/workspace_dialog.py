@@ -43,6 +43,7 @@ from .workspaces import (
     RosWorkspace,
     WorkspaceRegistry,
 )
+from . import popups
 
 
 class WorkspaceManagerDialog(QDialog):
@@ -470,7 +471,7 @@ class WorkspaceManagerDialog(QDialog):
         if not accepted or not name.strip():
             return
         if '/' in name or name in {'.', '..'}:
-            QMessageBox.warning(self, 'Master Folder', 'Enter a single folder name.')
+            popups.warning(self, 'Master Folder', 'Enter a single folder name.')
             return
         path = Path(parent) / name.strip()
         try:
@@ -478,7 +479,7 @@ class WorkspaceManagerDialog(QDialog):
             self.registry.master_folder = str(path.resolve())
             self.registry.save()
         except OSError as exc:
-            QMessageBox.critical(self, 'Master Folder', str(exc))
+            popups.critical(self, 'Master Folder', str(exc))
             return
         self.refresh()
 
@@ -493,10 +494,10 @@ class WorkspaceManagerDialog(QDialog):
             )
             self.registry.save()
         except (OSError, ValueError) as exc:
-            QMessageBox.critical(self, 'Discover Workspaces', str(exc))
+            popups.critical(self, 'Discover Workspaces', str(exc))
             return
         self.refresh()
-        QMessageBox.information(
+        popups.information(
             self,
             'Discover Workspaces',
             f'Found {len(discovered)} workspace(s).',
@@ -513,7 +514,7 @@ class WorkspaceManagerDialog(QDialog):
             return
         directory = Path(selected).resolve()
         if not (directory / 'src').is_dir():
-            QMessageBox.warning(
+            popups.warning(
                 self,
                 'Add Workspace',
                 'The selected folder must contain a src directory.',
@@ -526,7 +527,7 @@ class WorkspaceManagerDialog(QDialog):
             self.registry.upsert(workspace)
             self.registry.save()
         except (OSError, ValueError) as exc:
-            QMessageBox.critical(self, 'Add Workspace', str(exc))
+            popups.critical(self, 'Add Workspace', str(exc))
             return
         self.refresh(workspace.name)
 
@@ -552,7 +553,7 @@ class WorkspaceManagerDialog(QDialog):
             workspace = self.registry.create(name.strip(), folder=parent)
             self.registry.save()
         except (OSError, ValueError) as exc:
-            QMessageBox.critical(self, 'Create Workspace', str(exc))
+            popups.critical(self, 'Create Workspace', str(exc))
             return
         self.refresh(workspace.name)
 
@@ -572,7 +573,7 @@ class WorkspaceManagerDialog(QDialog):
             self.registry.remove(workspace.name)
             self.registry.save()
         except ValueError as exc:
-            QMessageBox.warning(self, 'Remove Workspace', str(exc))
+            popups.warning(self, 'Remove Workspace', str(exc))
             return
         self.refresh()
 
@@ -606,7 +607,7 @@ class WorkspaceManagerDialog(QDialog):
             self.registry.upsert(updated)
             self.registry.save()
         except (OSError, ValueError) as exc:
-            QMessageBox.critical(self, 'Workspace Settings', str(exc))
+            popups.critical(self, 'Workspace Settings', str(exc))
             return False
         self.refresh(updated.name)
         return True
@@ -678,9 +679,9 @@ class WorkspaceManagerDialog(QDialog):
         try:
             export_settings(Path(selected), self.registry)
         except (OSError, ValueError) as exc:
-            QMessageBox.critical(self, 'Export Settings', str(exc))
+            popups.critical(self, 'Export Settings', str(exc))
             return
-        QMessageBox.information(
+        popups.information(
             self,
             'Export Settings',
             f'Settings exported to:\n{selected}',
@@ -688,7 +689,7 @@ class WorkspaceManagerDialog(QDialog):
 
     def _import_settings(self) -> None:
         if self.replace_allowed and not self.replace_allowed():
-            QMessageBox.warning(
+            popups.warning(
                 self,
                 'Import Settings',
                 'Stop running workspace processes before importing settings.',
@@ -727,11 +728,11 @@ class WorkspaceManagerDialog(QDialog):
                 master_folder=Path(master),
             )
         except (OSError, ValueError, yaml.YAMLError) as exc:
-            QMessageBox.critical(self, 'Import Settings', str(exc))
+            popups.critical(self, 'Import Settings', str(exc))
             return
         self.refresh(self.registry.active)
         self.settings_imported.emit()
-        QMessageBox.information(
+        popups.information(
             self,
             'Import Settings',
             'Settings imported. Restart the GUI to apply general GUI '

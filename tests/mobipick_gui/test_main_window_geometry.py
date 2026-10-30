@@ -434,6 +434,7 @@ def test_copy_full_reset_command_uses_warning_dialog(monkeypatch):
 
     command = 'printf reset; rm -rf -- /tmp/mobipick-reset-test'
     monkeypatch.setattr(main_window_module, 'QMessageBox', FakeMessageBox)
+    monkeypatch.setattr(main_window_module.popups, 'information', FakeMessageBox.information)
     monkeypatch.setattr(
         main_window_module.QApplication,
         'clipboard',

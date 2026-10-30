@@ -26,6 +26,7 @@ from PyQt5.QtWidgets import (
 )
 
 from .config import DEFAULT_ADVANCED_ARG_NAMES, GENERIC_BUTTON_ARG_SLOTS
+from . import popups
 
 
 ARG_FIELDS = (
@@ -156,7 +157,7 @@ class LaunchArgumentDetailsDialog(QDialog):
             if value.strip()
         ))
         if not name or not options:
-            QMessageBox.warning(
+            popups.warning(
                 self, 'Launch Argument',
                 'Enter an argument name and at least one selectable value.',
             )
@@ -169,7 +170,7 @@ class LaunchArgumentDetailsDialog(QDialog):
             value = value.strip()
             description = description.strip()
             if not separator or value not in options or not description:
-                QMessageBox.warning(
+                popups.warning(
                     self, 'Launch Argument',
                     f'Invalid value description: {line}\n'
                     'Use "value | description" with a listed value.',
@@ -282,7 +283,7 @@ class LaunchArgumentsDialog(QDialog):
         used = {argument['slot'] for argument in self._arguments}
         slot = next((s for s in GENERIC_BUTTON_ARG_SLOTS if s not in used), None)
         if slot is None:
-            QMessageBox.warning(self, 'Launch Options', 'All argument slots are used.')
+            popups.warning(self, 'Launch Options', 'All argument slots are used.')
             return
         argument = {
             'slot': slot, 'name': '', 'options': [], 'description': '',
@@ -307,12 +308,12 @@ class LaunchArgumentsDialog(QDialog):
     def accept(self) -> None:
         names = [argument['name'] for argument in self._arguments]
         if len(names) != len(set(names)):
-            QMessageBox.warning(
+            popups.warning(
                 self, 'Launch Options', 'Argument names must be unique.'
             )
             return
         if sum(not arg['advanced'] for arg in self._arguments) > 6:
-            QMessageBox.warning(
+            popups.warning(
                 self, 'Launch Options',
                 'The main window can hold at most six arguments plus world. '
                 'Move another argument to Advanced Launch Options.',

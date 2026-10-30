@@ -476,7 +476,7 @@ def test_auto_launch_wizard_export_then_import_restores_settings(
     )
     messages = []
     monkeypatch.setattr(
-        main_window_module.QMessageBox,
+        main_window_module.popups,
         'information',
         lambda _parent, _title, text: messages.append(text),
     )
@@ -552,7 +552,7 @@ def test_auto_launch_wizard_import_reports_unknown_processes(
     )
     messages = []
     monkeypatch.setattr(
-        main_window_module.QMessageBox,
+        main_window_module.popups,
         'information',
         lambda _parent, _title, text: messages.append(text),
     )
@@ -581,7 +581,7 @@ def test_auto_launch_wizard_import_rejects_file_without_steps(
     )
     warnings = []
     monkeypatch.setattr(
-        main_window_module.QMessageBox,
+        main_window_module.popups,
         'warning',
         lambda _parent, _title, text: warnings.append(text),
     )
@@ -1838,7 +1838,7 @@ def _stopping_guard_harness(monkeypatch, *, states, texts, stopping_tabs=()):
     ):
         setattr(harness, name, MethodType(getattr(MainWindow, name), harness))
     monkeypatch.setattr(
-        main_window_module.QMessageBox,
+        main_window_module.popups,
         'information',
         lambda _parent, title, text: events.append(('box', title, text)),
     )

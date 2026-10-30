@@ -20,6 +20,7 @@ from PyQt5.QtWidgets import (
 
 from .external_links import open_external_url
 from .window_utils import MaximizableDialog as QDialog
+from . import popups
 
 
 class DocumentationDialog(QDialog):
@@ -124,7 +125,7 @@ class DocumentationDialog(QDialog):
             return
 
         self.match_label.setText('0 matches')
-        QMessageBox.information(self, 'Search', f'No match for "{pattern}"')
+        popups.information(self, 'Search', f'No match for "{pattern}"')
 
     def _highlight_matches(self, pattern: str) -> int:
         selections: list[QTextEdit.ExtraSelection] = []
@@ -158,7 +159,7 @@ class DocumentationDialog(QDialog):
             self.viewer.setSource(url)
             return
         if not open_external_url(url):
-            QMessageBox.warning(
+            popups.warning(
                 self,
                 'Documentation',
                 'Unable to open the selected link.',

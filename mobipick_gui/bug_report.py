@@ -31,6 +31,7 @@ from PyQt5.QtWidgets import (
 from .external_links import open_external_url
 from .version import get_version
 from .window_utils import MaximizableDialog as QDialog
+from . import popups
 
 BUG_REPORT_EMAIL = 'mobipick-labs@dfki.de'
 BUG_REPORT_GITHUB_ISSUE_URL = (
@@ -596,7 +597,7 @@ class BugReportDialog(QDialog):
         try:
             Path(path).write_text(self.report_text(), encoding='utf-8')
         except OSError as exc:
-            QMessageBox.critical(self, 'Bug Report', f'Failed to save report:\n{exc}')
+            popups.critical(self, 'Bug Report', f'Failed to save report:\n{exc}')
             return
         self.status_label.setText(f'Saved to {path}')
 
@@ -609,7 +610,7 @@ class BugReportDialog(QDialog):
             f'&body={quote(body, safe="")}'
         )
         if not open_external_url(url):
-            QMessageBox.warning(
+            popups.warning(
                 self,
                 'Bug Report',
                 'Unable to open the default email application.',
@@ -620,7 +621,7 @@ class BugReportDialog(QDialog):
         body = self.report_text()
         url, remainder = build_github_issue_url(subject, body)
         if not open_external_url(url):
-            QMessageBox.warning(
+            popups.warning(
                 self,
                 'Bug Report',
                 'Unable to open the GitHub issue page.',
@@ -633,7 +634,7 @@ class BugReportDialog(QDialog):
             self.status_label.setText(
                 'GitHub received part of the report; copy and paste the rest.'
             )
-            QMessageBox.information(
+            popups.information(
                 self,
                 'Bug Report Too Long',
                 'The complete report would create a URL that is too long for '

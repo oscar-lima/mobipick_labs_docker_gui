@@ -4,8 +4,9 @@ import os
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
-from PyQt5.QtWidgets import QApplication, QDialog, QMessageBox
+from PyQt5.QtWidgets import QApplication, QDialog
 
+from mobipick_gui import popups
 from mobipick_gui.config import load_button_layout, save_button_layout
 from mobipick_gui.launch_arguments_dialog import (
     LaunchArgumentDetailsDialog,
@@ -261,7 +262,7 @@ def test_advanced_editor_rejects_eighth_main_launch_option(monkeypatch):
     ]
     warnings = []
     monkeypatch.setattr(
-        QMessageBox, 'warning',
+        popups, 'warning',
         lambda *args: warnings.append(args[2]),
     )
 

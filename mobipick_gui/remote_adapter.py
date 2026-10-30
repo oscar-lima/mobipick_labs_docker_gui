@@ -22,6 +22,7 @@ from .remote_control import (
     RemoteControlError,
     RemoteShellSession,
 )
+from . import popups
 from .headless import headless_window_refusal, remote_press_opens_window
 from .version import __version__
 
@@ -514,17 +515,27 @@ class MainWindowRemoteAdapter(GuiAdapter):
                     texts.append(text)
         return texts
 
-    def active_dialog(self) -> dict | None:
+    @staticmethod
+    def _open_dialog():
+        """The dialog a remote client answers: the modal one, else the newest non-modal pop-up box."""
         app = QApplication.instance()
         if app is None:
             return None
         dialog = app.activeModalWidget()
+        if dialog is not None:
+            return dialog
+        boxes = [box for box in popups.open_boxes() if box.isVisible()]
+        return boxes[-1] if boxes else None
+
+    def active_dialog(self) -> dict | None:
+        dialog = self._open_dialog()
         if dialog is None:
             return None
         info = {
             'class': type(dialog).__name__,
             'title': dialog.windowTitle(),
             'buttons': self._button_texts(dialog),
+            'modal': dialog is QApplication.instance().activeModalWidget(),
         }
         if isinstance(dialog, QMessageBox):
             info['text'] = dialog.text()
@@ -532,10 +543,9 @@ class MainWindowRemoteAdapter(GuiAdapter):
         return info
 
     def dismiss_dialog(self, button: str = 'reject') -> dict:
-        app = QApplication.instance()
-        dialog = app.activeModalWidget() if app else None
+        dialog = self._open_dialog()
         if dialog is None:
-            return {'dismissed': False, 'reason': 'no active modal dialog'}
+            return {'dismissed': False, 'reason': 'no open dialog'}
         info = self.active_dialog()
         wanted = (button or 'reject').strip()
         lowered = wanted.lower()

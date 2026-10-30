@@ -989,7 +989,7 @@ click with a wait without missing events.
 | `GET /events?since=N&names=a,b` | Event history; add `follow=1&timeout=s` to stream NDJSON. |
 | `POST /wait` | Block until one of `events` arrives after `since` (default: now) or `timeout`; `key` restricts keyed events to one button or tab. |
 | `GET /tabs`, `GET /tabs/{key}?tail=N&grep=RE` | Log tab list and plain-text tab contents. |
-| `GET /dialogs`, `POST /dialogs/dismiss` | Inspect or close the active modal dialog (`{"button": "Continue"}`, `accept`, `reject`). |
+| `GET /dialogs`, `POST /dialogs/dismiss` | Inspect or close the active modal dialog, or else the newest open message box (message boxes open non-modal and without a parent, so they move independently of the main window; `modal` in the reply tells which): `{"button": "Continue"}`, `accept`, `reject`. |
 | `POST /command` | Run text through the GUI custom command box. |
 | `POST /shell` | Open a shell session (`{"name", "stream", "root", "robot"}`); blocks until ready. The ROS tool container is the default; `"robot": true` ssh-es onto the robot PC instead (remote ROS master mode only) to debug that machine. `GET /status` reports the choice under `shell`. |
 | `POST /shell/{id}/exec` | Run a command: `{"command", "stream", "tail", "grep", "max_lines", "timeout", "wait"}`. In a local container shell the command runs against the GUI's current ROS master (a shell opened before roscore ran moves from `http://mobipick:11311` to the roscore container), unless the shell exported its own `ROS_MASTER_URI`; the reply's `master_uri` names the master the command ran against, and `master_uri_gui` plus `master_uri_note` appear when it differs from the GUI's. |
