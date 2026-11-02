@@ -258,6 +258,23 @@ window button you press yourself still opens its window, but agents pressing
 one over the remote API are refused unless they say the user asked to watch
 it. The GUI remembers the setting.
 
+## Start a demo from the GUI
+
+1. Switch **Headless** on (next to Auto Launch) unless you want to watch windows. Auto Launch then skips window buttons
+   and every button starts with its `headless_args` (for example the simulator without the Gazebo window).
+2. Open **Advanced Launch Options** and press **Features...**. Load a preset (for example a simulation or a real-robot
+   preset of the profile) or tick single features. Each feature has a class: `safe` cannot damage the robot,
+   `careful` can. With **Use remote ROS master** on (the real robot), careful features stay off until you tick them
+   here yourself; presets and the remote API never switch them on there.
+3. Press **Auto Launch**. The profile's sequence starts each button after the one it depends on; readiness uses the
+   estimated durations from **Tools > Automation > Configure Auto Launch**.
+4. Watch the log tabs. On the real robot the robot's own roscore and bringup are expected to be running already.
+
+An operator or agent can do the same over the remote API (`GET /status` shows what runs and the ROS master;
+`POST /headless {"enabled": true}`; `POST /preset {"name": "..."}`; `POST /buttons/auto_launch/click` with
+`"wait_for": ["auto_launch_complete"]`; `POST /shell` and `POST /shell/{id}/exec` for ROS commands). See the project
+README, "Remote control API". Which features and presets a demo offers is described by that demo's profile.
+
 ## Recording Controls
 
 Recording controls are hidden by default. Enable them from **View > Recording
