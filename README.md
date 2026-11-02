@@ -951,7 +951,7 @@ default bind address is `0.0.0.0:8765` so other machines on the network can
 reach the API; use `127.0.0.1` for a local-only agent.
 Anyone who can reach the port can run commands inside the containers, so set
 `remote_control.token` on shared networks; clients then send
-`Authorization: Bearer <token>` (or `?token=`).
+`Authorization: Bearer <token>` (or the `X-Mobipick-Token` header, or `?token=`).
 
 Implementation lives in `mobipick_gui/remote_control.py` (server, event bus,
 shell sessions), `mobipick_gui/remote_adapter.py` (the `MainWindow` bridge and
@@ -991,11 +991,12 @@ click with a wait without missing events.
 | `GET /tabs`, `GET /tabs/{key}?tail=N&grep=RE` | Log tab list and plain-text tab contents. |
 | `GET /dialogs`, `POST /dialogs/dismiss` | Inspect or close the active modal dialog, or else the newest open message box (message boxes open non-modal and without a parent, so they move independently of the main window; `modal` in the reply tells which): `{"button": "Continue"}`, `accept`, `reject`. |
 | `POST /command` | Run text through the GUI custom command box. |
-| `POST /shell` | Open a shell session (`{"name", "stream", "root", "robot"}`); blocks until ready. The ROS tool container is the default; `"robot": true` ssh-es onto the robot PC instead (remote ROS master mode only) to debug that machine. `GET /status` reports the choice under `shell`. |
+| `POST /shell` | Open a shell session (`{"name", "stream", "root", "robot", "timeout"}`); blocks until ready. The ROS tool container is the default; `"robot": true` ssh-es onto the robot PC instead (remote ROS master mode only) to debug that machine. `GET /status` reports the choice under `shell`. |
+| `GET /shell`, `GET /shell/{id}` | List the open shell sessions, or describe one (including its current command). |
 | `POST /shell/{id}/exec` | Run a command: `{"command", "stream", "tail", "grep", "max_lines", "timeout", "wait"}`. In a local container shell the command runs against the GUI's current ROS master (a shell opened before roscore ran moves from `http://mobipick:11311` to the roscore container), unless the shell exported its own `ROS_MASTER_URI`; the reply's `master_uri` names the master the command ran against, and `master_uri_gui` plus `master_uri_note` appear when it differs from the GUI's. |
 | `GET /shell/{id}/output?since=N&command=ID&tail=N&grep=RE` | Buffered output; `follow=1` streams NDJSON until the command finishes. |
 | `POST /shell/{id}/interrupt` | Send `INT` (default), `TERM`, `KILL`, or `HUP` to the foreground command. |
-| `POST /shell/{id}/settings`, `DELETE /shell/{id}` | Change the session `stream` default; close the session and its container (a robot shell: end the ssh connection and kill what it left running). |
+| `POST /shell/{id}/settings`, `DELETE /shell/{id}` | Change the session `stream` default; close the session and its container (a robot shell: end the ssh connection and kill what it left running). `POST /shell/{id}/close` does the same as `DELETE`. |
 | `POST /quit` | Close the GUI with its normal container cleanup. |
 
 Events: `button_state`, `button_ready` (the button has been running for its
@@ -1006,7 +1007,27 @@ its ready time), `window_layout_applied` (the saved layout was replayed, which
 is the usual "everything is up" signal), `auto_launch_stopped`,
 `shell_opened`, `shell_exited`, `shell_closed`, `client_connected`,
 `client_disconnected` (with `expired: true` when a TTL ran out),
-`preset_applied`, and `gui_closing`.
+`preset_applied`, `headless_changed`, `config_reloaded` (after `POST /reload`),
+`recording_started`, `recording_paused`, `recording_resumed`, `recording_stopped`,
+`recording_exported`, `server_started`, and `gui_closing`. `GET /` lists the
+same names.
+
+### Settings (`remote_control` in `gui_settings.yaml`)
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `enabled` | `false` | Kept for compatibility; a CLI launch still needs `--remote-control` or `MOBIPICK_GUI_REMOTE_CONTROL=1`. |
+| `host`, `port` | `0.0.0.0`, `8765` | Bind address and TCP port. |
+| `token` | empty | Shared secret; empty means no authentication. |
+| `gui_timeout_s` | `1` | How long a widget action waits for the Qt thread before the 504. |
+| `shell_max_lines` | `20000` | Output lines buffered per shell session. |
+| `shell_start_timeout_s` | `180` | How long `POST /shell` waits for the shell to become ready. |
+| `default_exec_timeout_s` | `60` | Default wait of `exec` before it returns without the command finishing. |
+| `max_output_lines` | `400` | Default `max_lines` cap per `exec`/`output` response (use `tail` or `grep` to see less). |
+
+The environment variables `MOBIPICK_GUI_REMOTE_CONTROL`, `_HOST`, `_PORT` and
+`_TOKEN` override the first four rows for one launch; the client reads
+`MOBIPICK_GUI_REMOTE_URL` and `MOBIPICK_GUI_REMOTE_TOKEN`.
 
 ### Window icon glow
 
@@ -1172,7 +1193,20 @@ enabled:
 - tools, scripts, terminals, configured commands, and custom commands use
   `mobipick_remote_cmd`;
 - `ROS_MASTER_URI` is normalized and passed into containers;
-- host networking is used so ROS 1 callbacks can reach the nodes.
+- host networking is used so ROS 1 callbacks can reach the nodes;
+- careful features and modes are switched off and stay off until the user ticks
+  them in the Features dialog (`POST /args`, `/features` and `/preset` cannot
+  switch them on there), and option rules are re-applied;
+- `POST /shell {"robot": true}` becomes available (see "Shell sessions").
+
+In the main window the controls are the **Use remote ROS master** checkbox and
+the URI field beside it, shown through **View > Remote ROS Master**. An empty or
+invalid URI is refused with a warning. The `ros` settings are `remote_master_uri`
+(default `http://mobipick-os-sensor:11311`), `remote_service` (default
+`mobipick_remote_cmd`) and `remote_enabled_by_default` (default `false`).
+Local Roscore and simulation actions are disabled, so the GUI starts no roscore
+in this mode; the robot's own roscore and bringup are expected to be running
+(assumption: not checked by the GUI code).
 
 Changing remote mode or the URI is blocked while workspace processes are
 running.
