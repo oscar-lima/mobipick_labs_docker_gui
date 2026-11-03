@@ -848,17 +848,11 @@ def test_cli_remote_control_overrides(monkeypatch):
     for name in ('MOBIPICK_GUI_REMOTE_CONTROL', 'MOBIPICK_GUI_REMOTE_HOST', 'MOBIPICK_GUI_REMOTE_PORT', 'MOBIPICK_GUI_REMOTE_TOKEN'):
         monkeypatch.delenv(name, raising=False)
     args, _ = parser.parse_known_args([])
-    # no flag and no variable: the remembered Tools menu state (remote_control.enabled) decides
-    assert remote_control_overrides(args) == {}
-    for remembered in (True, False):
-        assert remote_control_settings(
-            {'enabled': remembered},
-            remote_control_overrides(args),
-        )['enabled'] is remembered
-    off, _ = parser.parse_known_args(['--no-remote-control'])
-    assert remote_control_settings({'enabled': True}, remote_control_overrides(off))['enabled'] is False
-    on, _ = parser.parse_known_args(['--remote-control'])
-    assert remote_control_settings({'enabled': False}, remote_control_overrides(on))['enabled'] is True
+    assert remote_control_overrides(args) == {'enabled': False}
+    assert remote_control_settings(
+        {'enabled': True},
+        remote_control_overrides(args),
+    )['enabled'] is False
 
     args, _ = parser.parse_known_args(['--remote-control', '--remote-port', '9999'])
     assert remote_control_overrides(args) == {
@@ -975,110 +969,6 @@ def test_main_window_starts_remote_control_and_serves_buttons(tmp_path, monkeypa
             window._stop_remote_control()
         window.deleteLater()
         app.processEvents()
-
-
-def test_tools_menu_remote_toggle_is_remembered_across_gui_restarts(tmp_path, monkeypatch):
-    """Toggle on in the Tools menu, close; a new GUI started without --remote-control reads the saved state and
-    serves the API again. Toggle off there; the GUI after that starts without it. --no-remote-control keeps one
-    launch off without forgetting the setting."""
-    import copy
-
-    import yaml
-    from PyQt5.QtWidgets import QApplication
-
-    from mobipick_gui import config as config_module
-    from mobipick_gui.config import CONFIG
-    from mobipick_gui.main_window import REMEMBERED_REMOTE_CONTROL_SOURCE, MainWindow
-
-    user_file = tmp_path / 'gui_settings.yaml'
-    monkeypatch.setattr(config_module, 'USER_CONFIG_FILE', user_file)
-    monkeypatch.setitem(CONFIG, 'remote_control', copy.deepcopy(CONFIG['remote_control']))
-    monkeypatch.setenv('MOBIPICK_WORKSPACE_CONFIG', str(tmp_path / 'workspaces.yaml'))
-    monkeypatch.setitem(CONFIG, 'selections', {})
-    monkeypatch.setattr(
-        MainWindow,
-        '_discover_filtered_image_records',
-        lambda self: ([{'ref': CONFIG['images']['default']}], None),
-    )
-    monkeypatch.setattr(MainWindow, 'update_sim_status_from_poll', lambda self, force=False: None)
-    for name in ('MOBIPICK_GUI_REMOTE_CONTROL', 'MOBIPICK_GUI_REMOTE_HOST', 'MOBIPICK_GUI_REMOTE_PORT',
-                 'MOBIPICK_GUI_REMOTE_TOKEN'):
-        monkeypatch.delenv(name, raising=False)
-    app = QApplication.instance() or QApplication([])
-
-    def start_gui(*cli):
-        """A fresh GUI process: the settings file is read again, the command line is parsed again."""
-        CONFIG['remote_control'] = config_module._load_config()['remote_control']
-        args, _ = _build_parser().parse_known_args(list(cli))   # the GUI command's own parser
-        overrides = remote_control_overrides(args)
-        window = MainWindow(verbosity=1, remote_control={**overrides, 'host': '127.0.0.1', 'port': 0})
-        window.poll_timer.stop()
-        window._sigint_timer.stop()
-        return window
-
-    def close(window):
-        if window.remote_control is not None:
-            window._stop_remote_control()
-        window.deleteLater()
-        app.processEvents()
-
-    def remembered():
-        return yaml.safe_load(user_file.read_text())['remote_control']['enabled']
-
-    first = start_gui()
-    try:
-        assert first.remote_control is None   # off by default
-        first._remote_control_action.trigger()   # Tools > Remote Control > Enable Remote Control API
-        assert first.remote_control is not None and first.remote_control.running
-        assert remembered() is True
-    finally:
-        close(first)
-
-    second = start_gui()   # restart without any flag
-    try:
-        assert second.remote_control is not None and second.remote_control.running
-        assert second._remote_control_action.isChecked()
-        assert second._remote_control_settings['_enabled_source'] == REMEMBERED_REMOTE_CONTROL_SOURCE
-    finally:
-        close(second)
-
-    third = start_gui('--no-remote-control')   # one launch off, the setting stays
-    try:
-        assert third.remote_control is None and not third._remote_control_action.isChecked()
-        assert remembered() is True
-    finally:
-        close(third)
-
-    fourth = start_gui()
-    try:
-        assert fourth.remote_control is not None
-        fourth._remote_control_action.trigger()   # toggle off
-        assert fourth.remote_control is None
-        assert remembered() is False
-    finally:
-        close(fourth)
-
-    fifth = start_gui()
-    try:
-        assert fifth.remote_control is None and not fifth._remote_control_action.isChecked()
-    finally:
-        close(fifth)
-
-
-def test_remote_toggle_that_fails_to_start_is_not_remembered(tmp_path, monkeypatch):
-    from types import SimpleNamespace
-
-    from mobipick_gui.main_window import MainWindow
-
-    saved = []
-    harness = SimpleNamespace(
-        _remote_control_settings={},
-        _start_remote_control=lambda: False,
-        _sync_remote_control_action=lambda: None,
-        _remember_remote_control=saved.append,
-    )
-    MainWindow._on_remote_control_toggled(harness, True)
-    assert saved == []
 
 
 def test_hung_docker_never_blocks_gui_or_read_only_remote_api(

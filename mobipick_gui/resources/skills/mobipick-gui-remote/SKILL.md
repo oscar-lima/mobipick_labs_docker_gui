@@ -21,10 +21,11 @@ GUI=${MOBIPICK_GUI_REMOTE_URL:-http://127.0.0.1:8765}
 curl -s $GUI/            # endpoint list, if you forget anything below
 ```
 
-If the connection is refused, the API is off (it is off by default; the GUI
-remembers the menu toggle across relaunches). Stop and ask the user to
+If the connection is refused, the API is off (it is off by default and the
+menu toggle is not remembered across relaunches). Stop and ask the user to
 enable it with **Tools > Remote Control > Enable Remote Control API**, or to
-relaunch with `--remote-control` (env `MOBIPICK_GUI_REMOTE_CONTROL=1`).
+relaunch with `--remote-control` (env `MOBIPICK_GUI_REMOTE_CONTROL=1`). A
+persisted `remote_control.enabled` value does not enable the API by itself.
 
 **Without remote access there is no fallback.** Do not drive the GUI's
 containers with `docker` commands (`exec`, `run`, `stop`, `compose`), do not

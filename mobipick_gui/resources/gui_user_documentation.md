@@ -707,11 +707,9 @@ the **Install Source** tab.
   another computer, or an automation agent, press toolbar buttons, wait for
   launch events, read log tabs, and run commands in a ROS terminal inside the
   container. The address, port, and optional token come from the
-  `remote_control` section of `gui_settings.yaml`. The GUI remembers the
-  toggle: the next start brings the server up again, or keeps it off, as you
-  left it. The `--remote-control` / `--no-remote-control` command line options
-  and the `MOBIPICK_GUI_REMOTE_*` environment variables decide for one launch
-  without changing what is remembered.
+  `remote_control` section of `gui_settings.yaml`. Enable the server for a
+  launch with the `--remote-control`
+  command line options, or the `MOBIPICK_GUI_REMOTE_*` environment variables.
 - **Show Remote Control Info** displays the listening address, whether a token
   is required, and how many remote shells are open.
 - Slow or unavailable Docker operations remain pending without freezing the

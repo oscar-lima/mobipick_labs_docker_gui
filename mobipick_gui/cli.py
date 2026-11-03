@@ -209,10 +209,9 @@ def _env_flag(name: str) -> bool | None:
 def remote_control_overrides(parsed_args: argparse.Namespace) -> dict:
     """Combine environment and CLI remote-control settings (CLI wins).
 
-    Without the command-line flag or the environment variable the GUI
-    starts the API as the user left it: the Tools menu toggle saves its state
-    as ``remote_control.enabled`` in ``gui_settings.yaml``.  The flag and the
-    variable win over that saved state for one launch, in both directions.
+    Remote control is opt-in for every launch.  A stale user configuration
+    must not expose the command API when neither the command-line flag nor
+    the environment variable enables it.
     """
     overrides: dict = {}
     env_enabled = _env_flag('MOBIPICK_GUI_REMOTE_CONTROL')
@@ -256,6 +255,8 @@ def remote_control_overrides(parsed_args: argparse.Namespace) -> dict:
         ):
             overrides['enabled'] = True
             overrides['_enabled_source'] = 'remote-control CLI option'
+    if 'enabled' not in overrides:
+        overrides['enabled'] = False
     return overrides
 
 

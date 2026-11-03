@@ -357,8 +357,6 @@ ADVANCED_SCOPE_TABS = (('real', 'Real robot'), ('sim', 'Sim only'), ('shared', '
 # robot), a real-robot-only one without it (the simulation)
 SIM_ONLY_OFF_REASON = 'Sim only: not launched on the real robot (the launch default applies)'
 REAL_ONLY_OFF_REASON = 'Real robot only: not passed to any launch in the simulation'
-# "Enabled by" of a Remote Control API that a GUI start brought up from the remembered Tools menu state
-REMEMBERED_REMOTE_CONTROL_SOURCE = 'Tools menu, remembered (remote_control.enabled in gui_settings.yaml)'
 SCOPE_OFF_REASONS = {'sim': SIM_ONLY_OFF_REASON, 'real': REAL_ONLY_OFF_REASON}
 SCOPE_OFF_TAB_SUFFIX = {'sim': 'off on the real robot', 'real': 'off in the simulation'}
 ADVANCED_EMPTY_TAB_TEXT = {
@@ -3390,7 +3388,7 @@ class MainWindow(QMainWindow):
             and not self._remote_control_settings.get('_enabled_source')
         ):
             self._remote_control_settings['_enabled_source'] = (
-                REMEMBERED_REMOTE_CONTROL_SOURCE
+                'remote_control.enabled in gui_settings.yaml'
             )
         self._remote_control_action: QAction | None = None
         self._remote_icon_timer: QTimer | None = None
@@ -4382,33 +4380,12 @@ class MainWindow(QMainWindow):
             )
 
     def _on_remote_control_toggled(self, checked: bool) -> None:
-        """The Tools menu toggle: start or stop the API and remember the choice for the next GUI start."""
         if checked:
             self._remote_control_settings['_enabled_source'] = 'Tools menu'
             if not self._start_remote_control():
                 self._sync_remote_control_action()
-                return   # a server that could not start is not remembered as on
         else:
             self._stop_remote_control()
-        self._remember_remote_control(checked)
-
-    def _remember_remote_control(self, enabled: bool) -> None:
-        """Save the Tools menu state as ``remote_control.enabled``, which the next GUI start follows unless
-        --remote-control/--no-remote-control or MOBIPICK_GUI_REMOTE_CONTROL says otherwise."""
-        try:
-            save_user_config_update({'remote_control': {'enabled': bool(enabled)}})
-        except Exception as exc:
-            self._append_gui_html(
-                'log',
-                '<i>Failed to remember the Remote Control API setting: '
-                f'{html.escape(str(exc))}</i>',
-            )
-            return
-        self._log_info(
-            'Remote Control API will start with the next GUI launch'
-            if enabled
-            else 'Remote Control API stays off at the next GUI launch'
-        )
 
     def _sync_remote_control_action(self) -> None:
         action = self._remote_control_action
@@ -4442,8 +4419,8 @@ class MainWindow(QMainWindow):
         return (
             f'{state}\nEnabled by: {source}\n{token_line}\n'
             f'Open remote shells: {shells}\n\n'
-            'Enable with the Tools menu (remembered for the next launch), or for one launch with '
-            '--remote-control or MOBIPICK_GUI_REMOTE_CONTROL=1 (--no-remote-control or =0 keeps it off).\n'
+            'Enable with --remote-control, MOBIPICK_GUI_REMOTE_CONTROL=1, or '
+            'the Tools menu for the current session.\n'
             'Client: mobipick-labs-docker-gui-remote --url http://<host>:<port> status'
         )
 
