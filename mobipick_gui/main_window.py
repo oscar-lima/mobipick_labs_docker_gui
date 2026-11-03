@@ -147,6 +147,7 @@ from .display_runtime import (
     ogre_glx_environment,
 )
 from .external_links import open_external_url
+from .host_timezone import host_timezone_environment
 from .flow_layout import FlowLayout
 from .log_files import LogFileManager
 from .headless import (
@@ -9552,7 +9553,10 @@ CMD ["bash"]
             env_args.extend(
                 ['--volume', f'{source}:{target}:{access}']
             )
-        compose_env = dict(CONFIG['process']['compose_run_env'])
+        # The host's time zone first, so a TZ in the settings or an override
+        # still wins; without it every container clock shows UTC.
+        compose_env = host_timezone_environment()
+        compose_env.update(CONFIG['process']['compose_run_env'])
         compose_env.update(graphics_device_group_environment())
         compose_env.update(display_runtime.environment)
         if ogre_glx:
