@@ -155,7 +155,10 @@ Launch Options dialog, e.g.
 `anygrasp_mode: real|mockup`, or the world selector) get it from `GET /args`.
 Each entry includes an argument `description` and optional
 `option_descriptions` for individual values. Read them before changing an
-unfamiliar launch option.
+unfamiliar launch option. `scope` is `sim`, `real` or `shared`: on the real
+robot (remote ROS master) every `sim` argument, in the simulation every
+`real` argument is off: left off every command (the launch default applies),
+reported in `disabled`, and `POST /args` refuses to change it.
 Select a value over the API instead of editing the profile YAML: either
 `POST /args` or `args` in the press body, which is applied before the click.
 Unknown names or values are rejected with HTTP 400 and nothing is pressed.

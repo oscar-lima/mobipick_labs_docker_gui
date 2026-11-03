@@ -496,6 +496,30 @@ DEFAULT_ADVANCED_ARG_NAMES = frozenset({
     'gui', 'gzclient', 'gazebo_gui', 'gazebo_client', 'use_mtc',
     'jev_min_confidence', 'voice_languages',
 })
+# where a launch argument matters (``arg_{slot}_scope``): ``sim`` arguments
+# never reach a launch on the real robot (remote ROS master); a missing or
+# unknown scope counts as ``shared``
+ARG_SCOPES = ('real', 'sim', 'shared')
+DEFAULT_ARG_SCOPE = 'shared'
+
+
+def normalize_arg_scope(value: object) -> str:
+    """Return ``real``, ``sim`` or ``shared`` (missing or unknown values)."""
+    text = str(value or '').strip().lower()
+    return text if text in ARG_SCOPES else DEFAULT_ARG_SCOPE
+
+
+def profile_arg_scope(entries, slot: int) -> str | None:
+    """Scope of argument ``slot``: the first entry naming the slot that
+    carries ``arg_{slot}_scope`` decides; None when no entry carries it."""
+    for entry in entries or []:
+        if (
+            isinstance(entry, dict)
+            and entry.get(f'arg_{slot}_name')
+            and entry.get(f'arg_{slot}_scope') is not None
+        ):
+            return normalize_arg_scope(entry[f'arg_{slot}_scope'])
+    return None
 
 
 def _option_description_key(value: object) -> str:
@@ -715,6 +739,12 @@ def _normalize_button_entry(item: dict) -> dict | None:
             # None = unset (DEFAULT_ADVANCED_ARG_NAMES decide), also when an entry is normalized twice
             bool(item[advanced_field]) if item.get(advanced_field) is not None else None
         )
+        scope_field = f'arg_{slot}_scope'
+        normalized[scope_field] = (
+            # None = unset (counts as shared and is not written back)
+            normalize_arg_scope(item[scope_field])
+            if item.get(scope_field) is not None else None
+        )
         normalized[f'arg_{slot}_description'] = str(
             item.get(f'arg_{slot}_description') or ''
         ).strip()
@@ -912,6 +942,10 @@ def _button_entry_for_save(entry: dict) -> dict:
             saved[f'arg_{slot}_advanced'] = bool(
                 entry[f'arg_{slot}_advanced']
             )
+        if arg_name and entry.get(f'arg_{slot}_scope') is not None:
+            saved[f'arg_{slot}_scope'] = normalize_arg_scope(
+                entry[f'arg_{slot}_scope']
+            )
         description = str(entry.get(f'arg_{slot}_description') or '').strip()
         if description:
             saved[f'arg_{slot}_description'] = description
@@ -949,11 +983,17 @@ def _strip_unused_arg_definitions(saved: list[dict]) -> list[dict]:
         if not defining:
             continue
         keep = [entry for entry in defining if entry.get(applies_field)] or defining[:1]
+        scope_field = f'arg_{slot}_scope'
+        scope = next((entry[scope_field] for entry in defining if entry.get(scope_field) is not None), None)
+        for entry in keep:   # the scope must not go with a dropped copy
+            if scope is not None and entry.get(scope_field) is None:
+                entry[scope_field] = scope
         for entry in defining:
             if entry not in keep:
                 entry.pop(name_field, None)
                 entry.pop(options_field, None)
                 entry.pop(advanced_field, None)
+                entry.pop(f'arg_{slot}_scope', None)
                 entry.pop(f'arg_{slot}_description', None)
                 entry.pop(f'arg_{slot}_old_names', None)
                 entry.pop(f'arg_{slot}_option_descriptions', None)

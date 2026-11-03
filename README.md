@@ -643,10 +643,38 @@ one that defaults to advanced placement. `arg_N_description` is optional
 multi-line help text; `arg_N_option_descriptions` maps selectable values to
 their tooltips. `arg_N_old_names` lists former names of the option (a renamed option): a value saved in the user's settings under one of them is still applied, so a rename does not reset the saved choice. A profile can omit any of these fields. The description appears on
 the selector and its label, and its first line appears below advanced options.
-The remote `GET /args` response includes `description` and
-`option_descriptions`.
-The Advanced Launch Options dialog lays its options out in columns, each filled from top to bottom before the next
-(one column up to 4 options, two up to 16, three above) and scrolls when the screen is smaller than the options.
+The remote `GET /args` response includes `description`,
+`option_descriptions` and `scope`.
+
+`arg_N_scope` says where an argument matters: `sim` (only the simulation),
+`real` (only the real robot) or `shared` (both). A missing or unknown value
+counts as `shared`, and the profile editor writes the field only when it is
+set (its **Scope** combo: Shared, Real robot only, Sim only). The scope that
+does not match the current target is off: with **Use remote ROS master**
+checked (the real robot) every `sim` argument, without it (the simulation)
+every `real` argument. An argument that is off is greyed out in the toolbar
+and in Advanced Launch Options with the note "Sim only: not launched on the
+real robot (the launch default applies)" or "Real robot only: not passed to
+any launch in the simulation", keeps its selected value, and is left off
+every command (also when headless mode or a rule's start arguments name it),
+so the launch file's own default applies. `GET /buttons` leaves it out of
+`args` and `full_command`; `GET /args` reports the note as `disabled` and
+`POST /args` refuses to change it. A rule's own `disable` reason is kept
+after the scope note. Switching the remote ROS master checkbox applies this
+at once, and switching back restores the arguments with their values. In
+the Features window a feature whose options are all off by scope is greyed
+out with the same note (a feature that mixes scopes stays usable), and a
+preset leaves such options unchanged and reports them as refused.
+
+The Advanced Launch Options dialog has three tabs, **Real robot**, **Sim
+only** and **Shared**, one per scope, each titled with the number of options
+it shows (e.g. "Sim only (12)"). The tab of the scope that is off gets a
+suffix ("Sim only (12, off on the real robot)") and its page is greyed out,
+but it still opens so the options can be read; a tab without options shows a
+short grey note. Each tab lays its options out in columns, each filled from
+top to bottom before the next (one column up to 4 options, two up to 16,
+three above), and scrolls when the screen is smaller than the options; the
+dialog opens as wide as the tab with the most columns.
 The Advanced Launch Options dialog has **Edit...**, which opens one editor for
 every argument in the loaded button profile. It edits names, choices, help
 text, placement, and the buttons each argument applies to, and can add or
@@ -658,8 +686,9 @@ The Gazebo client (`gui`), `use_mtc`, `jev_min_confidence`, and
 shows at most six generic arguments alongside the world selector; additional
 ones appear in the advanced dialog. Their selected values still use the
 normal command, option-rule, saved-selection, and remote API paths.
-A search box at the top of the advanced dialog (focused on open) filters the
-options live by name, description or current value, case-insensitive; Esc
+A search box at the top of the advanced dialog (focused on open), above the
+tabs, filters the options of all three tabs live by name, description or
+current value, case-insensitive (the tab titles count the matches); Esc
 clears it, and hidden options keep their selected values.
 
 ### Option rules
@@ -978,7 +1007,7 @@ click with a wait without missing events.
 | `GET /status` | Workspace, image, world, cached roscore/sim state, buttons, tabs, shells, active dialog. |
 | `GET /buttons` | Toolbar buttons with `state` (`red` stopped, `green` running, `yellow` busy, `grey` unavailable), `tooltip`, `runs_on` (`host` or `container`), the log `tab` key, the toolbar `args` the button receives and the resulting `full_command`, plus readiness from the auto-launch estimates: `startup_seconds` (the plan's `duration_seconds`, `null` when the button has none), `started_at`, `ready_at`, `ready_in_s` and `ready` (running and past the estimate). |
 | `POST /buttons/{key}/click`, `/start`, `/stop` | Press a button. `start`/`stop` are idempotent. Body may contain `args` (`{"anygrasp_mode": "real"}`, selected before the press), `wait_for` (event names), `timeout` and `allow_window`. While headless mode is on, a press that would start a window button is refused with 409 (`"refused": "headless_window"`, nothing is pressed and no `args` are changed); `"allow_window": true` (CLI `--allow-window`) presses anyway and is meant only for when the user explicitly asked to watch the window. Keyed events (`button_state`, `button_ready`, `process_finished`) only match this button; waiting for `button_ready` on a button that is already running and past its estimate returns at once with `already_ready: true`. |
-| `GET /args`, `POST /args` | The launch argument selectors (generic `arg_N` slots from the button profile) and world: `name`, current `value`, `options`, `description`, `option_descriptions`, and applicable `buttons`. `POST` selects values by name (`{"anygrasp_mode": "real", "world": "moelk_tables"}`); unknown names or values are rejected. `invalid` maps choices forbidden by option rules to their reasons, and `POST` rejects them too; `disabled` is the reason a rule greys out the whole selector (empty otherwise), and `POST` refuses to change it. |
+| `GET /args`, `POST /args` | The launch argument selectors (generic `arg_N` slots from the button profile) and world: `name`, current `value`, `options`, `description`, `option_descriptions`, `scope` (`real`, `sim` or `shared`, see `arg_N_scope`), and applicable `buttons`. `POST` selects values by name (`{"anygrasp_mode": "real", "world": "moelk_tables"}`); unknown names or values are rejected. `invalid` maps choices forbidden by option rules to their reasons, and `POST` rejects them too; `disabled` is the reason a rule or the argument's scope greys out the whole selector (empty otherwise; on the real robot a `sim` argument and in the simulation a `real` one is off), and `POST` refuses to change it. |
 | `GET /features`, `POST /features` | The features of the profile: per group each mode or feature with its class, whether it is on, the options it sets, `missing` options the profile lacks and choices the rules `refused`; the `target` (sim or real), the presets, the loaded `preset` and the options that `differs` from it. `POST {"on": [keys], "off": [keys], "modes": {"group": "mode"}, "options": {...}}` switches features relative to the current state and reports `applied`, `refused`, `missing` and `careful_kept_off` (careful ones stay off on a remote ROS master; an `allow_careful` field is ignored and reported as `ignored`). |
 | `GET /preset`, `POST /preset` | The loaded preset and the presets there are. `POST {"name": "sim-full"}` loads a preset (careful features stay off on a remote ROS master) and emits `preset_applied`; `POST {"save": "name", "description": "..."}` saves the current selection as the user's preset. |
 | `GET /presence`, `POST /presence`, `DELETE /presence` | Declare that a client is using the GUI (`{"name": "<agent>", "ttl_s": 600, "note": ""}`; the name is chosen by the client, so any agent can use its own, and several may be present at once) or withdraw it. The first `POST` for a name returns a `token` that the `DELETE` must carry (`{"name": ..., "token": ...}`); a refresh by a namesake gets no token and its bye is refused with 409, so two agents that picked the same name cannot withdraw and clean up after each other. While a client is present the window icon glows bright and the GUI log records who is working. Presence is kept alive by activity, not by heartbeats: every request the client sends refreshes it (with several clients present, name yourself with the `X-Client-Name` header or a `client` field; an anonymous request refreshes the client present the longest, the one that also owns new processes), and so does a shell command it started that is still running or an `follow=1` stream it keeps open. Only `ttl_s` (default 10 min, max 30 min) of complete idleness lapses it. The server remembers every button, custom command, and shell the client started; when the client withdraws (without `"keep": true`) or lapses, the GUI stops those and logs the cleanup, so a crashed agent cannot leave the simulator running. Clients should not run a separate presence-refresh process: one that outlives its owner keeps a dead agent "present" for hours. |

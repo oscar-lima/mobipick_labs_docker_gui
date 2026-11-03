@@ -93,7 +93,9 @@ from .ansi import CSI_SEQ_RE, OSC_SEQ_RE, ansi_to_html
 from .async_tasks import AsyncTaskRunner
 from .bug_report import BugReportDialog
 from .config import (
+    normalize_arg_scope,
     normalize_name_list,
+    profile_arg_scope,
     saved_option_value,
     BUTTON_CONFIG_FILE,
     CONFIG,
@@ -349,6 +351,19 @@ def _mark_disabled_combo(combo: QComboBox, reason: str | None) -> None:
 # button texts of a yellow toggle whose process is going down (not starting)
 STOPPING_TEXT_PREFIXES = ('stopping', 'shutting', 'closing')
 ADVANCED_COLUMN_WIDTH = 560   # px per option column of the Advanced Launch Options dialog (#264)
+# tabs of the Advanced Launch Options dialog in their order: (argument scope, tab title)
+ADVANCED_SCOPE_TABS = (('real', 'Real robot'), ('sim', 'Sim only'), ('shared', 'Shared'))
+# why a launch argument is greyed out and left off every command: a sim-only one on a remote ROS master (the real
+# robot), a real-robot-only one without it (the simulation)
+SIM_ONLY_OFF_REASON = 'Sim only: not launched on the real robot (the launch default applies)'
+REAL_ONLY_OFF_REASON = 'Real robot only: not passed to any launch in the simulation'
+SCOPE_OFF_REASONS = {'sim': SIM_ONLY_OFF_REASON, 'real': REAL_ONLY_OFF_REASON}
+SCOPE_OFF_TAB_SUFFIX = {'sim': 'off on the real robot', 'real': 'off in the simulation'}
+ADVANCED_EMPTY_TAB_TEXT = {
+    'real': 'No real-robot-only option in this profile.',
+    'sim': 'No sim-only option in this profile.',
+    'shared': 'No shared option in this profile.',
+}
 
 
 def advanced_option_columns(count: int) -> int:
@@ -3928,16 +3943,36 @@ class MainWindow(QMainWindow):
         self._advanced_no_match_label = QLabel('No option matches the search.')
         self._advanced_no_match_label.setVisible(False)
         advanced_root.addWidget(self._advanced_no_match_label)
-        self._advanced_arg_layout = QGridLayout()
-        self._advanced_arg_layout.setHorizontalSpacing(8)
-        self._advanced_arg_layout.setVerticalSpacing(6)
-        advanced_content = QWidget()
-        advanced_content.setLayout(self._advanced_arg_layout)
-        self._advanced_scroll = QScrollArea()
-        self._advanced_scroll.setWidgetResizable(True)
-        self._advanced_scroll.setFrameShape(QFrame.NoFrame)
-        self._advanced_scroll.setWidget(advanced_content)
-        advanced_root.addWidget(self._advanced_scroll, 1)
+        # one tab per argument scope, each with its own scroll area and column grid
+        self._advanced_tabs = QTabWidget()
+        self._advanced_arg_layouts: dict[str, QGridLayout] = {}
+        self._advanced_scrolls: dict[str, QScrollArea] = {}
+        self._advanced_tab_empty_labels: dict[str, QLabel] = {}
+        for scope, title in ADVANCED_SCOPE_TABS:
+            grid = QGridLayout()
+            grid.setHorizontalSpacing(8)
+            grid.setVerticalSpacing(6)
+            content = QWidget()
+            content.setLayout(grid)
+            scroll = QScrollArea()
+            scroll.setWidgetResizable(True)
+            scroll.setFrameShape(QFrame.NoFrame)
+            scroll.setWidget(content)
+            empty = QLabel()
+            empty.setStyleSheet('color: #777;')
+            empty.setVisible(False)
+            page = QWidget()
+            page_layout = QVBoxLayout(page)
+            page_layout.setContentsMargins(4, 4, 4, 4)
+            page_layout.addWidget(empty)
+            page_layout.addWidget(scroll, 1)
+            self._advanced_tabs.addTab(page, title)
+            self._advanced_arg_layouts[scope] = grid
+            self._advanced_scrolls[scope] = scroll
+            self._advanced_tab_empty_labels[scope] = empty
+        self._advanced_arg_layout = self._advanced_arg_layouts['shared']
+        self._advanced_scroll = self._advanced_scrolls['shared']
+        advanced_root.addWidget(self._advanced_tabs, 1)
         advanced_buttons = QDialogButtonBox(QDialogButtonBox.Close)
         edit_advanced_button = advanced_buttons.addButton(
             'Edit...', QDialogButtonBox.ActionRole
@@ -8730,18 +8765,25 @@ CMD ["bash"]
             ), names[slot] in DEFAULT_ADVANCED_ARG_NAMES)
             for slot in GENERIC_BUTTON_ARG_SLOTS
         }
+        scopes = {
+            slot: profile_arg_scope(self._button_layout, slot) or 'shared'
+            for slot in GENERIC_BUTTON_ARG_SLOTS
+            if names[slot]
+        }
         while layout.count():
             item = layout.takeAt(0)
             widget = item.widget()
             if widget is not None:
                 widget.deleteLater()
+        advanced_layouts = MainWindow._advanced_layouts(self)
         advanced_layout = getattr(self, '_advanced_arg_layout', None)
-        if advanced_layout is not None:
-            while advanced_layout.count():
-                item = advanced_layout.takeAt(0)
-                widget = item.widget()
-                if widget is not None:
-                    widget.deleteLater()
+        if advanced_layouts:
+            for each_layout in advanced_layouts.values():
+                while each_layout.count():
+                    item = each_layout.takeAt(0)
+                    widget = item.widget()
+                    if widget is not None:
+                        widget.deleteLater()
             for label, field, *_rest in getattr(self, '_advanced_all_rows', []):
                 label.deleteLater()   # rows hidden by the search are not in the layout
                 field.deleteLater()
@@ -8749,7 +8791,8 @@ CMD ["bash"]
 
         inputs: dict[int, QComboBox] = {}
         main_count = 0
-        advanced_rows: list[tuple[QLabel, QWidget, QComboBox, str]] = []
+        # (label, field, selector, search text, scope)
+        advanced_rows: list[tuple[QLabel, QWidget, QComboBox, str, str]] = []
         for slot in GENERIC_BUTTON_ARG_SLOTS:
             name = names[slot]
             if not name:
@@ -8798,7 +8841,7 @@ CMD ["bash"]
                     help_line.setStyleSheet('color: #777;')
                     help_line.setToolTip(description)
                     field_layout.addWidget(help_line)
-                rule_note = QLabel()   # why a rule greys this option out, e.g. sim only
+                rule_note = QLabel()   # why a rule or the sim-only scope greys this option out
                 rule_note.setWordWrap(True)
                 rule_note.setStyleSheet('color: #d08000;')
                 rule_note.setVisible(False)
@@ -8807,7 +8850,7 @@ CMD ["bash"]
                 field_layout.addStretch(1)   # spare height of the row goes below the help line, not into the selector
                 label = QLabel(f'{name}:')
                 label.setToolTip(description)
-                advanced_rows.append((label, field, value_input, f'{name}\n{description}'))
+                advanced_rows.append((label, field, value_input, f'{name}\n{description}', scopes[slot]))
             else:
                 slot_controls, _slot_label = _labeled_control(
                     f'{name}:', value_input,
@@ -8824,6 +8867,7 @@ CMD ["bash"]
         self._generic_arg_names_by_slot = {
             slot: names[slot] for slot in inputs
         }
+        self._generic_arg_scopes = {slot: scopes[slot] for slot in inputs}
         self._generic_arg_descriptions = descriptions
         self._generic_arg_value_descriptions = value_descriptions
         controls.setVisible(bool(main_count))
@@ -8836,33 +8880,84 @@ CMD ["bash"]
         MainWindow._apply_preferred_at_load(self)
         MainWindow._apply_option_rules(self)
 
+    def _advanced_layouts(self) -> dict:
+        """``{scope: grid}`` of the Advanced Launch Options tabs; a window without the tabs (a test harness) has one
+        grid that takes every scope; empty when there is no dialog."""
+        layouts = getattr(self, '_advanced_arg_layouts', None)
+        if layouts:
+            return layouts
+        layout = getattr(self, '_advanced_arg_layout', None)
+        return {'shared': layout} if layout is not None else {}
+
     def _apply_advanced_filter(self) -> None:
         """Show only the Advanced Launch Options whose name, description or current value contain the search text
-        (case-insensitive) and lay them out in columns again; hidden rows keep their values."""
-        layout = getattr(self, '_advanced_arg_layout', None)
-        if layout is None:
+        (case-insensitive) and lay them out in columns again, each in the tab of its scope; hidden rows keep their
+        values."""
+        layouts = MainWindow._advanced_layouts(self)
+        if not layouts:
             return
         rows = getattr(self, '_advanced_all_rows', [])
         search = getattr(self, '_advanced_filter', None)
         needle = search.text().strip().casefold() if search is not None else ''
-        while layout.count():
-            layout.takeAt(0)
-        for column in range(layout.columnCount()):
-            layout.setColumnStretch(column, 0)
-            layout.setColumnMinimumWidth(column, 0)
-        visible = []
-        for label, field, value_input, text in rows:
+        for layout in layouts.values():
+            while layout.count():
+                layout.takeAt(0)
+            for column in range(layout.columnCount()):
+                layout.setColumnStretch(column, 0)
+                layout.setColumnMinimumWidth(column, 0)
+        visible: dict[str, list] = {scope: [] for scope in layouts}
+        totals = {scope: 0 for scope in layouts}
+        for label, field, value_input, text, *rest in rows:
+            scope = rest[0] if rest and rest[0] in layouts else 'shared'
+            totals[scope] += 1
             match = not needle or needle in f'{text}\n{value_input.currentText()}'.casefold()
             label.setVisible(match)
             field.setVisible(match)
             if match:
-                visible.append((label, field))
-        MainWindow._fill_advanced_columns(self, layout, visible)
+                visible[scope].append((label, field))
+        columns = 1
+        for scope, layout in layouts.items():
+            MainWindow._fill_advanced_columns(self, layout, visible[scope])
+            columns = max(columns, getattr(self, '_advanced_columns', 1))
+        self._advanced_columns = columns   # the widest tab sizes the dialog
+        self._advanced_tab_counts = {scope: len(shown) for scope, shown in visible.items()}
+        self._advanced_tab_totals = totals
         no_match = getattr(self, '_advanced_no_match_label', None)
         if no_match is not None:
-            no_match.setVisible(bool(rows) and not visible)
+            no_match.setVisible(bool(rows) and not any(visible.values()))
         if search is not None:
             search.setVisible(bool(rows))
+        MainWindow._update_advanced_tabs(self)
+
+    def _update_advanced_tabs(self) -> None:
+        """Tab titles with their visible option counts, a grey note on a tab without options, and the page of the
+        scope that is off greyed out: Sim only on a remote ROS master, Real robot in the simulation (its tab still
+        opens, to look at the options)."""
+        tabs = getattr(self, '_advanced_tabs', None)
+        if tabs is None:
+            return
+        counts = getattr(self, '_advanced_tab_counts', {})
+        totals = getattr(self, '_advanced_tab_totals', {})
+        search = getattr(self, '_advanced_filter', None)
+        searching = bool(search is not None and search.text().strip())
+        off_scope = MainWindow._off_scope(self)
+        empty_labels = getattr(self, '_advanced_tab_empty_labels', {})
+        scrolls = getattr(self, '_advanced_scrolls', {})
+        for index, (scope, title) in enumerate(ADVANCED_SCOPE_TABS):
+            count = counts.get(scope, 0)
+            off = scope == off_scope
+            tabs.setTabText(index, f'{title} ({count}, {SCOPE_OFF_TAB_SUFFIX[scope]})' if off else f'{title} ({count})')
+            tabs.setTabToolTip(index, SCOPE_OFF_REASONS[scope] if off else '')
+            scroll = scrolls.get(scope)
+            if scroll is not None and scroll.widget() is not None:
+                scroll.widget().setEnabled(not off)   # the scroll bars stay usable
+            empty = empty_labels.get(scope)
+            if empty is not None:
+                if totals.get(scope, 0) and searching:
+                    empty.setText('No option in this tab matches the search.')
+                else:
+                    empty.setText(ADVANCED_EMPTY_TAB_TEXT[scope])
+                empty.setVisible(count == 0)
 
     def _fill_advanced_columns(self, layout, rows) -> None:
         """Lay the Advanced Launch Options out in columns, the first column filled top to bottom before the next (#264)."""
@@ -8879,15 +8974,18 @@ CMD ["bash"]
         self._advanced_columns = columns
 
     def _show_advanced_launch_dialog(self) -> None:
-        """Show the Advanced Launch Options dialog as wide as its columns need (at most the screen), as tall as the
-        options need (at most the screen, then it scrolls)."""
+        """Show the Advanced Launch Options dialog as wide as the columns of its widest tab need (at most the screen),
+        as tall as the options of its tallest tab need (at most the screen, then it scrolls)."""
         dialog = self.advanced_launch_dialog
         MainWindow._refresh_features_controls(self)
         if not dialog.isVisible():
             columns = getattr(self, '_advanced_columns', 1)
             screen = dialog.screen().availableGeometry() if dialog.screen() else None
             width = ADVANCED_COLUMN_WIDTH * columns
-            height = self._advanced_scroll.widget().sizeHint().height() + 80
+            scrolls = getattr(self, '_advanced_scrolls', None) or {'shared': self._advanced_scroll}
+            tab_bar = getattr(self, '_advanced_tabs', None)
+            height = max(scroll.widget().sizeHint().height() for scroll in scrolls.values()) + 80 + (
+                tab_bar.tabBar().sizeHint().height() if tab_bar is not None else 0)
             if screen is not None:
                 width = min(width, int(screen.width() * 0.95))
                 height = min(max(height, 300), int(screen.height() * 0.9))
@@ -8899,8 +8997,64 @@ CMD ["bash"]
             search.setFocus(Qt.OtherFocusReason)
             search.selectAll()
 
+    def _arg_scope(self, slot: int, config: dict | None = None) -> str:
+        """Scope of argument ``slot`` (``real``, ``sim`` or ``shared``): the profile's, else ``config``'s own field."""
+        scopes = getattr(self, '_generic_arg_scopes', None) or {}
+        if slot in scopes:
+            return scopes[slot]
+        return normalize_arg_scope((config or {}).get(f'arg_{slot}_scope'))
+
+    def _off_scope(self) -> str:
+        """The argument scope that is off now: ``sim`` on a remote ROS master (the real robot), else ``real``."""
+        return 'sim' if MainWindow._real_robot_mode(self) else 'real'
+
+    def _scope_arg_off(self, slot: int, config: dict | None = None) -> bool:
+        """True when argument ``slot`` does not apply to the current target: sim only on a remote ROS master, real
+        robot only in the simulation. It is greyed out and left off every command, so the launch file's own default
+        applies."""
+        return MainWindow._arg_scope(self, slot, config) == MainWindow._off_scope(self)
+
+    def _scope_off_arg_names(self) -> dict[str, str]:
+        """``{argument name: reason}`` for the arguments the current target leaves off because of their scope."""
+        names = getattr(self, '_generic_arg_names_by_slot', {})
+        return {
+            str(names.get(slot) or '').strip(): SCOPE_OFF_REASONS[scope]
+            for slot, scope in (getattr(self, '_generic_arg_scopes', None) or {}).items()
+            if scope == MainWindow._off_scope(self) and str(names.get(slot) or '').strip()
+        }
+
+    def _real_robot_mode(self) -> bool:
+        """True on a remote ROS master (also for a stand-in window without the check)."""
+        enabled = getattr(self, '_remote_master_enabled', None)
+        return bool(enabled()) if callable(enabled) else False
+
+    def _arg_disabled_reason(self, slot: int, rule_reason: str = '', separator: str = '\n') -> str:
+        """Why argument ``slot`` is greyed out: its scope first, then an option rule's reason."""
+        reasons = [SCOPE_OFF_REASONS[MainWindow._off_scope(self)]] if MainWindow._scope_arg_off(self, slot) else []
+        if rule_reason and rule_reason not in reasons:
+            reasons.append(rule_reason)
+        return separator.join(reasons)
+
+    def _mark_disabled_args(self, disabled: dict, *, world: bool = True) -> None:
+        """Grey out the dropdowns a rule (``{dropdown: reason}``) or their scope disables, and refresh the
+        Advanced Launch Options tabs; ``world`` False leaves the world dropdown alone."""
+        inputs = getattr(self, '_generic_arg_inputs', {})
+        names = getattr(self, '_generic_arg_names_by_slot', {})
+        generic = {id(widget) for widget in inputs.values()}
+        if world:
+            for name, combo in MainWindow._option_rule_combos(self).items():
+                if id(combo) not in generic:
+                    _mark_disabled_combo(combo, disabled.get(name))
+        for slot, combo in inputs.items():
+            name = str(names.get(slot) or '').strip()
+            reason = MainWindow._arg_disabled_reason(self, slot, disabled.get(name, '') if name else '')
+            _mark_disabled_combo(combo, reason or None)
+        MainWindow._update_advanced_tabs(self)
+
     def _command_with_generic_args(self, command: str, config: dict) -> str:
-        """Append configured, non-empty generic ROS arguments to a command."""
+        """Append configured, non-empty generic ROS arguments to a command. The arguments whose scope is off are left
+        off (sim only on a remote ROS master, real robot only in the simulation; the launch file's own default
+        applies), also when headless mode or a rule sets them."""
         full_command = str(command or '').strip()
         if not full_command:
             return ''
@@ -8909,10 +9063,15 @@ CMD ["bash"]
             dict(config.get('headless_args') or {})
             if getattr(self, '_headless_mode', False) else {}
         )
+        scope_off_names = set(MainWindow._scope_off_arg_names(self))
         for slot in GENERIC_BUTTON_ARG_SLOTS:
             if not config.get(f'arg_{slot}_applies'):
                 continue
             name = str(config.get(f'arg_{slot}_name') or '').strip()
+            if MainWindow._scope_arg_off(self, slot, config):
+                scope_off_names.add(name)
+                headless_args.pop(name, None)
+                continue
             widget = inputs.get(slot)
             value = widget.currentText().strip() if widget is not None else ''
             if name in headless_args:
@@ -8920,6 +9079,8 @@ CMD ["bash"]
             if name and value:
                 full_command += f' {name}:={self._sh_quote(value)}'
         for name, value in headless_args.items():
+            if name in scope_off_names:
+                continue
             full_command += f' {name}:={self._sh_quote(value)}'
         rules = getattr(self, '_option_rules', None)
         key = str(config.get('key') or '').strip()
@@ -8928,6 +9089,8 @@ CMD ["bash"]
                 self, rules, MainWindow._option_rule_combos(self)
             )
             for name, value in rules.start_args(state, key):
+                if name in scope_off_names:
+                    continue
                 full_command += f' {name}:={self._sh_quote(value)}'
         return full_command
 
@@ -9044,6 +9207,10 @@ CMD ["bash"]
                 normalized[f'arg_{slot}_advanced'] = bool(
                     entry.get(f'arg_{slot}_advanced', False)
                 )
+                if entry.get(f'arg_{slot}_scope') is not None:
+                    normalized[f'arg_{slot}_scope'] = normalize_arg_scope(
+                        entry[f'arg_{slot}_scope']
+                    )
             self._config_buttons[key] = normalized
             self._config_button_order.append(key)
             button = QPushButton(normalized['label'])
@@ -9689,7 +9856,10 @@ CMD ["bash"]
         self._clear_remote_ros_cleanup_offer()
         if checked:
             MainWindow._switch_careful_off(self)
-        self._apply_option_rules(notify=True)
+        self._apply_option_rules(notify=True)   # also greys out the arguments whose scope is off now
+        features_dialog = getattr(self, '_features_dialog', None)
+        if features_dialog is not None and features_dialog.isVisible():
+            features_dialog.refresh()   # its target and the features greyed out by scope follow the switch
         self._apply_env_to_all_tabs()
         self._update_buttons()
         if checked:
@@ -15048,7 +15218,10 @@ CMD ["bash"]
         caused; loading and remote-control changes only log them.
         """
         rules = getattr(self, '_option_rules', None)
-        if rules is None or getattr(self, '_applying_option_rules', False):
+        if getattr(self, '_applying_option_rules', False):
+            return
+        if rules is None:
+            MainWindow._mark_disabled_args(self, {}, world=False)   # the argument scopes still apply
             return
         if not getattr(self, '_option_rules_reported', True):
             self._option_rules_reported = True
@@ -15104,9 +15277,7 @@ CMD ["bash"]
                     switched = True
                 if not switched:
                     break
-            disabled = MainWindow._disabled_options(self)
-            for name, combo in MainWindow._option_rule_combos(self).items():
-                _mark_disabled_combo(combo, disabled.get(name))
+            MainWindow._mark_disabled_args(self, MainWindow._disabled_options(self))
         finally:
             self._applying_option_rules = False
         if notify and switches:
@@ -15226,12 +15397,14 @@ CMD ["bash"]
                 {
                     'slot': slot,
                     'name': name,
+                    'scope': MainWindow._arg_scope(self, slot),
                     'description': descriptions.get(slot, ''),
                     'option_descriptions': value_descriptions.get(slot, {}),
                     'value': widget.currentText().strip(),
                     'options': [widget.itemText(i) for i in range(widget.count())],
                     'invalid': invalid.get(name, {}),
-                    'disabled': disabled.get(name, ''),
+                    # an argument whose scope is off (sim only on the real robot, real only in the sim): that first
+                    'disabled': MainWindow._arg_disabled_reason(self, slot, disabled.get(name, ''), '; '),
                     'against_prefer': against.get(name, {}),
                     'buttons': [
                         key
@@ -15262,12 +15435,13 @@ CMD ["bash"]
         return entries
 
     def button_args(self, key: str) -> dict[str, str]:
-        """Argument name -> current value for the arguments ``key`` receives."""
+        """Argument name -> current value for the arguments ``key`` receives (without those whose scope is off, which
+        its command leaves off)."""
         config = self._config_buttons.get(key, {})
         values: dict[str, str] = {}
         inputs = getattr(self, '_generic_arg_inputs', {})
         for slot in GENERIC_BUTTON_ARG_SLOTS:
-            if not config.get(f'arg_{slot}_applies'):
+            if not config.get(f'arg_{slot}_applies') or MainWindow._scope_arg_off(self, slot, config):
                 continue
             name = str(config.get(f'arg_{slot}_name') or '').strip()
             widget = inputs.get(slot)
@@ -15483,6 +15657,13 @@ CMD ["bash"]
             return {name: invalid[name][value] for name, value in wanted.items()
                     if value in invalid.get(name, {})}
 
+        scope_off = MainWindow._scope_off_arg_names(self)
+
+        def scope_reason(feature) -> str:
+            # every option of the feature is left off on this target (e.g. all sim only on the real robot)
+            names = set(feature.on) | set(feature.off)
+            return next(iter(scope_off.values())) if names and names <= set(scope_off) else ''
+
         groups = []
         for group in features.groups:
             if group.kind == 'modes':
@@ -15500,6 +15681,7 @@ CMD ["bash"]
                     'on': key in selection.features_on, 'mixed': mixed.get(key, ''),
                     'set_on': dict(feature.on), 'set_off': dict(feature.off),
                     'missing': missing.get(key, []), 'refused': refused(feature.on),
+                    'scope_off': scope_reason(feature),
                 } for key, feature in ((k, features.features[k]) for k in group.members)]
             groups.append({'key': group.key, 'name': group.name, 'kind': group.kind,
                            'description': group.description, 'mixed': mixed.get(group.key, ''),

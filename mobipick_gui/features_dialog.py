@@ -274,6 +274,8 @@ class FeaturesDialog(QDialog):
                 note = ''
                 if member['missing']:
                     note = 'not in this profile: ' + ', '.join(member['missing'])
+                elif member.get('scope_off'):
+                    note = member['scope_off']
                 elif member['refused']:
                     note = '; '.join(sorted(set(member['refused'].values())))
                 elif real and member['class'] == feature_sets.CAREFUL:
@@ -281,9 +283,12 @@ class FeaturesDialog(QDialog):
                 elif member.get('mixed'):
                     note = 'mixed: ' + member['mixed']
                 enabled = not member['missing'] and not member['refused']
+                # all its options are left off on this target: greyed out also when on (Apply cannot change them)
+                scope_off = bool(member.get('scope_off'))
                 if group['kind'] == 'features':
-                    self._usable[member['key']] = enabled or member['on']
-                row.button.setEnabled(enabled or member['on'])
+                    self._usable[member['key']] = (enabled or member['on']) and not scope_off
+                row.button.setEnabled((enabled or member['on']) and not scope_off)
+                row.button.setToolTip(member.get('scope_off') or '')
                 row.set_note(note)
                 row.button.setChecked(bool(member['on']))
         self._apply_parents()

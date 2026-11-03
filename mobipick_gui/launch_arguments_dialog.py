@@ -7,6 +7,7 @@ import copy
 from PyQt5.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QFormLayout,
@@ -25,14 +26,26 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from .config import DEFAULT_ADVANCED_ARG_NAMES, GENERIC_BUTTON_ARG_SLOTS
+from .config import (
+    DEFAULT_ADVANCED_ARG_NAMES,
+    DEFAULT_ARG_SCOPE,
+    GENERIC_BUTTON_ARG_SLOTS,
+    normalize_arg_scope,
+    profile_arg_scope,
+)
 from . import popups
 
 
 ARG_FIELDS = (
-    'name', 'options', 'applies', 'advanced', 'description',
+    'name', 'options', 'applies', 'advanced', 'scope', 'description',
     'option_descriptions',
 )
+# scope value -> label of the editor's Scope combo and the Location column
+SCOPE_LABELS = {
+    'shared': 'Shared',
+    'real': 'Real robot only',
+    'sim': 'Sim only',
+}
 
 
 def profile_arguments(entries: list[dict]) -> list[dict]:
@@ -75,6 +88,8 @@ def profile_arguments(entries: list[dict]) -> list[dict]:
                 bool(placement) if placement is not None
                 else name in DEFAULT_ADVANCED_ARG_NAMES
             ),
+            # None = unset: counts as shared and is not written to the profile
+            'scope': profile_arg_scope(entries, slot),
             'buttons': {
                 str(entry.get('key') or '') for entry in entries
                 if entry.get(f'arg_{slot}_applies')
@@ -123,6 +138,20 @@ class LaunchArgumentDetailsDialog(QDialog):
         self.advanced_check = QCheckBox('Show in Advanced Launch Options')
         self.advanced_check.setChecked(bool(argument.get('advanced')))
         form.addRow('Placement:', self.advanced_check)
+        self.scope_combo = QComboBox()
+        for scope, label in SCOPE_LABELS.items():
+            self.scope_combo.addItem(label, scope)
+        self.scope_combo.setCurrentIndex(self.scope_combo.findData(
+            normalize_arg_scope(argument.get('scope'))
+        ))
+        self.scope_combo.setToolTip(
+            'Sim only: never passed to a launch on the real robot (remote '
+            'ROS master), greyed out there.\nReal robot only: never passed '
+            'to a launch in the simulation, greyed out there.\nShared: passed '
+            'everywhere. The scope also picks the tab in Advanced Launch '
+            'Options.'
+        )
+        form.addRow('Scope:', self.scope_combo)
         root.addLayout(form)
 
         root.addWidget(QLabel('Apply this argument to:'))
@@ -183,12 +212,29 @@ class LaunchArgumentDetailsDialog(QDialog):
             'description': self.description_input.toPlainText().strip(),
             'option_descriptions': descriptions,
             'advanced': self.advanced_check.isChecked(),
+            'scope': self._chosen_scope(),
             'buttons': {
                 key for key, check in self.button_checks.items()
                 if check.isChecked()
             },
         })
         super().accept()
+
+    def _chosen_scope(self) -> str | None:
+        """The chosen scope; None keeps an unset scope unset when Shared stays chosen."""
+        scope = normalize_arg_scope(self.scope_combo.currentData())
+        if scope == DEFAULT_ARG_SCOPE and self._argument.get('scope') is None:
+            return None
+        return scope
+
+
+def _location_text(argument: dict) -> str:
+    """Placement and, when not shared, scope of an argument for the table."""
+    location = 'Advanced' if argument['advanced'] else 'Main window'
+    scope = normalize_arg_scope(argument.get('scope'))
+    if scope != DEFAULT_ARG_SCOPE:
+        location += f', {SCOPE_LABELS[scope]}'
+    return location
 
 
 class LaunchArgumentsDialog(QDialog):
@@ -254,7 +300,7 @@ class LaunchArgumentsDialog(QDialog):
         for row, argument in enumerate(self._arguments):
             values = (
                 str(argument['slot']), argument['name'],
-                'Advanced' if argument['advanced'] else 'Main window',
+                _location_text(argument),
                 ', '.join(sorted(argument['buttons'])) or 'None',
             )
             for column, value in enumerate(values):
@@ -287,7 +333,8 @@ class LaunchArgumentsDialog(QDialog):
             return
         argument = {
             'slot': slot, 'name': '', 'options': [], 'description': '',
-            'option_descriptions': {}, 'advanced': True, 'buttons': set(),
+            'option_descriptions': {}, 'advanced': True, 'scope': None,
+            'buttons': set(),
         }
         dialog = LaunchArgumentDetailsDialog(argument, self._buttons, None)   # top-level: moves independently
         if dialog.exec_() == QDialog.Accepted:
@@ -341,4 +388,8 @@ class LaunchArgumentsDialog(QDialog):
                     f'arg_{slot}_advanced': argument['advanced'],
                     f'arg_{slot}_applies': entry.get('key') in applying,
                 })
+                if argument.get('scope') is not None:
+                    entry[f'arg_{slot}_scope'] = normalize_arg_scope(
+                        argument['scope']
+                    )
         super().accept()

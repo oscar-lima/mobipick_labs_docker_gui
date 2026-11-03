@@ -398,6 +398,22 @@ The Gazebo client, `use_mtc`, `jev_min_confidence`, and `voice_languages`
 selectors appear there automatically when the profile defines them.
 This keeps the normal button table focused on commonly edited settings.
 
+Each launch argument has a scope, chosen with **Scope** in the argument
+editor: **Shared** (the default), **Real robot only** or **Sim only**.
+Advanced Launch Options shows one tab per scope, **Real robot**, **Sim
+only** and **Shared**, each titled with how many options it shows; the
+search box above the tabs filters all three. With **Use remote ROS master**
+checked (the real robot) the sim-only arguments are greyed out, in the
+toolbar too, with the note "Sim only: not launched on the real robot (the
+launch default applies)": no launch receives them, so each launch file uses
+its own default. Without the remote ROS master (the simulation) the
+real-robot-only arguments are greyed out the same way. The tab of the scope
+that is off says so in its title and its options are greyed out, but you can
+still open it to read them. A greyed-out argument keeps its value, so it is
+back as you left it when you switch the target again. In **Features...** a
+feature whose options are all off this way is greyed out too, and loading a
+preset does not change them.
+
 The **image** selector chooses the Docker image used by containers. Image labels
 may include:
 
