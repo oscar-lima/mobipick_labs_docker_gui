@@ -157,3 +157,8 @@ start or stop things. An agent working through the API must announce itself
 with `/presence`, renew it at least every 10 minutes, stop what it started,
 and withdraw presence as its last call; the skill spells out the hand-over
 checklist.
+
+# Remote control
+
+The Remote Control API (Tools menu) starts off on every GUI start and is never remembered across restarts: the user
+grants agents access explicitly each time.
