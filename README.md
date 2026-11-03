@@ -970,9 +970,13 @@ Mobipick containers. The server is off by default. Enable it with any of:
   `MOBIPICK_GUI_REMOTE_PORT`, and `MOBIPICK_GUI_REMOTE_TOKEN`
 - **Tools > Remote Control > Enable Remote Control API** at runtime
 
-Remote control is opt-in for each launch. A persisted
-`remote_control.enabled: true` setting is ignored by the GUI command unless
-`--remote-control` or `MOBIPICK_GUI_REMOTE_CONTROL=1` enables the API.
+The GUI remembers the Tools menu toggle: switching it on or off saves
+`remote_control.enabled` in `gui_settings.yaml`, and the next GUI start brings
+the API up again (or keeps it off) as it was left. `--remote-control` and
+`MOBIPICK_GUI_REMOTE_CONTROL=1` enable it for one launch, `--no-remote-control`
+and `MOBIPICK_GUI_REMOTE_CONTROL=0` keep it off for one launch; neither changes
+the remembered setting. A server that fails to start (port taken) is not
+remembered as on.
 
 The GUI normally runs on the host and the processes it launches are mostly
 containers, though configured buttons can also run host processes. The
