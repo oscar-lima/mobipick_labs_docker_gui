@@ -107,3 +107,8 @@ def headless_launch_entries(
             entry['depends_on'] = _resolve(dependency)
         kept.append(entry)
     return kept, skipped
+
+
+HEADLESS_SIM_ONLY_REASON = (
+    'headless is sim only: the GUI uses a remote ROS master (real robot); windows stay on'
+)

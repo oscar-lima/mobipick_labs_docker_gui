@@ -608,6 +608,8 @@ Command entries can declare:
 
 ### Headless mode
 
+Headless is sim only: with a remote ROS master (the real robot) the switch is off and greyed out, `POST /headless` with `enabled: true` is refused with 409, and `GET /headless` adds `sim_only_off` and a `reason`; back in the sim your last choice returns.
+
 The **Headless** switch next to Auto Launch (remote: `POST /headless`) starts
 nothing that opens a window: Auto Launch skips the `opens_window` buttons (a
 process that depended on a skipped one inherits that one's dependency),

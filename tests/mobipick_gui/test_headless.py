@@ -126,6 +126,7 @@ def test_set_headless_reports_skipped_buttons_and_args():
     logged = []
     harness = SimpleNamespace(
         _headless_mode=False,
+        _remote_master_enabled=lambda: False,
         _log_info=logged.append,
         _config_buttons={
             'sim': {'action': 'sim', 'headless_args': {'gui': 'false'}},
@@ -183,3 +184,25 @@ def test_headless_endpoint_is_listed_and_in_the_cli():
     assert 'headless_changed' in payload['events']
     assert _build_parser().parse_args(['headless', 'on']).state == 'on'
     assert _build_parser().parse_args(['headless']).state is None
+
+
+def test_remote_master_makes_headless_sim_only_in_the_status_and_the_rest_call():
+    from mobipick_gui.headless import HEADLESS_SIM_ONLY_REASON
+    from mobipick_gui.remote_adapter import MainWindowRemoteAdapter
+
+    logged = []
+    harness = SimpleNamespace(
+        _headless_mode=False, _headless_sim_choice=False, _remote_master_enabled=lambda: True,
+        _log_info=logged.append, _config_buttons={},
+    )
+    harness._window_button_keys = lambda: set()
+    status = MainWindow.headless_status(harness)
+    assert status['enabled'] is False and status['sim_only_off'] is True
+    assert status['reason'] == HEADLESS_SIM_ONLY_REASON
+
+    adapter = MainWindowRemoteAdapter.__new__(MainWindowRemoteAdapter)
+    adapter.window = harness
+    server = RemoteControlServer(adapter, host='127.0.0.1', port=0, invoker=DirectInvoker())
+    code, payload = server.handle('POST', '/headless', {}, {'enabled': True})
+    assert code == 409 and 'sim only' in str(payload)
+    assert harness._headless_sim_choice is False

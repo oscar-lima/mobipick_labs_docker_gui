@@ -151,6 +151,7 @@ from .host_timezone import host_timezone_environment
 from .flow_layout import FlowLayout
 from .log_files import LogFileManager
 from .headless import (
+    HEADLESS_SIM_ONLY_REASON,
     button_opens_window,
     headless_launch_entries,
     normalize_headless_args,
@@ -3639,9 +3640,14 @@ class MainWindow(QMainWindow):
         self._window_layout_dialog: QDialog | None = None
         headless_cfg = CONFIG.get('headless', {})
         saved_headless = self._saved_selections.get('headless')
-        self._headless_mode = bool(
+        # what the user ticked (persisted); _headless_mode is the effective value
+        # (the choice, but never on with a remote ROS master: sim only)
+        self._headless_sim_choice = bool(
             saved_headless if isinstance(saved_headless, bool)
             else (headless_cfg or {}).get('enabled_by_default', False)
+        )
+        self._headless_mode = bool(
+            self._headless_sim_choice and not self._remote_master_enabled_value
         )
         self._recording_cfg = CONFIG.get('recording', {})
         self._recording_default_checked = bool(
@@ -3850,9 +3856,11 @@ class MainWindow(QMainWindow):
             'without the Gazebo window). Buttons pressed by hand still open '
             'their window.'
         )
+        self._headless_tooltip = self.headless_checkbox.toolTip()
         self.headless_checkbox.setChecked(self._headless_mode)
         self.headless_checkbox.toggled.connect(self._on_headless_toggled)
         actions.addWidget(self.headless_checkbox)
+        MainWindow._refresh_headless_for_target(self)
 
         self.recording_controls = QWidget()
         recording_row = FlowLayout(self.recording_controls)
@@ -9106,19 +9114,44 @@ CMD ["bash"]
     def _on_headless_toggled(self, checked: bool) -> None:
         MainWindow.set_headless(self, checked)
 
-    def set_headless(self, enabled: bool) -> dict:
-        """Switch headless mode; applies to the next launches, not running ones."""
-        enabled = bool(enabled)
+    def _refresh_headless_for_target(self) -> None:
+        """Headless is sim only: with a remote ROS master (real robot) it is off and the
+        checkbox is greyed out; back in the sim the user's remembered choice returns."""
+        remote = bool(self._remote_master_enabled())
+        choice = bool(getattr(self, '_headless_sim_choice', False))
+        effective = choice and not remote
+        was = bool(getattr(self, '_headless_mode', False))
+        self._headless_mode = effective
         checkbox = getattr(self, 'headless_checkbox', None)
-        if checkbox is not None and checkbox.isChecked() != enabled:
+        if checkbox is not None:
             checkbox.blockSignals(True)
-            checkbox.setChecked(enabled)
+            checkbox.setChecked(effective)
             checkbox.blockSignals(False)
-        if enabled != getattr(self, '_headless_mode', False):
-            self._headless_mode = enabled
+            checkbox.setEnabled(not remote)
+            checkbox.setToolTip(
+                'Sim only: headless mode applies to the simulation. On the '
+                'real robot (remote ROS master) every launch opens its windows.'
+                if remote else getattr(self, '_headless_tooltip', checkbox.toolTip())
+            )
+        if remote and was:
+            self._log_info('headless off: sim only, the real robot shows its windows')
+
+    def set_headless(self, enabled: bool) -> dict:
+        """Switch headless mode; applies to the next launches, not running ones.
+        Remembers the choice; with a remote ROS master it stays off (sim only)."""
+        enabled = bool(enabled)
+        self._headless_sim_choice = enabled
+        effective = enabled and not self._remote_master_enabled()
+        checkbox = getattr(self, 'headless_checkbox', None)
+        if checkbox is not None and checkbox.isChecked() != effective:
+            checkbox.blockSignals(True)
+            checkbox.setChecked(effective)
+            checkbox.blockSignals(False)
+        if effective != getattr(self, '_headless_mode', False):
+            self._headless_mode = effective
             self._log_info(
                 'headless mode on: no windows from the next launches'
-                if enabled else 'headless mode off'
+                if effective else 'headless mode off'
             )
         return MainWindow.headless_status(self)
 
@@ -9127,6 +9160,10 @@ CMD ["bash"]
         configs = getattr(self, '_config_buttons', {})
         return {
             'enabled': bool(getattr(self, '_headless_mode', False)),
+            **(
+                {'sim_only_off': True, 'reason': HEADLESS_SIM_ONLY_REASON}
+                if self._remote_master_enabled() else {}
+            ),
             'skipped_by_auto_launch': sorted(
                 MainWindow._window_button_keys(self)
             ),
@@ -9860,6 +9897,7 @@ CMD ["bash"]
         self._clear_remote_ros_cleanup_offer()
         if checked:
             MainWindow._switch_careful_off(self)
+        MainWindow._refresh_headless_for_target(self)
         self._apply_option_rules(notify=True)   # also greys out the arguments whose scope is off now
         features_dialog = getattr(self, '_features_dialog', None)
         if features_dialog is not None and features_dialog.isVisible():
@@ -17597,7 +17635,9 @@ CMD ["bash"]
                 selections['recording_resolution'] = resolution
 
         if getattr(self, 'headless_checkbox', None) is not None:
-            selections['headless'] = bool(getattr(self, '_headless_mode', False))
+            selections['headless'] = bool(
+                getattr(self, '_headless_sim_choice', getattr(self, '_headless_mode', False))
+            )
 
         generic_args = {}
         names = getattr(self, '_generic_arg_names_by_slot', {})

@@ -185,6 +185,10 @@ class MainWindowRemoteAdapter(GuiAdapter):
         return self.window.headless_status()
 
     def set_headless(self, enabled: bool) -> dict:
+        if enabled and self.window._remote_master_enabled():
+            from .headless import HEADLESS_SIM_ONLY_REASON
+            from .remote_control import RemoteControlError
+            raise RemoteControlError(HEADLESS_SIM_ONLY_REASON, status=409)
         return self.window.set_headless(enabled)
 
     # -- buttons -------------------------------------------------------

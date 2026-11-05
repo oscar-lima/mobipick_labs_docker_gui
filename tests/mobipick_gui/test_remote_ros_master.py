@@ -571,3 +571,44 @@ def test_remote_compose_service_uses_host_networking():
     )
     assert not remote.get('privileged', False)
     assert all('.ssh' not in str(volume) for volume in remote['volumes'])
+
+
+def test_headless_is_sim_only_and_the_choice_returns_in_the_sim(tmp_path, monkeypatch):
+    app, window = _create_window(monkeypatch, tmp_path)
+    box = window.headless_checkbox
+    box.setChecked(True)
+    assert window._headless_mode and box.isEnabled()
+
+    window.remote_master_checkbox.setChecked(True)
+    assert not box.isChecked() and not box.isEnabled()
+    assert 'Sim only' in box.toolTip()
+    assert window._headless_mode is False
+    assert window.headless_status()['sim_only_off'] is True
+    assert window._headless_sim_choice is True      # what gets persisted
+
+    window.remote_master_checkbox.setChecked(False)
+    assert box.isChecked() and box.isEnabled() and window._headless_mode is True
+    assert 'Sim only' not in box.toolTip()
+
+    window.deleteLater()
+    app.processEvents()
+
+
+def test_headless_starts_greyed_out_when_remote_master_is_the_default(tmp_path, monkeypatch):
+    monkeypatch.setitem(CONFIG, 'selections', {'headless': True})
+    images = [{'ref': 'ozkrelo/mobipick_labs:noetic'}]
+    monkeypatch.setenv('MOBIPICK_WORKSPACE_CONFIG', str(tmp_path / 'workspaces.yaml'))
+    monkeypatch.setattr(MainWindow, '_discover_filtered_image_records', lambda self: (images, None))
+    monkeypatch.setattr(MainWindow, 'update_sim_status_from_poll', lambda self, force=False: None)
+    monkeypatch.setitem(CONFIG, 'ros', {'remote_master_uri': 'http://mobipick-os-sensor:11311',
+                                        'remote_service': 'mobipick_remote_cmd',
+                                        'remote_enabled_by_default': True})
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow(verbosity=1)
+    window.poll_timer.stop()
+    window._sigint_timer.stop()
+    assert window._remote_master_enabled()
+    assert not window.headless_checkbox.isChecked() and not window.headless_checkbox.isEnabled()
+    assert window._headless_sim_choice is True and window._headless_mode is False
+    window.deleteLater()
+    app.processEvents()
