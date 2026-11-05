@@ -219,6 +219,11 @@ explicitly asks to watch a window, press it with `"allow_window": true` (CLI
 `--allow-window`), and stop it afterwards. Leave the
 switch as you found it when you hand over unless the user wants it on.
 
+Headless is sim only: with a remote ROS master (the real robot) the switch is off and greyed out, `POST /headless`
+with `"enabled": true` is refused with 409, and `false` is a no-op. Always read it back before you launch:
+`GET /headless` must show `"enabled": true` for a sim run; on the real robot it shows `"enabled": false` plus
+`sim_only_off: true` and a `reason`: expect the windows then and do not assume a headless launch.
+
 ```bash
 curl -s $GUI/headless                         # enabled, skipped_by_auto_launch, headless_args
 curl -s -X POST $GUI/headless -H 'Content-Type: application/json' -d '{"enabled": true}'
