@@ -9140,8 +9140,10 @@ CMD ["bash"]
         """Switch headless mode; applies to the next launches, not running ones.
         Remembers the choice; with a remote ROS master it stays off (sim only)."""
         enabled = bool(enabled)
+        if self._remote_master_enabled():
+            return MainWindow.headless_status(self)   # sim only: a full no-op, the sim choice is kept
         self._headless_sim_choice = enabled
-        effective = enabled and not self._remote_master_enabled()
+        effective = enabled
         checkbox = getattr(self, 'headless_checkbox', None)
         if checkbox is not None and checkbox.isChecked() != effective:
             checkbox.blockSignals(True)

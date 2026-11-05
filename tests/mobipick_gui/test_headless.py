@@ -206,3 +206,15 @@ def test_remote_master_makes_headless_sim_only_in_the_status_and_the_rest_call()
     code, payload = server.handle('POST', '/headless', {}, {'enabled': True})
     assert code == 409 and 'sim only' in str(payload)
     assert harness._headless_sim_choice is False
+
+
+def test_headless_false_while_remote_is_a_full_no_op_that_keeps_the_sim_choice():
+    logged = []
+    harness = SimpleNamespace(
+        _headless_mode=False, _headless_sim_choice=True, _remote_master_enabled=lambda: True,
+        _log_info=logged.append, _config_buttons={},
+    )
+    harness._window_button_keys = lambda: set()
+    status = MainWindow.set_headless(harness, False)
+    assert harness._headless_sim_choice is True and harness._headless_mode is False
+    assert status['sim_only_off'] is True and logged == []
