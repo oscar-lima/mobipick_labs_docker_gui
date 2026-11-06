@@ -939,6 +939,8 @@ class RemoteControlServer:
         self._active_requests_lock = threading.Lock()
         self._clients: dict[str, dict] = {}
         self._clients_lock = threading.Lock()
+        self._unknown_seen: set[str] = set()
+        self._unknown_new: list[str] = []
         # (kind, key) of processes each client started and has not stopped yet
         self._owned: dict[str, list[dict]] = {}
         self._leave_reasons: dict[str, str] = {}
@@ -1020,6 +1022,26 @@ class RemoteControlServer:
             entry['expires'] = max(entry['expires'], now + entry['ttl_s'])
             entry['last_activity'] = now
         return name
+
+    def _note_unknown_client(self, name: str | None) -> None:
+        """Record, once per name, a request from a client without presence.
+
+        Diagnostic only: an agent that drives the GUI without ``POST /presence``
+        never turns the window icon green, and nothing else says so.
+        """
+        name = str(name or '').strip() or '(anonymous)'
+        with self._clients_lock:
+            if name in self._unknown_seen:
+                return
+            self._unknown_seen.add(name)
+            self._unknown_new.append(name)
+        self.events.emit('unknown_client', name=name)
+
+    def take_unknown_clients(self) -> list[str]:
+        """Names first seen without presence since the last call (for the GUI log)."""
+        with self._clients_lock:
+            names, self._unknown_new = self._unknown_new, []
+        return names
 
     def _client_is_working(self, name: str) -> bool:
         """True while a shell this client started runs a command."""
@@ -1367,7 +1389,8 @@ class RemoteControlServer:
         parts = [unquote(part) for part in path.strip('/').split('/') if part]
         named = client or body.get('client') or query.get('client')
         if parts and parts != ['presence']:
-            self.touch_presence(named)
+            if self.touch_presence(named) is None:
+                self._note_unknown_client(named)
         self._request.client = named
         try:
             payload = self._dispatch(method, parts, query, body)

@@ -2190,3 +2190,23 @@ def test_gnome_app_glow_does_not_reprobe_without_gnome(monkeypatch):
     monkeypatch.setattr(GnomeAppGlow, '_call', lambda self, *a: pytest.fail('called'))
     glow.set_level(0.7)
     assert glow._probe_thread is None
+
+
+def test_request_without_presence_is_reported_once_per_name():
+    server = RemoteControlServer(FakeAdapter(), host='127.0.0.1', port=0)
+    server.handle('GET', '/status', {}, {}, client='tiago-agent')
+    server.handle('GET', '/buttons', {}, {}, client='tiago-agent')
+    server.handle('GET', '/status', {}, {})  # anonymous, nobody present
+    server.handle('GET', '/presence', {}, {}, client='ignored')  # not a use
+    assert server.take_unknown_clients() == ['tiago-agent', '(anonymous)']
+    assert server.take_unknown_clients() == []
+    events = server.events.since(0, names=['unknown_client'])
+    assert [e['data']['name'] for e in events] == ['tiago-agent', '(anonymous)']
+
+
+def test_request_of_a_present_client_is_not_reported():
+    server = RemoteControlServer(FakeAdapter(), host='127.0.0.1', port=0)
+    server.declare_presence('claude', ttl_s=10)
+    server.handle('GET', '/status', {}, {}, client='claude')
+    server.handle('GET', '/status', {}, {})  # anonymous, refreshes claude
+    assert server.take_unknown_clients() == []

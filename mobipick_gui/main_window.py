@@ -4322,6 +4322,13 @@ class MainWindow(QMainWindow):
     def _sync_remote_clients(self, server: RemoteControlServer) -> set[str]:
         """Log clients that declared or withdrew presence since the last tick."""
         names = {str(client['name']) for client in server.clients()}
+        for unknown in server.take_unknown_clients():
+            self._append_gui_html(
+                'log',
+                f'<i>Request from unknown client {html.escape(unknown)} (no presence): '
+                'the window icon only turns green after POST /presence.</i>',
+            )
+            self._console_log(1, f'request from unknown client {unknown} (no presence)')
         previous = self._remote_client_names
         if names != previous:
             for name in sorted(names - previous):
