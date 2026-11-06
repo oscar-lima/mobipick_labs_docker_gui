@@ -874,7 +874,7 @@ API_INDEX = [
     ('POST', '/features', 'Switch features relative to the current state. Body: {"on": [keys], "off": [keys], "modes": {"group": "mode"}, "options": {"name": "value"}}. On a remote ROS master careful features and modes stay off (only a tick in the Features dialog there switches one on; an allow_careful field is ignored and reported; an option that would set a value of such an unticked careful feature or mode is refused). Reports applied, refused (rules), missing and careful_kept_off.'),
     ('GET', '/preset', 'The loaded preset and the presets there are.'),
     ('POST', '/preset', 'Load a preset: {"name": "sim-full"} sets every feature and mode of it (careful ones stay off on a remote ROS master); or save the current selection as your preset: {"save": "name", "description": "..."}.'),
-    ('GET', '/presence', 'Clients that declared they are using the GUI (lights the window icon). Any number of differently named agents may be present at once.'),
+    ('GET', '/presence', 'Clients that declared they are using the GUI (lights the window icon), each with `owned`, the buttons, tabs, shells and recordings it started. Any number of differently named agents may be present at once.'),
     ('POST', '/presence', 'Declare that you are using the GUI. Body: {"name": "<agent>", "ttl_s": 600, "note": ""}. Every later request refreshes it (name yourself with the X-Client-Name header or a "client" field when several agents are present), as does a running shell command or an open stream; ttl_s (max 1800) idle time without any of those lapses it and the GUI stops what you started.'),
     ('DELETE', '/presence', 'Declare that you are done; stops what you started unless {"keep": true}. Body: {"name": "<agent>", "token": "<token from the first POST /presence reply>"}; a wrong token is refused (409) so two agents with the same name cannot withdraw each other.'),
     ('GET', '/events?since=N&names=a,b&follow=1&timeout=s', 'List or stream (NDJSON) events.'),
@@ -1111,6 +1111,7 @@ class RemoteControlServer:
             entry.pop('token', None)
             entry['expires_in_s'] = round(max(0.0, entry['expires'] - now), 1)
             entry['idle_s'] = round(max(0.0, now - entry.get('last_activity', entry['since'])), 1)
+            entry['owned'] = [{'kind': e['kind'], 'key': e['key']} for e in self.owned_by(entry['name'])]
         return sorted(entries, key=lambda entry: entry['since'])
 
     @property

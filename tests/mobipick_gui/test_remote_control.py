@@ -1646,6 +1646,24 @@ def test_presence_expires_after_ttl(monkeypatch):
     assert event['data']['name'] == 'claude' and event['data']['expired'] is True
 
 
+def test_presence_lists_what_each_client_owns():
+    adapter = FakeAdapter()
+    server = RemoteControlServer(adapter, host='127.0.0.1', port=0)
+    adapter.server = server
+    host, port = server.start()
+    try:
+        api = _Api(f'http://{host}:{port}')
+        api('POST', '/presence', {'name': 'claude'})
+        api('POST', '/presence', {'name': 'other'})
+        assert api('POST', '/buttons/roscore/start', {}, client='claude')[1]['accepted']
+        clients = {c['name']: c for c in api('GET', '/presence')[1]['clients']}
+        assert clients['claude']['owned'] == [{'kind': 'button', 'key': 'roscore'}]
+        assert clients['other']['owned'] == []
+        assert 'token' not in clients['claude']
+    finally:
+        server.stop()
+
+
 def test_stop_tab_endpoint_and_ownership_cleanup():
     adapter = FakeAdapter()
     server = RemoteControlServer(adapter, host='127.0.0.1', port=0)
