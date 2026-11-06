@@ -752,13 +752,36 @@ class GnomeAppGlow:
         self._thread: threading.Thread | None = None
         self._probe_thread: threading.Thread | None = None
         self._stopping = False
-        if probe and is_gnome_session(environ) and shutil.which(gdbus_bin):
-            self._probe_thread = threading.Thread(
-                target=self._probe,
-                name='mobipick-app-glow-probe',
-                daemon=True,
-            )
-            self._probe_thread.start()
+        # While the extension is unavailable (never installed, or disabled and
+        # re-enabled later) the probe is repeated at most this often, so the
+        # glow comes back without restarting the GUI.
+        self.reprobe_interval = 30.0
+        self._last_probe = 0.0
+        self._can_probe = bool(
+            probe and is_gnome_session(environ) and shutil.which(gdbus_bin)
+        )
+        if self._can_probe:
+            self._start_probe_locked()
+
+    def _start_probe_locked(self) -> None:
+        """Start a probe thread (off the caller's thread)."""
+        self._last_probe = time.monotonic()
+        self._probe_thread = threading.Thread(
+            target=self._probe,
+            name='mobipick-app-glow-probe',
+            daemon=True,
+        )
+        self._probe_thread.start()
+
+    def _maybe_reprobe_locked(self) -> None:
+        """Re-probe an unavailable extension; the caller holds ``self._cond``."""
+        if self._available or not self._can_probe or self._stopping:
+            return
+        probe = self._probe_thread
+        if probe is not None and probe.is_alive():
+            return
+        if time.monotonic() - self._last_probe >= self.reprobe_interval:
+            self._start_probe_locked()
 
     def _probe(self) -> None:
         version = self._call('Version')
@@ -766,6 +789,10 @@ class GnomeAppGlow:
             version and int(version[0]) >= GNOME_APP_GLOW_PROTOCOL_VERSION
         )
         with self._cond:
+            if available and not self._available:
+                # A shell that just (re)loaded the extension has no glow
+                # styled yet: send the current level again.
+                self._sent = None
             self._available = available
             # The GUI requests its initial idle halo immediately after
             # constructing us.  Keep that request while the asynchronous
@@ -801,6 +828,8 @@ class GnomeAppGlow:
             self._stopping = False
             if self._available:
                 self._start_worker_locked()
+            else:
+                self._maybe_reprobe_locked()
 
     def clear(self, timeout: float = 3.0) -> None:
         """Restore the plain icon before the GUI exits, within ``timeout``."""

@@ -2145,3 +2145,48 @@ def test_presence_bye_needs_the_registration_token():
         assert status == 200 and payload['removed'] is True and not server.in_use
     finally:
         server.stop()
+
+
+def test_gnome_app_glow_recovers_after_extension_was_disabled(monkeypatch):
+    """The extension vanishes (disabled in the shell), then comes back: the
+    glow must return without restarting the GUI."""
+    from mobipick_gui.window_control import GnomeAppGlow
+
+    glow = GnomeAppGlow('app', probe=False)
+    glow._available = True
+    glow._can_probe = True
+    glow.reprobe_interval = 0.0
+    extension_up = threading.Event()
+    sent = []
+
+    def fake_call(self, method, *args):
+        if not extension_up.is_set():
+            return None  # UnknownMethod: SetAppGlow and Version both fail
+        if method == 'SetAppGlow':
+            sent.append(args[1])
+        return (4,)
+
+    monkeypatch.setattr(GnomeAppGlow, '_call', fake_call)
+    glow.set_level(0.7)
+    deadline = time.time() + 5
+    while glow.available and time.time() < deadline:
+        time.sleep(0.01)
+    assert not glow.available and not sent
+
+    extension_up.set()
+    deadline = time.time() + 5
+    while not sent and time.time() < deadline:
+        glow.set_level(0.7)  # the GUI timer keeps calling this
+        time.sleep(0.01)
+    assert glow.available
+    assert sent and sent[0] == 0.7
+
+
+def test_gnome_app_glow_does_not_reprobe_without_gnome(monkeypatch):
+    from mobipick_gui.window_control import GnomeAppGlow
+
+    glow = GnomeAppGlow('app', probe=False)
+    glow.reprobe_interval = 0.0
+    monkeypatch.setattr(GnomeAppGlow, '_call', lambda self, *a: pytest.fail('called'))
+    glow.set_level(0.7)
+    assert glow._probe_thread is None
