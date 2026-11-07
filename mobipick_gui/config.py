@@ -429,6 +429,9 @@ CONFIG_DEFAULTS: Dict[str, Dict] = {
         'shell_start_timeout_s': 180,
         'default_exec_timeout_s': 60,
         'max_output_lines': 400,
+        # POST /workspace lets a remote client switch the active ROS workspace
+        # (discards all tabs); off unless the user turns it on.
+        'allow_workspace_switch': False,
     },
 }
 

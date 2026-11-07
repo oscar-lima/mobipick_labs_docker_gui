@@ -6133,7 +6133,57 @@ class MainWindow(QMainWindow):
             or any(tab.is_running() for tab in self.tasks.values())
         )
 
-    def _activate_workspace(self, name: str) -> bool:
+    def workspaces_status(self) -> dict:
+        """Configured workspaces and the active one, for the remote API."""
+        active = self._workspace_registry.active
+        return {
+            'active': active,
+            'processes_running': bool(self._workspace_processes_running()),
+            'workspaces': [
+                {
+                    'name': workspace.name,
+                    'directory': str(workspace.directory),
+                    'active': workspace.name == active,
+                    'image': self._workspace_match_image(workspace.name)
+                    or self._workspace_image(workspace.name),
+                }
+                for workspace in self._workspace_registry.workspaces
+            ],
+        }
+
+    def switch_workspace_remote(self, name: str) -> dict:
+        """Switch workspace without pop-ups; refuses with a reason instead.
+
+        Same effect as picking it in the combo and answering Yes: all tabs
+        are discarded and recreated. Refused while workspace processes run,
+        for an unknown name or when the workspace's Docker image is missing.
+        """
+        name = str(name or '').strip()
+        if name == self._workspace_registry.active:
+            return {'accepted': True, 'changed': False, **self.workspaces_status()}
+        if name and self._workspace_registry.get(name) is None:
+            return {'accepted': False, 'reason': f'workspace {name!r} is not configured'}
+        if self._workspace_processes_running():
+            return {
+                'accepted': False,
+                'reason': 'stop running workspace processes before switching',
+            }
+        target_image = self._workspace_match_image(name) or self._workspace_image(name)
+        if target_image and target_image not in self._image_choices:
+            return {
+                'accepted': False,
+                'reason': f'the Docker image of this workspace is not installed: {target_image}',
+            }
+        self._workspace_switch_error = ''
+        ok = self._activate_workspace(name, ask=False)
+        if not ok:
+            return {
+                'accepted': False,
+                'reason': self._workspace_switch_error or 'the workspace switch failed',
+            }
+        return {'accepted': True, 'changed': True, **self.workspaces_status()}
+
+    def _activate_workspace(self, name: str, ask: bool = True) -> bool:
         if name == self._workspace_registry.active:
             self._populate_workspace_combo()
             return True
@@ -6182,7 +6232,7 @@ class MainWindow(QMainWindow):
 
         current_name = self._workspace_registry.active or 'Docker image default'
         target_name = name or 'Docker image default'
-        answer = popups.question(
+        answer = QMessageBox.Yes if not ask else popups.question(
             self,
             'Switch ROS 1 Workspace',
             f'Switch from "{current_name}" to "{target_name}"?\n\n'
@@ -6206,7 +6256,10 @@ class MainWindow(QMainWindow):
             self._workspace_registry.save()
         except (OSError, ValueError) as exc:
             self._workspace_registry.active = previous_name
-            popups.critical(self, 'ROS 1 Workspace', str(exc))
+            if ask:
+                popups.critical(self, 'ROS 1 Workspace', str(exc))
+            else:
+                self._workspace_switch_error = f'could not save the workspace registry: {exc}'
             self._populate_workspace_combo()
             return False
 

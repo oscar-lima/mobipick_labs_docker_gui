@@ -880,6 +880,8 @@ API_INDEX = [
     ('GET', '/events?since=N&names=a,b&follow=1&timeout=s', 'List or stream (NDJSON) events.'),
     ('POST', '/wait', 'Block until an event. Body: {"events": [names], "since": N, "timeout": s, "key": "sim"}.'),
     ('POST', '/reload', 'Re-read gui_settings.yaml and the workspace button profile without restarting the GUI.'),
+    ('GET', '/workspaces', 'Configured ROS workspaces (name, directory, image), the active one and whether processes run.'),
+    ('POST', '/workspace', 'Switch the active ROS workspace like the combo box (all tabs are discarded and recreated). Body: {"name": "gpt_ws"}; "" is the Docker image default. Needs remote_control.allow_workspace_switch: true in gui_settings.yaml (403 otherwise). Refused (409) while workspace processes run, for an unknown name or a missing Docker image.'),
     ('GET', '/headless', 'Headless mode: enabled, the window buttons Auto Launch skips, and the headless_args each button gets.'),
     ('POST', '/headless', 'Switch headless mode for the next launches (running processes keep their windows). Body: {"enabled": true}. On: Auto Launch skips buttons that open a window (RViz, RQt, viewers), window_layout_applied fires with skipped "headless", and every button start appends its headless_args (e.g. sim gui:=false).'),
     ('GET', '/recording', 'Screen recording state: active, paused, segments, recorded_s, video_path and the sped-up video_speedup_path.'),
@@ -1432,7 +1434,7 @@ class RemoteControlServer:
                     'shell_exited', 'shell_closed', 'client_connected',
                     'client_disconnected', 'config_reloaded', 'gui_closing',
                     'recording_started', 'recording_paused', 'recording_resumed',
-                    'recording_stopped', 'recording_exported', 'headless_changed',
+                    'recording_stopped', 'recording_exported', 'headless_changed', 'workspace_changed',
                     'preset_applied',
                 ],
             }
@@ -1504,6 +1506,20 @@ class RemoteControlServer:
                 self.emit('preset_applied', preset=result.get('preset') or result.get('name'))
                 return {'preset': result}
             raise RemoteControlError('method not allowed', status=HTTPStatus.METHOD_NOT_ALLOWED)
+        if head == 'workspaces' and len(parts) == 1 and method == 'GET':
+            return {'workspaces': self._invoke(self.adapter.workspaces)}
+        if head == 'workspace' and len(parts) == 1 and method == 'POST':
+            if 'name' not in body:
+                raise RemoteControlError('body must be {"name": "<workspace>"}')
+            result = self._invoke(
+                lambda: self.adapter.set_workspace(str(body.get('name') or '')),
+                timeout=30.0,
+            )
+            if not result.get('accepted'):
+                raise RemoteControlError(result.get('reason', 'refused'), status=HTTPStatus.CONFLICT)
+            if result.get('changed'):
+                self.emit('workspace_changed', workspace=result.get('active'))
+            return {'workspace': result}
         if head == 'headless' and len(parts) == 1:
             if method == 'GET':
                 return {'headless': self._invoke(self.adapter.headless)}
@@ -2015,6 +2031,12 @@ class GuiAdapter:
         Returns ``{'accepted': False, 'reason': ..., 'button': ...}`` or None.
         """
         return None
+
+    def workspaces(self) -> dict:
+        return {'active': '', 'workspaces': [], 'processes_running': False}
+
+    def set_workspace(self, name: str) -> dict:
+        raise RemoteControlError('this GUI has no workspaces')
 
     def args(self) -> list[dict]:
         return []

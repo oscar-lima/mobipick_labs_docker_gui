@@ -179,6 +179,22 @@ class MainWindowRemoteAdapter(GuiAdapter):
             raise NotFound(f'unknown recording action {action!r}')
         return {'accepted': accepted, 'reason': reason, **window.recording_status()}
 
+    # -- workspace switch ----------------------------------------------
+
+    def workspaces(self) -> dict:
+        return self.window.workspaces_status()
+
+    def set_workspace(self, name: str) -> dict:
+        from .config import CONFIG
+        from .remote_control import RemoteControlError
+        if not (CONFIG.get('remote_control') or {}).get('allow_workspace_switch', False):
+            raise RemoteControlError(
+                'switching the workspace by remote control is off: set '
+                'remote_control.allow_workspace_switch: true in gui_settings.yaml',
+                status=403,
+            )
+        return self.window.switch_workspace_remote(name)
+
     # -- headless mode ---------------------------------------------------
 
     def headless(self) -> dict:
