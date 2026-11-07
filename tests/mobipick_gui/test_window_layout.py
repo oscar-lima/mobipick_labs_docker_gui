@@ -204,6 +204,7 @@ def test_gnome_backend_apply_calls_extension_methods(monkeypatch, tmp_path):
         ]
     }
     manager._auto_apply_done = False
+    manager.mark_gui_launched(['777'])
     manager.maybe_apply_saved_layout()
 
     methods = [
@@ -217,7 +218,6 @@ def test_gnome_backend_apply_calls_extension_methods(monkeypatch, tmp_path):
         'Unmaximize',
         'MoveResize',
         'SetWorkspace',
-        'Activate',
     ]
     move = calls[methods.index('MoveResize')]
     assert move[-5:] == ["'777'", '50', '60', '640', '480']
@@ -265,6 +265,7 @@ def test_layout_unmaximizes_all_windows_before_resizing(tmp_path):
         ]
     }
     manager._auto_apply_done = False
+    manager.mark_gui_launched(['1', '2'])
 
     manager.maybe_apply_saved_layout()
 
@@ -606,6 +607,7 @@ def test_layout_corrects_a_window_that_lands_off_its_saved_position(tmp_path, mo
     manager = WindowLayoutManager(tmp_path / 'layout.yaml', backend=FakeBackend())
     manager._layout = {'windows': [{'title': 'First', 'geometry': {'x': 10, 'y': 20, 'width': 300, 'height': 400}}]}
     manager._auto_apply_done = False
+    manager.mark_gui_launched(['1'])
 
     manager.maybe_apply_saved_layout()
     assert calls == [('1', 10, 20, 300, 400)]
@@ -701,3 +703,60 @@ def test_gnome_extension_uses_mutter_18_maximize_api():
     assert 'maximized: isMaximized(win)' in source
     assert 'win.unmaximize(Meta.MaximizeFlags.BOTH)' in source  # fallback inside unmaximize()
     assert source.count('unmaximize(win);') == 2  # MoveResize and Unmaximize
+
+
+def test_layout_never_touches_or_activates_a_window_the_gui_did_not_launch(tmp_path):
+    calls: list[tuple] = []
+
+    class FakeBackend:
+        available = True
+        name = 'fake'
+
+        def list_windows(self, **_kwargs):
+            return [
+                WindowInfo('kate', 'Untitled * - Kate', 0, 1, 0, 0, 100, 100, ['kate']),
+                WindowInfo('rviz', 'RViz', 0, 2, 0, 0, 100, 100, ['rviz']),
+            ]
+
+        def unmaximize(self, wid):
+            calls.append(('unmaximize', wid))
+
+        def move_resize(self, wid, *args):
+            calls.append(('move_resize', wid))
+
+        def set_desktop(self, wid, desktop):
+            calls.append(('set_desktop', wid))
+
+        def restack(self, wids):
+            calls.append(('restack', tuple(wids)))
+
+        def activate(self, wid):
+            calls.append(('activate', wid))
+
+        def clear_attention(self, wid):
+            return True
+
+    manager = WindowLayoutManager(tmp_path / 'layout.yaml', backend=FakeBackend())
+    manager._layout = {
+        'windows': [
+            {'title': 'Untitled * - Kate', 'geometry': {'x': 1, 'y': 2, 'width': 3, 'height': 4}},
+            {'title': 'RViz', 'geometry': {'x': 5, 'y': 6, 'width': 7, 'height': 8}},
+        ]
+    }
+    manager._auto_apply_done = False
+    manager._attention_suppression_active = True   # a GUI launch is in progress; only RViz is new
+    manager._attention_ignored_ids = {'kate'}
+
+    manager.maybe_apply_saved_layout()
+
+    assert all(call[1] != 'kate' for call in calls if call[0] != 'restack')
+    assert ('restack', ('rviz',)) in calls
+    assert not any(call[0] == 'activate' for call in calls)
+
+
+def test_x11_restack_does_not_activate(monkeypatch):
+    calls: list[list[str]] = []
+    monkeypatch.setattr(window_control.shutil, 'which', lambda name: f'/usr/bin/{name}')
+    monkeypatch.setattr(subprocess, 'run', lambda cmd, **kw: calls.append(list(cmd)) or subprocess.CompletedProcess(cmd, 0, stdout='', stderr=''))
+    X11WindowBackend().restack(['0x1', '0x2'])
+    assert calls and all('-a' not in call for call in calls)

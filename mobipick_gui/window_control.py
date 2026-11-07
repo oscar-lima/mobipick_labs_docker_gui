@@ -361,10 +361,10 @@ class X11WindowBackend:
         self._run_wmctrl(['-i', '-r', wid, '-t', str(desktop)])
 
     def restack(self, wids: list[str]) -> None:
+        """Clear the above/below state of the windows. Never activates one: that takes the keyboard focus (and wmctrl -a on a
+        window that is not ours made the desktop jump to the user's editor)."""
         for wid in wids:
             self._run_wmctrl(['-i', '-r', wid, '-b', 'remove,below,above'])
-        for wid in wids:
-            self._run_wmctrl(['-i', '-a', wid])
 
     def activate(self, wid: str) -> bool:
         self._run_wmctrl(['-i', '-a', wid])
@@ -573,8 +573,7 @@ class GnomeWaylandWindowBackend:
         if not self._extension_available and self._fallback is not None:
             self._fallback.restack(wids)
             return
-        for wid in wids:
-            self._call('Activate', str(wid))
+        # the extension has no raise without focus: nothing is done rather than taking the focus
 
     def activate(self, wid: str) -> bool:
         if not self._extension_available and self._fallback is not None:

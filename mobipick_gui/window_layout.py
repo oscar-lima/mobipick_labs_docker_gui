@@ -63,6 +63,8 @@ class WindowLayoutManager:
         self._attention_suppression_active = False
         self._attention_ignored_ids: set[str] = set()
         self._attention_cleared_ids: set[str] = set()
+        # windows that appeared while the GUI launched something: the only ones a saved layout may touch
+        self._launched_ids: set[str] = set()
         self._start_ts = time.monotonic()
         # wid -> (x, y, width, height, due): windows to check once after a move (see _correct_frame_offsets)
         self._offset_checks: dict[str, tuple[int, int, int, int, float]] = {}
@@ -143,9 +145,14 @@ class WindowLayoutManager:
             if win.wid in self._attention_cleared_ids:
                 continue
             self._attention_cleared_ids.add(win.wid)
+            self._launched_ids.add(win.wid)
             if self._backend.clear_attention(win.wid):
                 cleared += 1
         return cleared
+
+    def mark_gui_launched(self, wids: Iterable[str]) -> None:
+        """Record windows that the GUI itself launched; a saved layout touches only these."""
+        self._launched_ids.update(str(w) for w in wids)
 
     def end_attention_suppression(self) -> None:
         """Stop classifying newly appearing windows as GUI-launched."""
@@ -286,6 +293,10 @@ class WindowLayoutManager:
             return
 
         active_windows = self._enumerate_windows(include_classes=True, include_stack=False)
+        if self._attention_suppression_active:   # a launch is in progress: what is new now is the GUI's own window
+            self._launched_ids.update(w.wid for w in active_windows if w.wid not in self._attention_ignored_ids)
+        # never the user's other programs (an editor, a browser): only windows that appeared during a GUI launch
+        active_windows = [w for w in active_windows if w.wid in self._launched_ids]
         if not active_windows:
             return
 
@@ -430,6 +441,7 @@ class WindowLayoutManager:
 
     def _apply_stack(self, matches: list[tuple[dict, WindowInfo]]):
         ordered = sorted(matches, key=lambda pair: self._stacking_key(pair[0]))
+        # restack only clears the always-on-top/below state: it never activates a window, so the focus stays where it is
         self._backend.restack([win.wid for _, win in ordered])
 
     @staticmethod
