@@ -329,14 +329,6 @@ def _mark_invalid_combo_items(
         item.setToolTip(tooltip)
 
 
-def _clear_combo_changed(combo: QComboBox) -> None:
-    """End the window in which an ``activated`` signal counts as the user's own change (the combo may be gone)."""
-    try:
-        combo.setProperty('changed', False)
-    except RuntimeError:
-        pass
-
-
 def _mark_disabled_combo(combo: QComboBox, reason: str | None) -> None:
     """Grey out the whole ``combo`` while a rule disables it, with ``reason`` in its tooltip and note line."""
     combo.setEnabled(reason is None)
@@ -8891,13 +8883,8 @@ CMD ["bash"]
             if previous_value in options[slot]:
                 value_input.setCurrentIndex(options[slot].index(previous_value))
             _configure_shrinkable_combo(value_input)
-            value_input.setProperty('arg_name', name)
-            value_input.setProperty('current_value', value_input.currentText().strip())
-            value_input.currentIndexChanged.connect(
-                lambda _index, combo=value_input: MainWindow._note_generic_arg_change(combo)
-            )
             value_input.activated.connect(
-                lambda _index, combo=value_input: MainWindow._on_generic_arg_activated(self, combo)
+                lambda _index: MainWindow._apply_option_rules(self, True)
             )
             if advanced_layout is not None and (advanced[slot] or main_count >= 6):
                 field = QWidget()
@@ -15353,8 +15340,13 @@ CMD ["bash"]
                     self
                 ).items():
                     forbidden = invalid.get(name, {})
-                    _mark_invalid_combo_items(combo, forbidden)
                     current = combo.currentText().strip()
+                    # careful on-values are greyed out too (the current one stays: a tick in the Features window)
+                    careful = {
+                        value: reason for value in (combo.itemText(i).strip() for i in range(combo.count()))
+                        if value != current and (reason := MainWindow._careful_option_refusal(self, name, value))
+                    }
+                    _mark_invalid_combo_items(combo, {**careful, **forbidden})
                     if current not in forbidden:
                         continue
                     fallback = next(
@@ -15607,29 +15599,6 @@ CMD ["bash"]
             (mode.label for modes in features.modes.values() for key, mode in modes.items() if key == owner), owner)
         return (f'{name}={value} switches on the careful feature "{label}": on the real robot careful features stay '
                 'off; only a tick in the Features window (it asks first) switches one on')
-
-    @staticmethod
-    def _note_generic_arg_change(combo: QComboBox) -> None:
-        """Remember the value before this change; ``changed`` lasts until the event loop runs again, so only the
-        ``activated`` signal Qt emits right after a user's choice sees it, not a later one after a program's change."""
-        combo.setProperty('previous_value', combo.property('current_value'))
-        combo.setProperty('current_value', combo.currentText().strip())
-        combo.setProperty('changed', True)
-        QTimer.singleShot(0, lambda: _clear_combo_changed(combo))
-
-    def _on_generic_arg_activated(self, combo: QComboBox) -> None:
-        """A user's choice in a toolbar or Advanced Launch Options dropdown. On a remote ROS master a careful feature's
-        on-value goes back to the previous value, logged and explained in a non-modal top-level note."""
-        changed = bool(combo.property('changed'))
-        combo.setProperty('changed', False)
-        name = str(combo.property('arg_name') or '')
-        reason = MainWindow._careful_option_refusal(self, name, combo.currentText().strip()) if changed else ''
-        position = combo.findText(str(combo.property('previous_value') or ''))
-        if reason and position >= 0:
-            combo.setCurrentIndex(position)
-            self._log_info(f'refused {reason}')
-            MainWindow._show_careful_notice(self, reason)
-        MainWindow._apply_option_rules(self, True)
 
     def _switch_careful_off(self) -> list[str]:
         """On the switch to the real robot: every option a careful feature or mode set (e.g. carried over from the sim)

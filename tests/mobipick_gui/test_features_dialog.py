@@ -245,7 +245,6 @@ def test_careful_tick_on_the_real_robot_asks_in_a_non_modal_top_level_window(mon
 
 def test_remote_args_and_dropdowns_cannot_switch_careful_features_on_on_the_real_robot(monkeypatch, tmp_path):
     import pytest
-    from PyQt5.QtCore import Qt
     from mobipick_gui.remote_control import RemoteControlError
     # the choices below would be saved: keep them out of the settings the later tests share
     monkeypatch.setattr('mobipick_gui.main_window.save_user_config_update', lambda updates: {})
@@ -269,25 +268,21 @@ def test_remote_args_and_dropdowns_cannot_switch_careful_features_on_on_the_real
         adapter.set_args({'cable_monitor': 'true', 'align_jaw': 'false'})   # safe options still work
         assert _values(window)['cable_monitor'] == 'true'
 
-        # a dropdown: the user's careful choice goes back, with a non-modal note without a parent
-        combo = next(c for c in window._generic_arg_inputs.values() if c.property('arg_name') == 'box_padding')
-        combo.setCurrentIndex(combo.findText('0.005'))
-        combo.activated.emit(combo.currentIndex())
-        assert combo.currentText() == '0.01'
-        note = window._careful_notice
-        assert note.parent() is None and note.windowModality() == Qt.NonModal and note.isVisible()
-        assert 'Features window' in note.text()
-        note.close()
+        # a dropdown greys the careful value out, with the reason in its tooltip
+        combo = window._generic_arg_inputs[4]   # box_padding
+        item = combo.model().item(combo.findText('0.005'))
+        assert not item.isEnabled() and 'only a tick in the Features window' in item.toolTip()
+        assert combo.model().item(combo.findText('0.01')).isEnabled()
 
-        # ticked in the Features window: on, and neither a repeated choice of it nor the same value over the API undo it
+        # ticked in the Features window: on, still choosable, and the same value over the API is accepted
         window.apply_feature_selection(Selection({'cable_handling': 'hack'}, {'padding'}), ticked_careful={'padding'})
         app.processEvents()
         assert _values(window)['box_padding'] == '0.005'
-        combo.activated.emit(combo.currentIndex())
+        assert combo.model().item(combo.findText('0.005')).isEnabled()   # the ticked current value stays choosable
         adapter.set_args({'box_padding': '0.005'})
         assert _values(window)['box_padding'] == '0.005'
         adapter.set_args({'box_padding': '0.01'})   # off is always allowed
-        assert _values(window)['box_padding'] == '0.01'
+        assert _values(window)['box_padding'] == '0.01' and not combo.model().item(combo.findText('0.005')).isEnabled()
     finally:
         window.close()
         app.processEvents()
