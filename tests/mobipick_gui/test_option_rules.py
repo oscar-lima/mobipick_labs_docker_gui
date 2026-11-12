@@ -712,3 +712,37 @@ def test_the_overridden_choice_comes_back_only_once(monkeypatch, tmp_path):
     finally:
         window.close()
         app.processEvents()
+
+
+# -- why a greyed-out option is unavailable and what gets it back ------------
+
+def test_the_remedy_undoes_one_condition_of_the_rule():
+    from mobipick_gui.option_rules import condition_remedy, unavailable_text
+    assert condition_remedy('voice_agent', ('off',)) == 'switch voice_agent on'
+    assert condition_remedy('table_scan', ('true',)) == 'switch table_scan off'
+    assert condition_remedy('remote_master', ('true',)) == 'switch off "Use remote ROS master" (the simulation)'
+    assert condition_remedy('remote_master', ('false',)) == 'switch on "Use remote ROS master" (the real robot)'
+    assert condition_remedy('running.disc_ros', ('false',)) == 'start disc_ros'
+    assert condition_remedy('world', ('moelk_tables', 'cic_tables')) == (
+        'set world to another value than moelk_tables or cic_tables')
+    assert unavailable_text('the voice agent is off.', 'switch voice_agent on') == (
+        'Unavailable: the voice agent is off.\nTo get it back: switch voice_agent on.')
+    assert unavailable_text('no reason given') == 'Unavailable: no reason given.'
+    assert unavailable_text('') == ''
+
+
+def test_remedies_follow_the_matching_rules_and_a_rule_can_word_its_own_fix():
+    rules = parse_option_rules({'rules': [
+        {'when': {'voice_agent': ['off']}, 'disable': ['voice_ack'], 'reason': 'the voice agent is off'},
+        {'when': {'remote_master': True, 'running.bringup': False}, 'only': {'world': ['cic_tables']},
+         'reason': 'the robot runs cic_tables'},
+        {'when': {'remote_master': True}, 'disable': ['gui'], 'reason': 'no window', 'fix': 'use the simulation'},
+    ]})
+    assert not rules.errors
+    assert rules.remedies({'voice_agent': 'off', 'remote_master': False}) == {
+        'the voice agent is off': 'switch voice_agent on'}
+    assert rules.remedies({'voice_agent': 'cedar', 'remote_master': True, 'running.bringup': False}) == {
+        'the robot runs cic_tables': 'switch off "Use remote ROS master" (the simulation) or start bringup',
+        'no window': 'use the simulation'}
+    # the reasons the API and the logs show stay as they were
+    assert rules.disabled_options({'voice_agent': 'off'}) == {'voice_ack': 'the voice agent is off'}

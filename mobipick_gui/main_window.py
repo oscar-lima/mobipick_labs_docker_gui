@@ -158,7 +158,7 @@ from .headless import (
     normalize_headless_args,
 )
 from .option_groups import OptionGroups, load_option_groups
-from .option_rules import load_option_rules
+from .option_rules import REMOTE_MASTER_LABEL, load_option_rules, unavailable_text
 from .settings_transfer import export_settings, import_settings
 
 CONTAINER_SCRIPTS_DIR = str(
@@ -313,8 +313,10 @@ def _labeled_control(label_text: str, control: QWidget) -> tuple:
 def _mark_invalid_combo_items(
     combo: QComboBox,
     invalid: dict[str, str],
+    remedies: dict[str, str] | None = None,
 ) -> None:
-    """Disable the options in ``invalid`` and explain why in a tooltip."""
+    """Disable the options in ``invalid`` and say in a tooltip why and what gets them back (``remedies``: reason ->
+    remedy)."""
     model = combo.model()
     if not isinstance(model, QStandardItemModel):
         return
@@ -326,18 +328,19 @@ def _mark_invalid_combo_items(
         item.setEnabled(reason is None)
         description = str(item.data(Qt.UserRole + 1) or '')
         tooltip = '\n'.join(filter(None, (
-            description, f'Invalid: {reason}' if reason else '',
+            description, unavailable_text(reason, (remedies or {}).get(reason, '')) if reason else '',
         )))
         item.setToolTip(tooltip)
 
 
-def _mark_disabled_combo(combo: QComboBox, reason: str | None) -> None:
-    """Grey out the whole ``combo`` while a rule disables it, with ``reason`` in its tooltip and note line."""
+def _mark_disabled_combo(combo: QComboBox, reason: str | None, remedy: str = '') -> None:
+    """Grey out the whole ``combo`` while a rule disables it, with ``reason`` in its note line and, in its tooltip,
+    the reason and what gets it back (``remedy``)."""
     combo.setEnabled(reason is None)
     if combo.property('rule_description') is None:   # e.g. the world dropdown: its own tooltip is the description
         combo.setProperty('rule_description', combo.toolTip())
     description = str(combo.property('rule_description') or '')
-    combo.setToolTip('\n'.join(filter(None, (description, reason or ''))))
+    combo.setToolTip('\n'.join(filter(None, (description, unavailable_text(reason or '', remedy) if reason else ''))))
     note = getattr(combo, 'rule_note', None)
     if note is not None:
         note.setText(reason or '')
@@ -354,6 +357,11 @@ ADVANCED_SCOPE_TABS = (('real', 'Real robot'), ('sim', 'Sim only'), ('shared', '
 SIM_ONLY_OFF_REASON = 'Sim only: not launched on the real robot (the launch default applies)'
 REAL_ONLY_OFF_REASON = 'Real robot only: not passed to any launch in the simulation'
 SCOPE_OFF_REASONS = {'sim': SIM_ONLY_OFF_REASON, 'real': REAL_ONLY_OFF_REASON}
+# what gets an argument back that its scope greys out (the tooltip's second line)
+SCOPE_OFF_REMEDIES = {
+    'sim': f'switch off "{REMOTE_MASTER_LABEL}" (the simulation)',
+    'real': f'switch on "{REMOTE_MASTER_LABEL}" (the real robot)',
+}
 SCOPE_OFF_TAB_SUFFIX = {'sim': 'off on the real robot', 'real': 'off in the simulation'}
 ADVANCED_EMPTY_TAB_TEXT = {
     'real': 'No real-robot-only option in this profile.',
@@ -9154,20 +9162,38 @@ CMD ["bash"]
             reasons.append(rule_reason)
         return separator.join(reasons)
 
+    def _arg_disabled_remedy(self, slot: int, rule_remedy: str = '') -> str:
+        """What gets argument ``slot`` back: the target switch its scope needs, then what the greying rule needs (both
+        must hold, so they are joined with "and")."""
+        remedies = [SCOPE_OFF_REMEDIES[MainWindow._off_scope(self)]] if MainWindow._scope_arg_off(self, slot) else []
+        if rule_remedy and rule_remedy not in remedies:
+            remedies.append(rule_remedy)
+        return ' and '.join(remedies)
+
+    def _rule_remedies(self) -> dict[str, str]:
+        """``{reason: remedy}`` of the option rules that match now (see ``OptionRules.remedies``)."""
+        rules = getattr(self, '_option_rules', None)
+        if rules is None or not rules.rules:
+            return {}
+        return rules.remedies(MainWindow._option_rule_state(self, rules, MainWindow._option_rule_combos(self)))
+
     def _mark_disabled_args(self, disabled: dict, *, world: bool = True) -> None:
         """Grey out the dropdowns a rule (``{dropdown: reason}``) or their scope disables, and refresh the
         Advanced Launch Options tabs; ``world`` False leaves the world dropdown alone."""
         inputs = getattr(self, '_generic_arg_inputs', {})
         names = getattr(self, '_generic_arg_names_by_slot', {})
         generic = {id(widget) for widget in inputs.values()}
+        remedies = MainWindow._rule_remedies(self) if disabled else {}
         if world:
             for name, combo in MainWindow._option_rule_combos(self).items():
                 if id(combo) not in generic:
-                    _mark_disabled_combo(combo, disabled.get(name))
+                    _mark_disabled_combo(combo, disabled.get(name), remedies.get(disabled.get(name, ''), ''))
         for slot, combo in inputs.items():
             name = str(names.get(slot) or '').strip()
-            reason = MainWindow._arg_disabled_reason(self, slot, disabled.get(name, '') if name else '')
-            _mark_disabled_combo(combo, reason or None)
+            rule_reason = disabled.get(name, '') if name else ''
+            reason = MainWindow._arg_disabled_reason(self, slot, rule_reason)
+            remedy = MainWindow._arg_disabled_remedy(self, slot, remedies.get(rule_reason, '') if rule_reason else '')
+            _mark_disabled_combo(combo, reason or None, remedy)
         MainWindow._update_advanced_tabs(self)
 
     def _command_with_generic_args(self, command: str, config: dict) -> str:
@@ -9239,8 +9265,8 @@ CMD ["bash"]
             checkbox.blockSignals(False)
             checkbox.setEnabled(not remote)
             checkbox.setToolTip(
-                'Sim only: headless mode applies to the simulation. On the '
-                'real robot (remote ROS master) every launch opens its windows.'
+                unavailable_text('Sim only: headless mode applies to the simulation; on the real robot (remote ROS master) '
+                                 'every launch opens its windows', SCOPE_OFF_REMEDIES['sim'])
                 if remote else getattr(self, '_headless_tooltip', checkbox.toolTip())
             )
         if remote and was:
@@ -15400,6 +15426,7 @@ CMD ["bash"]
             # A switch can change what another rule forbids; settle it.
             for _attempt in range(4):
                 invalid = MainWindow._invalid_options(self)
+                remedies = MainWindow._rule_remedies(self) if invalid else {}
                 switched = False
                 for name, combo in MainWindow._option_rule_combos(
                     self
@@ -15411,7 +15438,10 @@ CMD ["bash"]
                         value: reason for value in (combo.itemText(i).strip() for i in range(combo.count()))
                         if value != current and (reason := MainWindow._careful_option_refusal(self, name, value))
                     }
-                    _mark_invalid_combo_items(combo, {**careful, **forbidden})
+                    careful_remedies = {
+                        reason: MainWindow._careful_option_remedy(self, name, value) for value, reason in careful.items()
+                    }
+                    _mark_invalid_combo_items(combo, {**careful, **forbidden}, {**careful_remedies, **remedies})
                     if current not in forbidden:
                         continue
                     fallback = next(
@@ -15656,14 +15686,26 @@ CMD ["bash"]
         features = getattr(self, '_features', None)
         if not features or not self._remote_master_enabled():
             return ''
-        owner = feature_sets.careful_option_values(features, set()).get((name, value))
+        label = MainWindow._careful_owner_label(self, name, value)
+        if not label:
+            return ''
+        return (f'{name}={value} switches on the careful feature "{label}": on the real robot careful features stay '
+                'off; only a tick in the Features window (it asks first) switches one on')
+
+    def _careful_owner_label(self, name: str, value: str) -> str:
+        """The label of the careful feature or mode that sets ``name=value``, '' when none does."""
+        features = getattr(self, '_features', None)
+        owner = feature_sets.careful_option_values(features, set()).get((name, value)) if features else None
         if owner is None:
             return ''
         feature = features.features.get(owner)
-        label = feature.label if feature is not None else next(
+        return feature.label if feature is not None else next(
             (mode.label for modes in features.modes.values() for key, mode in modes.items() if key == owner), owner)
-        return (f'{name}={value} switches on the careful feature "{label}": on the real robot careful features stay '
-                'off; only a tick in the Features window (it asks first) switches one on')
+
+    def _careful_option_remedy(self, name: str, value: str) -> str:
+        """What gets a careful value back on the real robot: its feature's tick in the Features window."""
+        label = MainWindow._careful_owner_label(self, name, value)
+        return f'tick "{label}" in the Features window (it asks first)' if label else ''
 
     def _switch_careful_off(self) -> list[str]:
         """On the switch to the real robot: every option a careful feature or mode set (e.g. carried over from the sim)
@@ -15796,6 +15838,15 @@ CMD ["bash"]
                     if value in invalid.get(name, {})}
 
         scope_off = MainWindow._scope_off_arg_names(self)
+        rule_remedies = MainWindow._rule_remedies(self) if invalid else {}
+
+        def remedy(missing_names: list, refusals: dict[str, str], scope: str) -> str:
+            # what gets a greyed-out member back, in the order the dialog's note names the cause
+            if missing_names:
+                return 'pick a workspace whose button profile has these options'
+            if scope:
+                return SCOPE_OFF_REMEDIES[MainWindow._off_scope(self)]
+            return ' and '.join(dict.fromkeys(filter(None, (rule_remedies.get(r, '') for r in refusals.values()))))
 
         def scope_reason(feature) -> str:
             # every option of the feature is left off on this target (e.g. all sim only on the real robot)
@@ -15811,6 +15862,7 @@ CMD ["bash"]
                     'on': selection.modes.get(group.key) == mode.key, 'sets': dict(mode.sets),
                     'missing': missing.get(mode.key, []), 'refused': refused(mode.sets),
                     'pending': dict(mode.pending), 'pending_on': mode.pending_on,
+                    'remedy': remedy(missing.get(mode.key, []), refused(mode.sets), ''),
                 } for mode in features.modes[group.key].values()]
             else:
                 members = [{
@@ -15820,6 +15872,7 @@ CMD ["bash"]
                     'set_on': dict(feature.on), 'set_off': dict(feature.off),
                     'missing': missing.get(key, []), 'refused': refused(feature.on),
                     'scope_off': scope_reason(feature),
+                    'remedy': remedy(missing.get(key, []), refused(feature.on), scope_reason(feature)),
                 } for key, feature in ((k, features.features[k]) for k in group.members)]
             groups.append({'key': group.key, 'name': group.name, 'kind': group.kind,
                            'description': group.description, 'mixed': mixed.get(group.key, ''),

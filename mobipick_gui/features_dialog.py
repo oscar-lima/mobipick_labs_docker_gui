@@ -35,6 +35,7 @@ from PyQt5.QtWidgets import (
 )
 
 from . import features as feature_sets
+from .option_rules import unavailable_text
 
 NO_PRESET = '(no preset)'
 DESCRIPTION_CHARS = 180
@@ -122,6 +123,7 @@ class FeaturesDialog(QDialog):
         self._allowed_careful: set[str] = set()
         self._feature_boxes: dict[str, QCheckBox] = {}
         self._usable: dict[str, bool] = {}   # feature key -> its options exist and the rules allow it
+        self._row_tooltips: dict[int, str] = {}   # id(row button) -> its "unavailable" tooltip, kept for _apply_parents
         self._mode_buttons: dict[str, dict[str, QRadioButton]] = {}
         self._rows: list[_Row] = []
         self._headers: list[tuple[QLabel, list[_Row]]] = []
@@ -287,8 +289,12 @@ class FeaturesDialog(QDialog):
                 scope_off = bool(member.get('scope_off'))
                 if group['kind'] == 'features':
                     self._usable[member['key']] = (enabled or member['on']) and not scope_off
-                row.button.setEnabled((enabled or member['on']) and not scope_off)
-                row.button.setToolTip(member.get('scope_off') or '')
+                usable = (enabled or member['on']) and not scope_off
+                row.button.setEnabled(usable)
+                # a greyed-out row says why and what gets it back (the note line above holds the same cause)
+                tooltip = '' if usable else unavailable_text(note, member.get('remedy', ''))
+                row.button.setToolTip(tooltip)
+                self._row_tooltips[id(row.button)] = tooltip
                 row.set_note(note)
                 row.button.setChecked(bool(member['on']))
         self._apply_parents()
@@ -358,10 +364,17 @@ class FeaturesDialog(QDialog):
         self._update_summary()
 
     def _apply_parents(self) -> None:
+        tooltips = getattr(self, '_row_tooltips', {})
         for key, box in self._feature_boxes.items():
             parent = self.window._features.features[key].parent
             usable = self._usable.get(key, True)
-            box.setEnabled(usable and (not parent or self._feature_boxes[parent].isChecked()))
+            parent_off = bool(parent) and not self._feature_boxes[parent].isChecked()
+            box.setEnabled(usable and not parent_off)
+            if usable and parent_off:
+                label = self.window._features.features[parent].label
+                box.setToolTip(unavailable_text(f'it builds on "{label}", which is off', f'tick "{label}"'))
+            else:
+                box.setToolTip(tooltips.get(id(box), ''))
 
     def _filter(self, text: str) -> None:
         needle = text.strip().lower()

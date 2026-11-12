@@ -75,6 +75,18 @@ toolbar argument such as ``model_profile``, and ``running.<button key>``
 which matches any of its entries; every condition of a rule must match.
 Rules only name dropdowns, buttons and states, so the GUI stays free of
 workspace-specific logic.
+
+A greyed-out dropdown or option says in its tooltip why it is unavailable
+(the ``reason``) and what gets it back. The GUI derives that from the
+``when`` condition (e.g. ``voice_agent: ['off']`` -> "switch voice_agent
+on", ``running.disc_ros: false`` -> "start disc_ros"); a rule can say it
+in its own words with ``fix``::
+
+    - when:
+        voice_agent: ['off']
+      disable: [voice_ack]
+      reason: the voice agent is off
+      fix: pick a voice in voice_agent
 """
 
 from __future__ import annotations
@@ -86,6 +98,7 @@ import yaml
 
 RULES_FILE_SUFFIX = '_rules.yaml'
 RUNNING_PREFIX = 'running.'
+REMOTE_MASTER_LABEL = 'Use remote ROS master'   # the main window's checkbox that switches simulation / real robot
 SHARED_RULES_FILE = 'option_rules.yaml'
 DEFAULT_RULES_FILE = (
     Path(__file__).resolve().parent / 'resources' / 'config' / SHARED_RULES_FILE
@@ -108,6 +121,7 @@ class OptionRule:
     start_args: dict[str, tuple[tuple[str, str], ...]] = field(default_factory=dict)
     disable: tuple[str, ...] = ()
     prefer: dict[str, str] = field(default_factory=dict)
+    fix: str = ''
 
     def _names(self, keys: tuple[str, ...], key: str) -> bool:
         if key in self.block_start_except:
@@ -133,6 +147,42 @@ class OptionRule:
             f'{name}={"|".join(values)}' for name, values in self.when.items()
         )
         return f'not allowed when {condition}' if condition else 'not allowed'
+
+    def remedy(self) -> str:
+        """What the user does to get a greyed-out option back: the rule's own ``fix``, else undoing any one condition
+        of ``when`` (every condition must match, so changing one is enough)."""
+        if self.fix:
+            return self.fix
+        return ' or '.join(filter(None, (condition_remedy(name, values) for name, values in self.when.items())))
+
+
+def condition_remedy(name: str, values: tuple[str, ...]) -> str:
+    """How to make the condition ``name`` in ``values`` false, in words for a tooltip."""
+    values = tuple(values)
+    if name == 'remote_master' and values in (('true',), ('false',)):
+        return (f'switch off "{REMOTE_MASTER_LABEL}" (the simulation)' if values == ('true',)
+                else f'switch on "{REMOTE_MASTER_LABEL}" (the real robot)')
+    if name.startswith(RUNNING_PREFIX):
+        key = name[len(RUNNING_PREFIX):]
+        if values == ('false',):
+            return f'start {key}'
+        if values == ('true',):
+            return f'stop {key}'
+    if values in (('off',), ('false',)):
+        return f'switch {name} on'
+    if values in (('on',), ('true',)):
+        return f'switch {name} off'
+    return f'set {name} to another value than {" or ".join(values)}' if values else ''
+
+
+def unavailable_text(reason: str, remedy: str = '') -> str:
+    """Tooltip text of a greyed-out option: why it is unavailable and what gets it back."""
+    reason = str(reason or '').strip().rstrip('.')
+    if not reason:
+        return ''
+    text = f'Unavailable: {reason}.'
+    remedy = str(remedy or '').strip().rstrip('.')
+    return f'{text}\nTo get it back: {remedy}.' if remedy else text
 
 
 @dataclass
@@ -189,6 +239,16 @@ class OptionRules:
             if rule.disable and rule.matches(normalized):
                 for name in rule.disable:
                     result.setdefault(name, rule.describe())
+        return result
+
+    def remedies(self, state: dict) -> dict[str, str]:
+        """Return ``{reason: remedy}`` of the matching rules, so a greyed-out option's tooltip can say what gets it
+        back next to the reason ``disabled_options`` / ``invalid_options`` gave (first matching rule per reason)."""
+        normalized = {name: _text(value) for name, value in state.items()}
+        result: dict[str, str] = {}
+        for rule in self.rules:
+            if rule.matches(normalized):
+                result.setdefault(rule.describe(), rule.remedy())
         return result
 
     def preferred_values(self, state: dict) -> dict[int, tuple[dict[str, str], str]]:
@@ -330,6 +390,7 @@ def parse_option_rules(data, path: Path | None = None) -> OptionRules:
                 start_args=start_args,
                 disable=disable,
                 prefer=prefer,
+                fix=str(item.get('fix') or '').strip(),
             )
         )
     return loaded

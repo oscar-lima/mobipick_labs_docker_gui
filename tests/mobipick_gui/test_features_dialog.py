@@ -272,6 +272,8 @@ def test_remote_args_and_dropdowns_cannot_switch_careful_features_on_on_the_real
         combo = window._generic_arg_inputs[4]   # box_padding
         item = combo.model().item(combo.findText('0.005'))
         assert not item.isEnabled() and 'only a tick in the Features window' in item.toolTip()
+        # ... and what gets it back (greyed options say why and how to get them back)
+        assert 'To get it back: tick "Box padding 0.5 cm" in the Features window (it asks first)' in item.toolTip()
         assert combo.model().item(combo.findText('0.01')).isEnabled()
 
         # ticked in the Features window: on, still choosable, and the same value over the API is accepted

@@ -20,6 +20,7 @@ from mobipick_gui.launch_arguments_dialog import (
 )
 from mobipick_gui.main_window import (
     REAL_ONLY_OFF_REASON,
+    SCOPE_OFF_REMEDIES,
     SIM_ONLY_OFF_REASON,
     MainWindow,
 )
@@ -295,6 +296,35 @@ def test_a_rule_reason_is_kept_after_the_scope_reason(monkeypatch, tmp_path):
         _close(app, window)
 
 
+def test_a_greyed_out_option_says_why_and_what_gets_it_back(monkeypatch, tmp_path):
+    rules = {'rules': [
+        {'when': {'use_mtc': ['false']}, 'disable': ['num_robots'], 'reason': 'only the MTC backend runs several robots'},
+        {'when': {'remote_master': True}, 'disable': ['use_mtc'], 'reason': 'MTC is fixed on the robot',
+         'fix': 'ask the robot owner'},
+    ]}
+    app, window, _entry = _window(monkeypatch, tmp_path, rules=rules)
+    try:
+        inputs = window._generic_arg_inputs
+        assert 'Unavailable: Real robot only' in inputs[2].toolTip()   # the scope greys sensor_pc in the sim
+        assert inputs[2].toolTip().endswith(f'To get it back: {SCOPE_OFF_REMEDIES["real"]}.')
+        assert inputs[2].rule_note.text() == REAL_ONLY_OFF_REASON   # the note line keeps the bare reason
+        inputs[3].setCurrentText('false')
+        window._apply_option_rules()
+        assert not inputs[4].isEnabled()
+        assert inputs[4].toolTip().endswith('Unavailable: only the MTC backend runs several robots.\n'
+                                            'To get it back: switch use_mtc on.')
+        inputs[3].setCurrentText('true')
+        window._apply_option_rules()
+        assert inputs[4].isEnabled() and 'Unavailable' not in inputs[4].toolTip()
+        window.remote_master_checkbox.setChecked(True)   # sim-only num_robots: scope and nothing else
+        assert inputs[3].toolTip().endswith('Unavailable: MTC is fixed on the robot.\nTo get it back: ask the robot owner.')
+        assert inputs[1].toolTip().endswith(f'To get it back: {SCOPE_OFF_REMEDIES["sim"]}.')
+        assert not window.headless_checkbox.isEnabled()
+        assert window.headless_checkbox.toolTip().endswith(f'To get it back: {SCOPE_OFF_REMEDIES["sim"]}.')
+    finally:
+        _close(app, window)
+
+
 def test_dialog_width_follows_the_widest_tab(monkeypatch, tmp_path):
     entry = dict(ENTRY)
     for slot in range(5, 10):
@@ -359,7 +389,13 @@ def test_features_whose_options_are_all_off_by_scope_are_greyed_out(monkeypatch,
         dialog.refresh()
         assert dialog.parent() is None
         assert not dialog._feature_boxes['jaw'].isEnabled()
-        assert dialog._feature_boxes['jaw'].toolTip() == SIM_ONLY_OFF_REASON
+        tooltip = dialog._feature_boxes['jaw'].toolTip()   # why it is greyed out and what gets it back
+        assert SIM_ONLY_OFF_REASON in tooltip and f'To get it back: {SCOPE_OFF_REMEDIES["sim"]}.' in tooltip
+        narrow = dialog._feature_boxes['narrow']   # usable itself, but it builds on the greyed, unticked jaw
+        assert not narrow.isEnabled()
+        assert narrow.toolTip() == ('Unavailable: it builds on "Jaw along the box", which is off.\n'
+                                    'To get it back: tick "Jaw along the box".')
+        assert members['jaw']['remedy'] == SCOPE_OFF_REMEDIES['sim']
 
         report = window.load_feature_preset('all-on')   # a preset does not change a scope-greyed option
         assert report['refused']['align_jaw']['reason'] == f'disabled: {SIM_ONLY_OFF_REASON}'
