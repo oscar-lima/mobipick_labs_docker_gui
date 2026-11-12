@@ -57,6 +57,7 @@ from PyQt5.QtWidgets import (
     QFormLayout,
     QFrame,
     QGridLayout,
+    QGroupBox,
     QHBoxLayout,
     QHeaderView,
     QInputDialog,
@@ -156,6 +157,7 @@ from .headless import (
     headless_launch_entries,
     normalize_headless_args,
 )
+from .option_groups import OptionGroups, load_option_groups
 from .option_rules import load_option_rules
 from .settings_transfer import export_settings, import_settings
 
@@ -8849,6 +8851,7 @@ CMD ["bash"]
                 label.deleteLater()   # rows hidden by the search are not in the layout
                 field.deleteLater()
             self._advanced_all_rows = []
+            self._advanced_group_boxes = []   # deleted with the layout items above
 
         inputs: dict[int, QComboBox] = {}
         main_count = 0
@@ -8882,6 +8885,7 @@ CMD ["bash"]
                     item.setToolTip(value_description)
             if previous_value in options[slot]:
                 value_input.setCurrentIndex(options[slot].index(previous_value))
+            value_input.setProperty('arg_name', name)   # the Advanced dialog's group boxes place a row by its option
             _configure_shrinkable_combo(value_input)
             value_input.activated.connect(
                 lambda _index: MainWindow._apply_option_rules(self, True)
@@ -8961,6 +8965,10 @@ CMD ["bash"]
             for column in range(layout.columnCount()):
                 layout.setColumnStretch(column, 0)
                 layout.setColumnMinimumWidth(column, 0)
+        groups = getattr(self, '_option_groups', None) or OptionGroups()
+        MainWindow._report_option_group_errors(self, groups)
+        if groups or getattr(self, '_advanced_group_boxes', None):
+            MainWindow._drop_advanced_group_boxes(self, rows, layouts)
         visible: dict[str, list] = {scope: [] for scope in layouts}
         totals = {scope: 0 for scope in layouts}
         for label, field, value_input, text, *rest in rows:
@@ -8970,10 +8978,14 @@ CMD ["bash"]
             label.setVisible(match)
             field.setVisible(match)
             if match:
-                visible[scope].append((label, field))
+                name = str(value_input.property('arg_name') or '')
+                visible[scope].append((label, field, groups.title_of(name)))
         columns = 1
         for scope, layout in layouts.items():
-            MainWindow._fill_advanced_columns(self, layout, visible[scope])
+            if groups:
+                MainWindow._fill_advanced_groups(self, layout, visible[scope], groups)
+            else:
+                MainWindow._fill_advanced_columns(self, layout, [(lb, fd) for lb, fd, _title in visible[scope]])
             columns = max(columns, getattr(self, '_advanced_columns', 1))
         self._advanced_columns = columns   # the widest tab sizes the dialog
         self._advanced_tab_counts = {scope: len(shown) for scope, shown in visible.items()}
@@ -9014,6 +9026,57 @@ CMD ["bash"]
                 else:
                     empty.setText(ADVANCED_EMPTY_TAB_TEXT[scope])
                 empty.setVisible(count == 0)
+
+    def _report_option_group_errors(self, groups) -> None:
+        """Show the problems of the groups file once per load, like the option rules'."""
+        if getattr(self, '_option_groups_reported', True):
+            return
+        self._option_groups_reported = True
+        for error in groups.errors:
+            self._append_log_html(
+                '<span style="color:#ff6e6e">' + html.escape(f'option groups {groups.path}: {error}') + '</span>'
+            )
+
+    def _drop_advanced_group_boxes(self, rows, layouts) -> None:
+        """Move every option row back to the page of its tab and delete the group boxes: the next layout builds them
+        again (a row hidden by the search is in no layout, but still a child of its box). A row is never parentless:
+        shown without a parent it would be a window of its own."""
+        for label, field, _input, _text, *rest in rows:
+            scope = rest[0] if rest and rest[0] in layouts else 'shared'
+            page = layouts[scope].parentWidget()
+            for widget in (label, field):
+                widget.setParent(page)
+        for box in getattr(self, '_advanced_group_boxes', []):
+            box.setParent(None)
+            box.deleteLater()
+        self._advanced_group_boxes = []
+
+    def _fill_advanced_groups(self, layout, rows, groups) -> None:
+        """Lay the options out in titled group boxes, one box per group in the groups file's order (options no group
+        names last, in "Other"); a group without a visible option has no box. Inside a box the options fill columns
+        as in the plain list. A box is wide as the tab: its options never wait for another group's column."""
+        by_title: dict[str, list] = {}
+        for label, field, title in rows:
+            by_title.setdefault(title, []).append((label, field))
+        row = 0
+        columns = 1
+        for title in groups.order():
+            members = by_title.get(title)
+            if not members:
+                continue
+            box = QGroupBox(f'{title} ({len(members)})')
+            box.setObjectName(f'advanced_group_{title}')
+            grid = QGridLayout(box)
+            grid.setHorizontalSpacing(8)
+            grid.setVerticalSpacing(6)
+            MainWindow._fill_advanced_columns(self, grid, members)
+            columns = max(columns, getattr(self, '_advanced_columns', 1))
+            layout.addWidget(box, row, 0, 1, 3)
+            self._advanced_group_boxes.append(box)
+            row += 1
+        layout.setColumnStretch(0, 1)
+        layout.setRowStretch(row, 1)   # spare height goes below the last box
+        self._advanced_columns = columns
 
     def _fill_advanced_columns(self, layout, rows) -> None:
         """Lay the Advanced Launch Options out in columns, the first column filled top to bottom before the next (#264)."""
@@ -15157,6 +15220,8 @@ CMD ["bash"]
             self._resolved_button_config_path()
         )
         self._option_rules_reported = False
+        self._option_groups = load_option_groups(self._resolved_button_config_path())
+        self._option_groups_reported = False
         # prefer rules matching at load keep the saved choices of a remembered preset; without one the next
         # build of the dropdowns applies them once, so an older saved config does not silently run a feature off
         self._preferred_rules_matched = None
