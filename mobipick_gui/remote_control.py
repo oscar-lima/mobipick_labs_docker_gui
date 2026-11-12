@@ -1390,8 +1390,15 @@ class RemoteControlServer:
         """
         parts = [unquote(part) for part in path.strip('/').split('/') if part]
         named = client or body.get('client') or query.get('client')
+        # an anonymous status read is a monitor's poll (a watchdog asks every few seconds), not a
+        # client's work: it would keep the longest present client alive forever, also one whose
+        # owner is gone and can no longer say bye
+        monitor_read = method == 'GET' and parts == ['status'] and not named
         if parts and parts != ['presence']:
-            if self.touch_presence(named) is None:
+            if monitor_read:
+                if self._current_client() is None:
+                    self._note_unknown_client(named)   # reported as before when nobody is present
+            elif self.touch_presence(named) is None:
                 self._note_unknown_client(named)
         self._request.client = named
         try:

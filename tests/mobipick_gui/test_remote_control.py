@@ -1729,6 +1729,34 @@ def test_requests_refresh_presence(monkeypatch):
     assert not server.in_use
 
 
+def test_anonymous_status_polls_do_not_keep_a_presence_alive(monkeypatch):
+    """A watchdog polls GET /status anonymously every few seconds: that must not keep the longest
+    present client alive forever (one whose owner lost its token could never leave)."""
+    server = RemoteControlServer(FakeAdapter(), host='127.0.0.1', port=0)
+    now = [1000.0]
+    monkeypatch.setattr('mobipick_gui.remote_control.time.time', lambda: now[0])
+    server.declare_presence('claude', ttl_s=10)
+    for _ in range(4):
+        now[0] += 4
+        status, _ = server.handle('GET', '/status', {}, {})
+        assert status == 200
+    assert not server.in_use                     # 16 s of status polls only: lapsed
+    # while claude was present the polls were no unknown client; after it lapsed one is, once, as before
+    assert server.take_unknown_clients() == ['(anonymous)']
+    # a named status read is still activity of that client
+    server.declare_presence('claude', ttl_s=10)
+    now[0] += 8
+    server.handle('GET', '/status', {}, {}, client='claude')
+    now[0] += 8
+    assert [c['name'] for c in server.clients()] == ['claude']
+    # other anonymous requests still refresh the longest present client
+    now[0] += 1
+    server.handle('POST', '/status', {}, {})
+    server.handle('GET', '/buttons', {}, {})
+    now[0] += 8
+    assert [c['name'] for c in server.clients()] == ['claude']
+
+
 def test_named_client_refreshes_only_itself(monkeypatch):
     server = RemoteControlServer(FakeAdapter(), host='127.0.0.1', port=0)
     now = [1000.0]
@@ -2208,5 +2236,5 @@ def test_request_of_a_present_client_is_not_reported():
     server = RemoteControlServer(FakeAdapter(), host='127.0.0.1', port=0)
     server.declare_presence('claude', ttl_s=10)
     server.handle('GET', '/status', {}, {}, client='claude')
-    server.handle('GET', '/status', {}, {})  # anonymous, refreshes claude
+    server.handle('GET', '/status', {}, {})  # anonymous status read while claude is present: not reported
     assert server.take_unknown_clients() == []

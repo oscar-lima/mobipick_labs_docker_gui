@@ -66,7 +66,8 @@ curl -s -X POST $GUI/presence -H 'Content-Type: application/json' -d "{\"name\":
 curl -s -X DELETE $GUI/presence -H 'Content-Type: application/json' -d "{\"name\":\"$ME\",\"token\":\"$TOKEN\"}"
 ```
 
-Presence is kept alive by activity: every request you send refreshes it, as
+Presence is kept alive by activity: every request you send refreshes it
+(an anonymous `GET /status` excepted: that is a monitor's poll), as
 does a shell command that is still running or a `follow=1` stream you keep
 open, so no separate heartbeat process is needed (one that outlives you keeps
 a dead agent "present"). Only `ttl_s` (default 600 s, at most 1800 s) of
