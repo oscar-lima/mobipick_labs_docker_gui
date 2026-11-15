@@ -48,17 +48,41 @@ def test_cleanup_runs_in_the_roscore_container_bounded_and_answers_like_rosnode_
     assert 'ThreadPoolExecutor' in code   # all nodes at once, not 3 s each
 
 
-def _cleanup_harness(remote, roscore=True):
+def _cleanup_harness(remote, roscore=True, sim_ids=(), ps_fails=False, run_nodes=('172.21.0.5', ['/a'])):
     calls = []
+
+    def resolve(name=None, exec_id=None, on_finished=None, on_error=None):
+        calls.append(('ps', name))
+        if ps_fails:
+            on_error(RuntimeError('docker ps failed'))
+        else:
+            on_finished(list(sim_ids))
+
     h = _harness(
         tasks={},
+        _sim_container_name='mobipick-run',
         _remote_master_enabled=lambda: remote,
         is_roscore_running=lambda: roscore,
         _append_gui_html=lambda key, text: calls.append(('html', key)),
+        _resolve_container_ids_async=resolve,
         _run_command_sequence=lambda commands, log_key=None, on_finished=None: (
-            calls.append(('run', commands[0][2], log_key)), on_finished and on_finished()),
+            calls.append(('run', commands[0][2], log_key, commands[0][5])), on_finished and on_finished()),
     )
+    h._sim_run_nodes = lambda: run_nodes
     return h, calls
+
+
+def test_sim_host_and_names_only_while_no_sim_container_runs():
+    for sim_ids, ps_fails, passed in (((), False, True), (('abc',), False, False), ((), True, False)):
+        h, calls = _cleanup_harness(remote=False, sim_ids=sim_ids, ps_fails=ps_fails)
+        h._cleanup_local_master(log_key='sim')
+        runs = [c for c in calls if c[0] == 'run']
+        assert calls[1] == ('ps', 'mobipick-run') and len(runs) == 1
+        script = runs[0][3]
+        if passed:
+            assert script.endswith(" 172.21.0.5 /a 2>&1 | grep -v \"^ERROR: connection refused\\|^cannot ping\" || true")
+        else:   # a running or unverified sim container: the plain purge (no host, no names)
+            assert " '' 2>&1 |" in script and '172.21.0.5' not in script
 
 
 def test_cleanup_only_against_a_running_local_master(monkeypatch):
@@ -67,7 +91,7 @@ def test_cleanup_only_against_a_running_local_master(monkeypatch):
     done = []
     h, calls = _cleanup_harness(remote=False)
     h._cleanup_local_master(lambda: done.append('local'), log_key='sim')
-    assert ('run', 'mobipick-roscore', 'sim') in calls and done == ['local']
+    assert [c[:3] for c in calls if c[0] == 'run'] == [('run', 'mobipick-roscore', 'sim')] and done == ['local']
     for remote, roscore in ((True, True), (False, False)):
         h, calls = _cleanup_harness(remote=remote, roscore=roscore)
         h._cleanup_local_master(lambda: done.append('skipped'))
@@ -120,6 +144,8 @@ def test_cleanup_purges_silent_entries_without_calling_anyone_first():
     # silent = nobody there; a timeout counts only on the sim host (its container is down during the cleanup)
     assert 'GONE = (errno.ECONNREFUSED, errno.EHOSTUNREACH, errno.ENETUNREACH, errno.EHOSTDOWN)' in code
     assert "ok[n] == 'no' or (ok[n] == 'timeout' and host" in code
+    # a timeout counts only for a name of the sim run or the snapshot, not for a node found dead by the ping alone
+    assert "urlparse(apis[n]).hostname == host and (n in launched or n in known))]" in code
     assert "except socket.timeout:" in code and "return 'no' if exc.errno in GONE else 'yes'" in code
     assert code.count("return 'yes'") == 2   # an answer, or any other error: alive
     # first the call that makes the master call no one, then the dummy takeover only if the entry is still there
@@ -172,7 +198,7 @@ def test_snapshot_only_against_a_running_local_master(monkeypatch):
     done = []
     h, calls = _cleanup_harness(remote=False)
     h._snapshot_local_master(lambda: done.append('local'), log_key='sim')
-    assert ('run', 'mobipick-roscore', 'sim') in calls and done == ['local']
+    assert [c[:3] for c in calls if c[0] == 'run'] == [('run', 'mobipick-roscore', 'sim')] and done == ['local']
     for remote, roscore in ((True, True), (False, False)):
         h, calls = _cleanup_harness(remote=remote, roscore=roscore)
         h._snapshot_local_master(lambda: done.append('skipped'))

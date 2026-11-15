@@ -10206,9 +10206,12 @@ CMD ["bash"]
     # the sim container's host (from roslaunch's "started roslaunch server"
     # line; without it only snapshot entries at their recorded address and dead
     # nodes count) and whose address is silent: nobody there (connection
-    # refused, host or network unreachable) or, on the sim host only, no answer
-    # within 6 s (the cleanup runs while the sim container is down, and a
-    # stopped container's address often just times out). Anywhere else a
+    # refused, host or network unreachable) or, on the sim host only and for a
+    # name of the sim run or the snapshot, no answer within 6 s (a stopped
+    # container's address often just times out; the GUI passes the sim host
+    # only after docker ps showed no sim container running, and a node found
+    # dead only by the ping may belong to another container that took the
+    # freed address, so its timeout does not count). Anywhere else a
     # timeout or any other answer counts as alive, so a slow live node in
     # another container is never touched. The probe sets its own 6 s timeout
     # after the ping pass (rosnode's ping sets 3 s for the whole process).
@@ -10274,7 +10277,7 @@ CMD ["bash"]
         'with cf.ThreadPoolExecutor(32) as pool:\n'
         '    ok = dict(zip(left, pool.map(answers, [apis[n] for n in left])))\n'
         "stale = [n for n in left if ok[n] == 'no' or (ok[n] == 'timeout' and host\n"
-        "         and urlparse(apis[n]).hostname == host)]\n"
+        "         and urlparse(apis[n]).hostname == host and (n in launched or n in known))]\n"
         'for name in stale:\n'
         '    try:\n'
         "        rosgraph.Master(name).unsubscribeParam(apis[name], '/rosout_disable_topics_generation')\n"
@@ -10344,8 +10347,8 @@ CMD ["bash"]
             on_finished=on_finished,
         )
 
-    _ROSLAUNCH_STARTED_RE = re.compile(r'^process\[([A-Za-z0-9_/]+)-\d+\]: started with pid', re.M)
-    _ROSLAUNCH_SERVER_RE = re.compile(r'^started roslaunch server https?://([^:/\s]+)', re.M)
+    _ROSLAUNCH_STARTED_RE = re.compile(r'process\[([A-Za-z0-9_/]+)-\d+\]: started with pid')
+    _ROSLAUNCH_SERVER_RE = re.compile(r'started roslaunch server https?://([^:/\s]+)')
 
     def _sim_run_nodes(self) -> tuple[str, list[str]]:
         """The sim host and the node names the last sim run started, from the
@@ -10355,15 +10358,26 @@ CMD ["bash"]
         path = getattr(writer, 'path', None)
         if path is None:
             return '', []
+        hosts: list[str] = []
+        found: set[str] = set()
         try:
             if getattr(writer, 'is_open', False):
                 writer.flush()
-            text = Path(path).read_text(encoding='utf-8', errors='replace')
+            # a long run's log is ~100 MB: only roslaunch's own lines go to the
+            # regular expressions (a plain substring test per line is cheap)
+            with open(path, 'r', encoding='utf-8', errors='replace') as handle:
+                for line in handle:
+                    if line.startswith('process['):
+                        match = self._ROSLAUNCH_STARTED_RE.match(line)
+                        if match:
+                            found.add('/' + match.group(1).strip('/'))
+                    elif line.startswith('started roslaunch server'):
+                        match = self._ROSLAUNCH_SERVER_RE.match(line)
+                        if match:
+                            hosts.append(match.group(1))
         except (OSError, ValueError):
             return '', []
-        hosts = self._ROSLAUNCH_SERVER_RE.findall(text)
-        names = sorted({'/' + n.strip('/') for n in self._ROSLAUNCH_STARTED_RE.findall(text)})
-        return (hosts[-1] if hosts else ''), names
+        return (hosts[-1] if hosts else ''), sorted(found)
 
     def _local_master_cleanup_cmd(self, host: str = '', names: list[str] | None = None) -> list[str]:
         """Unregister unreachable nodes at the local roscore (#273) and purge
@@ -10395,11 +10409,25 @@ CMD ["bash"]
             log_key,
             '<i>Unregistering unreachable nodes from the local ROS master...</i>',
         )
-        host, names = self._sim_run_nodes()
-        self._run_command_sequence(
-            [self._local_master_cleanup_cmd(host, names)],
-            log_key=log_key,
-            on_finished=on_finished,
+        def _run(host: str, names: list[str]) -> None:
+            self._run_command_sequence(
+                [self._local_master_cleanup_cmd(host, names)],
+                log_key=log_key,
+                on_finished=on_finished,
+            )
+
+        def _sim_containers(ids: list[str]) -> None:
+            # the sim host and names (a timeout there counts as silent) only
+            # while no sim container runs; otherwise the plain purge
+            if ids:
+                _run('', [])
+            else:
+                _run(*self._sim_run_nodes())
+
+        self._resolve_container_ids_async(
+            name=self._sim_container_name,
+            on_finished=_sim_containers,
+            on_error=lambda _exc: _run('', []),
         )
 
     @staticmethod
