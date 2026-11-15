@@ -494,7 +494,7 @@ BUTTON_CONFIG_DEFAULTS = [
     },
 ]
 
-GENERIC_BUTTON_ARG_SLOTS = range(1, 121)
+GENERIC_BUTTON_ARG_SLOTS = range(1, 161)
 DEFAULT_ADVANCED_ARG_NAMES = frozenset({
     'gui', 'gzclient', 'gazebo_gui', 'gazebo_client', 'use_mtc',
     'jev_min_confidence', 'voice_languages',
