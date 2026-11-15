@@ -10188,9 +10188,41 @@ CMD ["bash"]
     # one pass over the local master's nodes (#273): ping all of them at once
     # (rosnode cleanup pings one by one, 3 s each when a dead node's address is
     # gone, minutes for a killed sim's ~70 nodes) and unregister the ones that
-    # do not answer, as rosnode cleanup does
+    # do not answer, as rosnode cleanup does.
+    # A node can also stay at the master with no topic or service at all: every
+    # rospy node that logs holds a cached-parameter subscription
+    # (/rosout_disable_topics_generation) that it never drops, not even at a
+    # clean exit, and the master keeps a node with any registration left.
+    # rosnode list and rosnode cleanup do not see that subscription. A new sim
+    # container gets the same IP address, so when a new node registers under
+    # such a name the master sends "new node registered with same name" to the
+    # old address and shuts down whichever new node now holds that port (one
+    # sim-only restart in four lost a random node: the arm controller spawner,
+    # the pick pose selector). The candidates are every node the last sim run
+    # started (its roslaunch "process[...]: started" lines in the sim tab's log
+    # file, also after a crash and for short-lived spawners that exited long
+    # before the stop), the snapshot taken before the stop, and each dead
+    # node. Purged is a candidate that the master still holds at an address on
+    # the sim container's host (from roslaunch's "started roslaunch server"
+    # line; without it only snapshot entries at their recorded address and dead
+    # nodes count) and whose address is silent: nobody there (connection
+    # refused, host or network unreachable) or, on the sim host only, no answer
+    # within 6 s (the cleanup runs while the sim container is down, and a
+    # stopped container's address often just times out). Anywhere else a
+    # timeout or any other answer counts as alive, so a slow live node in
+    # another container is never touched. The probe sets its own 6 s timeout
+    # after the ping pass (rosnode's ping sets 3 s for the whole process).
+    # The purge drops that parameter subscription under the old address, which
+    # empties the entry and the master deletes it without calling anyone; an
+    # entry that still holds some other parameter is taken over by a dummy
+    # address and then dropped (the master's one shutdown call then goes to
+    # the old address, which was just found silent). Lookups run one by one:
+    # one master proxy shared by threads mixed up the answers. The script's
+    # arguments: the sim host (or ''), then the sim run's node names.
     _LOCAL_MASTER_CLEANUP_PY = (
-        'import concurrent.futures as cf, rosgraph, rosnode\n'
+        'import concurrent.futures as cf, errno, json, os, socket, sys, rosgraph, rosnode, xmlrpc.client\n'
+        'from urllib.parse import urlparse\n'
+        "SNAPSHOT = '/tmp/mobipick_gui_master_nodes.json'\n"
         "master = rosgraph.Master('/mobipick_gui_cleanup')\n"
         'nodes = sorted({n for kind in master.getSystemState() for _, names in kind for n in names})\n'
         'def alive(name):\n'
@@ -10204,14 +10236,143 @@ CMD ["bash"]
         '    rosnode.cleanup_master_blacklist(master, dead)\n'
         "print('ROS master cleanup: %d nodes, %d unreachable unregistered%s' % "
         "(len(nodes), len(dead), (': ' + ' '.join(dead)) if dead else ''))\n"
+        'try:\n'
+        '    snapshot = json.load(open(SNAPSHOT))\n'
+        'except Exception:\n'
+        '    snapshot = {}\n'
+        'try:\n'
+        "    run_id = master.getParam('/run_id')\n"
+        'except Exception:\n'
+        '    run_id = None\n'
+        "known = snapshot.get('nodes', {}) if run_id and snapshot.get('run_id') == run_id else {}\n"
+        "host = sys.argv[1] if len(sys.argv) > 1 else ''\n"
+        'launched = set(sys.argv[2:]) if host else set()\n'
+        'def api_of(name):\n'
+        '    try:\n'
+        '        return master.lookupNode(name)\n'
+        '    except Exception:\n'
+        '        return None\n'
+        'GONE = (errno.ECONNREFUSED, errno.EHOSTUNREACH, errno.ENETUNREACH, errno.EHOSTDOWN)\n'
+        'def answers(api):\n'
+        '    try:\n'
+        "        xmlrpc.client.ServerProxy(api).getPid('/mobipick_gui_cleanup')\n"
+        "        return 'yes'\n"
+        '    except socket.timeout:\n'
+        "        return 'timeout'\n"
+        '    except OSError as exc:\n'
+        "        return 'no' if exc.errno in GONE else 'yes'\n"
+        '    except Exception:\n'
+        "        return 'yes'\n"
+        'names = sorted(set(dead) | set(known) | launched)\n'
+        'apis = {n: api_of(n) for n in names}\n'
+        'registered = [n for n in names if apis[n]]\n'
+        'elsewhere = [n for n in registered if host and urlparse(apis[n]).hostname != host]\n'
+        'moved = [n for n in registered if n not in elsewhere and n not in dead and n not in launched\n'
+        '         and apis[n] != known.get(n)]\n'
+        'left = [n for n in registered if n not in elsewhere and n not in moved]\n'
+        'socket.setdefaulttimeout(6.0)\n'
+        'with cf.ThreadPoolExecutor(32) as pool:\n'
+        '    ok = dict(zip(left, pool.map(answers, [apis[n] for n in left])))\n'
+        "stale = [n for n in left if ok[n] == 'no' or (ok[n] == 'timeout' and host\n"
+        "         and urlparse(apis[n]).hostname == host)]\n"
+        'for name in stale:\n'
+        '    try:\n'
+        "        rosgraph.Master(name).unsubscribeParam(apis[name], '/rosout_disable_topics_generation')\n"
+        '        if api_of(name) == apis[name]:\n'
+        "            dummy = 'http://127.0.0.1:9/'\n"
+        "            rosgraph.Master(name).registerSubscriber('/mobipick_gui_purge', 'std_msgs/Empty', dummy)\n"
+        "            rosgraph.Master(name).unregisterSubscriber('/mobipick_gui_purge', dummy)\n"
+        '    except Exception:\n'
+        '        pass\n'
+        "keep = {n: a for n, a in known.items() if apis.get(n) == a and n not in stale}\n"
+        'if keep:\n'
+        "    json.dump({'run_id': run_id, 'nodes': keep}, open(SNAPSHOT, 'w'))\n"
+        'elif os.path.exists(SNAPSHOT):\n'
+        '    os.remove(SNAPSHOT)\n'
+        "print('ROS master cleanup: %d stale entries purged%s; left alone: %d answering, %d on another host, '\n"
+        "      '%d at a new address, %d not registered' % (len(stale), (': ' + ' '.join(stale)) if stale else '',\n"
+        "      len(left) - len(stale), len(elsewhere), len(moved), len(names) - len(registered)))\n"
     )
 
-    def _local_master_cleanup_cmd(self) -> list[str]:
-        """Unregister unreachable nodes at the local roscore (#273)."""
+    # the names and addresses of the local master's nodes, taken just before a
+    # sim stop so that the cleanup after it can find the entries rosnode list
+    # does not show (see above); merged into the file while the master runs
+    _LOCAL_MASTER_SNAPSHOT_PY = (
+        'import json, rosgraph\n'
+        "SNAPSHOT = '/tmp/mobipick_gui_master_nodes.json'\n"
+        "master = rosgraph.Master('/mobipick_gui_snapshot')\n"
+        "run_id = master.getParam('/run_id')\n"
+        'try:\n'
+        '    snapshot = json.load(open(SNAPSHOT))\n'
+        'except Exception:\n'
+        '    snapshot = {}\n'
+        "nodes = snapshot.get('nodes', {}) if snapshot.get('run_id') == run_id else {}\n"
+        'for name in sorted({n for kind in master.getSystemState() for _, names in kind for n in names}):\n'
+        '    try:\n'
+        '        nodes[name] = master.lookupNode(name)\n'
+        '    except Exception:\n'
+        '        pass\n'
+        "json.dump({'run_id': run_id, 'nodes': nodes}, open(SNAPSHOT, 'w'))\n"
+        "print('ROS master snapshot: %d nodes' % len(nodes))\n"
+    )
+
+    def _local_master_snapshot_cmd(self) -> list[str]:
+        """Record the local master's node addresses before a sim stop."""
+        script = (
+            'source /opt/ros/noetic/setup.bash >/dev/null 2>&1; '
+            'timeout 5 python3 -c '
+            + shlex.quote(self._LOCAL_MASTER_SNAPSHOT_PY)
+            + ' 2>&1 || true'
+        )
+        return ['docker', 'exec', self._roscore_container_name, 'bash', '-lc', script]
+
+    def _snapshot_local_master(
+        self,
+        on_finished: Callable[[], None] | None = None,
+        *,
+        log_key: str = 'log',
+    ) -> None:
+        """Before each sim stop: the cleanup after the stop purges the
+        listed nodes the master still holds at an address that went silent."""
+        if self._remote_master_enabled() or not self.is_roscore_running():
+            if on_finished:
+                QTimer.singleShot(0, on_finished)
+            return
+        self._run_command_sequence(
+            [self._local_master_snapshot_cmd()],
+            log_key=log_key,
+            on_finished=on_finished,
+        )
+
+    _ROSLAUNCH_STARTED_RE = re.compile(r'^process\[([A-Za-z0-9_/]+)-\d+\]: started with pid', re.M)
+    _ROSLAUNCH_SERVER_RE = re.compile(r'^started roslaunch server https?://([^:/\s]+)', re.M)
+
+    def _sim_run_nodes(self) -> tuple[str, list[str]]:
+        """The sim host and the node names the last sim run started, from the
+        sim tab's log file ('' and [] when there is none to read)."""
+        tab = getattr(self, 'tasks', {}).get('sim')
+        writer = getattr(tab, '_disk_log', None) if tab is not None else None
+        path = getattr(writer, 'path', None)
+        if path is None:
+            return '', []
+        try:
+            if getattr(writer, 'is_open', False):
+                writer.flush()
+            text = Path(path).read_text(encoding='utf-8', errors='replace')
+        except (OSError, ValueError):
+            return '', []
+        hosts = self._ROSLAUNCH_SERVER_RE.findall(text)
+        names = sorted({'/' + n.strip('/') for n in self._ROSLAUNCH_STARTED_RE.findall(text)})
+        return (hosts[-1] if hosts else ''), names
+
+    def _local_master_cleanup_cmd(self, host: str = '', names: list[str] | None = None) -> list[str]:
+        """Unregister unreachable nodes at the local roscore (#273) and purge
+        the stale entries of the last sim run (see above)."""
+        args = ' '.join(shlex.quote(a) for a in [host, *(names or [])])
         script = (
             'source /opt/ros/noetic/setup.bash >/dev/null 2>&1; '
             'timeout 30 python3 -c '
-            + shlex.quote(self._LOCAL_MASTER_CLEANUP_PY)
+            + shlex.quote(self._LOCAL_MASTER_CLEANUP_PY) + ' ' + args
             + ' 2>&1 | grep -v "^ERROR: connection refused\\|^cannot ping" || true'
         )
         return ['docker', 'exec', self._roscore_container_name, 'bash', '-lc', script]
@@ -10234,8 +10395,9 @@ CMD ["bash"]
             log_key,
             '<i>Unregistering unreachable nodes from the local ROS master...</i>',
         )
+        host, names = self._sim_run_nodes()
         self._run_command_sequence(
-            [self._local_master_cleanup_cmd()],
+            [self._local_master_cleanup_cmd(host, names)],
             log_key=log_key,
             on_finished=on_finished,
         )
@@ -14749,11 +14911,14 @@ CMD ["bash"]
                 tab.exec_id = None
                 self._cleanup_local_master(log_key=tab.key)   # a forced stop leaves registrations (#273)
 
-            self._graceful_stop_container(
-                self._sim_container_name,
-                tab,
-                exec_id=exec_id,
-                on_finished=_finalize,
+            self._snapshot_local_master(
+                lambda: self._graceful_stop_container(
+                    self._sim_container_name,
+                    tab,
+                    exec_id=exec_id,
+                    on_finished=_finalize,
+                ),
+                log_key=tab.key,
             )
 
         QTimer.singleShot(0, _fallbacks)
