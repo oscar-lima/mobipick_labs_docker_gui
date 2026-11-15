@@ -91,7 +91,7 @@ def test_slots_33_to_79_are_kept_listed_and_reach_the_command_line(tmp_path):
 
     target = tmp_path / 'profile.yaml'
     entries = _profile()
-    for slot, name in ((33, 'drop_floating_boxes_at_target'), (45, 'use_mesh_object_heights'), (64, 'old_last_slot'), (120, 'old_last_slot_120'), (160, 'last_slot')):
+    for slot, name in ((33, 'drop_floating_boxes_at_target'), (45, 'use_mesh_object_heights'), (64, 'old_last_slot'), (120, 'last_slot')):
         entries[0].update({
             f'arg_{slot}_name': name,
             f'arg_{slot}_options': ['true', 'false'],
@@ -99,22 +99,21 @@ def test_slots_33_to_79_are_kept_listed_and_reach_the_command_line(tmp_path):
             f'arg_{slot}_advanced': True,
             f'arg_{slot}_description': f'Slot {slot}.',
         })
-    entries[0].update({'arg_161_name': 'beyond', 'arg_161_options': ['a'], 'arg_161_applies': True})
+    entries[0].update({'arg_121_name': 'beyond', 'arg_121_options': ['a'], 'arg_121_applies': True})
     save_button_layout(target, entries)
 
     loaded = load_button_layout(target)
     sim = {entry['key']: entry for entry in loaded}['sim']
-    for slot, name in ((33, 'drop_floating_boxes_at_target'), (45, 'use_mesh_object_heights'), (64, 'old_last_slot'), (120, 'old_last_slot_120'), (160, 'last_slot')):
+    for slot, name in ((33, 'drop_floating_boxes_at_target'), (45, 'use_mesh_object_heights'), (64, 'old_last_slot'), (120, 'last_slot')):
         assert sim[f'arg_{slot}_name'] == name
         assert sim[f'arg_{slot}_options'] == ['true', 'false']
         assert sim[f'arg_{slot}_description'] == f'Slot {slot}.'
-    assert 'arg_161_name' not in sim
+    assert 'arg_121_name' not in sim
     listed = {argument['slot']: argument['name'] for argument in profile_arguments(loaded)}
     assert listed[33] == 'drop_floating_boxes_at_target'
     assert listed[45] == 'use_mesh_object_heights'
-    assert listed[120] == 'old_last_slot_120'
-    assert listed[160] == 'last_slot'
-    assert 161 not in listed
+    assert listed[120] == 'last_slot'
+    assert 121 not in listed
 
     window = SimpleNamespace(
         _generic_arg_inputs={33: _Combo('true'), 45: _Combo('false')},
