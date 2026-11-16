@@ -3482,7 +3482,7 @@ class MainWindow(QMainWindow):
             self._terminal_drop_to_host_user_default = lowered not in {'0', 'false', 'no', 'off'}
         else:
             self._terminal_drop_to_host_user_default = bool(drop_to_host_user_default)
-        self._terminal_launcher_template = str(self._terminal_cfg.get('launcher', 'gnome-terminal --title "{title}" -- bash -lc "{command}"'))
+        self._terminal_launcher_template = str(self._terminal_cfg.get('launcher', 'gnome-terminal --wait --title "{title}" -- bash -lc "{command}"'))
         self._terminal_title = str(self._terminal_cfg.get('title', 'Mobipick Terminal'))
         self._terminal_container_prefix = str(self._terminal_cfg.get('container_prefix', 'mobipick-terminal'))
         self._terminal_proc: QProcess | None = None
@@ -16632,7 +16632,21 @@ CMD ["bash"]
             return None
         if not parts:
             return None
-        return parts
+        return self._terminal_launcher_waits(parts)
+
+    @staticmethod
+    def _terminal_launcher_waits(parts: list[str]) -> list[str]:
+        """The launcher must run until the shell ends: its exit removes the terminal container.
+
+        gnome-terminal hands the window to its server and exits at once unless it gets --wait, so a
+        launcher template without it (e.g. an older per-user gui_settings.yaml) gets it added.
+        """
+        if os.path.basename(parts[0]) != 'gnome-terminal':
+            return parts
+        options = parts[1:parts.index('--')] if '--' in parts else parts[1:]
+        if '--wait' in options:
+            return parts
+        return [parts[0], '--wait'] + parts[1:]
 
     def _on_terminal_proc_finished(self, exit_code: int, exit_status):
         if self._terminal_proc:

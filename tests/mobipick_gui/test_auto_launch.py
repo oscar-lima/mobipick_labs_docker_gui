@@ -3,6 +3,7 @@ from types import MethodType, SimpleNamespace
 import sys
 
 import pytest
+import yaml
 from PyQt5.QtCore import QProcess, QProcessEnvironment
 from PyQt5.QtWidgets import QApplication, QHeaderView, QWidget
 
@@ -1986,3 +1987,49 @@ def test_remote_auto_launch_start_refused_while_a_process_is_stopping(
 
     assert result['accepted'] is True
     assert 'toggle' in events
+
+
+def _terminal_launcher(template):
+    harness = SimpleNamespace(
+        _terminal_launcher_template=template,
+        _terminal_title='Mobipick Terminal',
+        _append_gui_html=lambda *_args: None,
+        _terminal_launcher_waits=MainWindow._terminal_launcher_waits,
+    )
+    return MainWindow._build_terminal_launcher(harness, 'docker compose run --rm x')
+
+
+def test_default_terminal_launcher_waits_for_the_shell():
+    # without --wait gnome-terminal exits as soon as the window opens, and the GUI then removes the new container
+    from mobipick_gui import config as config_module
+
+    shipped = [
+        config_module.CONFIG_DEFAULTS['terminal']['launcher'],
+        *(
+            yaml.safe_load(path.read_text())['terminal']['launcher']
+            for path in (
+                Path(config_module.__file__).parent / 'resources' / 'config' / 'gui_settings.yaml',
+                Path(config_module.__file__).parent / 'resources' / 'private' / 'jinja_templates' / 'gui_settings.yaml',
+            )
+        ),
+    ]
+    for template in shipped:
+        assert '--wait' in template.split(' -- ')[0], template
+        parts = _terminal_launcher(template)
+        assert parts[:2] == ['gnome-terminal', '--wait'], template
+        assert parts.count('--wait') == 1
+        assert parts[parts.index('--') + 1:] == ['bash', '-lc', 'docker compose run --rm x']
+
+
+def test_old_gnome_terminal_launcher_gets_wait_added():
+    parts = _terminal_launcher('gnome-terminal --title "{title}" -- bash -lc "{command}"')
+    assert parts == ['gnome-terminal', '--wait', '--title', 'Mobipick Terminal', '--',
+                     'bash', '-lc', 'docker compose run --rm x']
+    # --wait after the -- belongs to the child command, not to gnome-terminal
+    parts = _terminal_launcher('/usr/bin/gnome-terminal -- echo --wait')
+    assert parts == ['/usr/bin/gnome-terminal', '--wait', '--', 'echo', '--wait']
+
+
+def test_other_terminal_launchers_are_left_alone():
+    assert _terminal_launcher('xterm -T "{title}" -e bash -lc "{command}"') == [
+        'xterm', '-T', 'Mobipick Terminal', '-e', 'bash', '-lc', 'docker compose run --rm x']

@@ -65,7 +65,7 @@ process:
     MOBIPICK_ROS_USE_IP: "1"                  # advertise container bridge IPs instead of disposable Docker hostnames
 
 terminal:
-  launcher: "gnome-terminal --title \"{title}\" -- bash -lc \"{command}\""  # external terminal command template
+  launcher: "gnome-terminal --wait --title \"{title}\" -- bash -lc \"{command}\""  # external terminal command template; it must stay running until the shell ends (gnome-terminal: --wait), as the GUI removes the terminal container when it exits
   title: "Mobipick Terminal"                # substituted into the launcher template
   container_prefix: "mobipick-terminal"     # prefix used when naming one-off terminal containers
   drop_to_host_user: true                    # when false, the GUI keeps terminals running as root inside the container

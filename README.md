@@ -1079,6 +1079,14 @@ A session is `docker compose run --rm -T ... <tool service> python3
 enter_host_shell.py bash --noprofile --norc` with `terminal.bashrc` sourced on
 start, so it has the same ROS environment and user as **Open Terminal**.
 
+**Open Terminal** itself runs such a container in the external terminal of
+`terminal.launcher` in `gui_settings.yaml`. When that launcher process exits,
+the GUI takes the terminal as closed and stops and removes its container, so
+the launcher has to keep running until the shell ends. The default is
+`gnome-terminal --wait ...`; a `gnome-terminal` launcher without `--wait` (for
+example an older per-user copy of the settings) gets it added, as without it
+gnome-terminal returns as soon as the window opens.
+
 `{"robot": true}` opens the session on the robot PC instead, as `ssh -o
 BatchMode=yes -o ConnectTimeout=10 <user>@<host> bash --noprofile --norc`. That
 shell is for debugging the robot machine itself - its processes, drivers, logs,
