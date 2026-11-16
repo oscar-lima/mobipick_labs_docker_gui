@@ -1032,7 +1032,10 @@ click with a wait without missing events.
 
 Events: `button_state`, `button_ready` (the button has been running for its
 configured `duration_seconds`; immediate for buttons without an estimate),
-`process_finished`, `auto_launch_started`,
+`process_finished` (`exit_code`, `status`, and `required_node_died`: the
+node whose death made roslaunch shut the launch down, which still exits with
+code 0; the tab then shows a red "Launch failed" line; `null` otherwise or
+when the user stopped it), `auto_launch_started`,
 `auto_launch_ready`, `auto_launch_complete` (every process in the plan reached
 its ready time), `window_layout_applied` (the saved layout was replayed, which
 is the usual "everything is up" signal), `auto_launch_stopped`,

@@ -261,3 +261,39 @@ def test_real_process_flood_keeps_the_event_loop_responsive_and_widget_bounded()
     assert len(lines) < 20000 + 1000 * 30 + 100
     parent.deleteLater()
     app.processEvents()
+
+
+REQUIRED_DIED_LINE = (
+    b'\x1b[31m=====REQUIRED process [mobipick_pi_robot_runner-4] has died!\x1b[0m\n'
+)
+
+
+def test_required_node_death_is_noted_across_reads_and_colors():
+    tab = make_process_tab()
+
+    tab._append_raw(REQUIRED_DIED_LINE[:30])
+    tab._append_raw(REQUIRED_DIED_LINE[30:])
+    tab._append_raw(b'[mobipick_pi_robot_runner-4] has died! later repeat\n')
+
+    assert tab.required_node_died == 'mobipick_pi_robot_runner-4'
+
+
+def test_required_node_death_is_noted_even_when_the_flood_guard_drops_it():
+    tab = make_process_tab(max_lines_per_second=1, burst_lines=1)
+
+    tab._append_raw(b'line one\nline two\nline three\n' + REQUIRED_DIED_LINE)
+
+    rendered = ''.join(text for _html, text in tab.output.entries)
+    assert 'REQUIRED process' not in rendered
+    assert tab.required_node_died == 'mobipick_pi_robot_runner-4'
+
+
+def test_plain_output_and_a_new_run_leave_no_required_node_death():
+    tab = make_process_tab()
+    tab._append_raw(b'[INFO] process[foo-1]: started with pid [42]\n')
+    assert getattr(tab, 'required_node_died', None) is None
+
+    tab._append_raw(REQUIRED_DIED_LINE)
+    tab._reset_output_stream()
+
+    assert tab.required_node_died is None

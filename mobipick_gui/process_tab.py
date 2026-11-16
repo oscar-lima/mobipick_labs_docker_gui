@@ -20,6 +20,11 @@ if TYPE_CHECKING:  # pragma: no cover
 
 ROS_WARNING_RE = re.compile(r'^\[\s*WARN(?:ING)?\s*\]')
 ROS_WARNING_COLOR = '#f1fa8c'
+# roslaunch prints this when a node marked required="true" exits; it then shuts
+# the whole launch down and still exits with code 0, so the exit code alone
+# looks like a normal stop.
+REQUIRED_NODE_DIED_COLOR = '#ff5555'
+ROS_REQUIRED_DIED_RE = re.compile(r'REQUIRED process \[([^\]]+)\] has died')
 GUARD_FLUSH_INTERVAL_MS = 1000
 
 
@@ -223,6 +228,7 @@ class ProcessTab:
         )
         self._output_pending = ''
         self._flood_guard.reset()
+        self.required_node_died: str | None = None
 
     def _flush_output_pending(self, *, final: bool = False) -> None:
         """Render complete lines while retaining an unfinished stream line."""
@@ -247,11 +253,25 @@ class ProcessTab:
 
     def _enqueue_output_lines(self, data: str, *, final: bool = False) -> None:
         """Pass lines through the flood guard, then render and log them."""
+        self._note_required_node_death(data)
         events = self._flood_guard.feed_many(data.splitlines(keepends=True))
         if final:
             events += self._flood_guard.flush(final=True)
         self._render_events(events)
         self._schedule_guard_flush()
+
+    def _note_required_node_death(self, data: str) -> None:
+        """Remember the first required node whose death ended this run.
+
+        Scanned before the flood guard, so a dropped burst cannot hide it.
+        """
+        if getattr(self, 'required_node_died', None):
+            return
+        if 'REQUIRED process' not in data:
+            return
+        match = ROS_REQUIRED_DIED_RE.search(CSI_SEQ_RE.sub('', data))
+        if match:
+            self.required_node_died = match.group(1)
 
     def _render_events(self, events) -> None:
         for kind, text in events:

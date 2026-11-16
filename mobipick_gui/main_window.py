@@ -164,7 +164,7 @@ from .settings_transfer import export_settings, import_settings
 CONTAINER_SCRIPTS_DIR = str(
     CONFIG.get('process', {}).get('container_scripts_dir', '/scripts_430ofkjl04fsw')
 )
-from .process_tab import ProcessTab
+from .process_tab import REQUIRED_NODE_DIED_COLOR, ProcessTab
 from .remote_adapter import REMOTE_SHELL_TAB_PREFIX, MainWindowRemoteAdapter
 from .remote_control import (
     GuiInvoker,
@@ -17671,16 +17671,30 @@ CMD ["bash"]
         status_name = 'NormalExit' if int(exit_status) == int(QProcess.NormalExit) else 'Crashed'
         if key == self._terminal_stream_tab_key:
             self._terminal_stream_tab_key = None
+        tab = self.tasks.get(key)
+        required_died = getattr(tab, 'required_node_died', None) if tab else None
+        if required_died and MainWindow._is_stopping_tab_run(self, key, tab):
+            # a stop the user asked for is not a failure
+            required_died = None
         _emit_remote_event(
             self,
             'process_finished',
             key=key,
             exit_code=int(exit_code),
             status=status_name,
+            required_node_died=required_died,
         )
-        tab = self.tasks.get(key)
         if tab:
             self._append_gui_html(key, f'<i>Process finished with code {exit_code} [{status_name}]</i>')
+            if required_died:
+                self._append_gui_html(
+                    key,
+                    '<b>Launch failed: the required node '
+                    f'{html.escape(required_died)} died, so roslaunch shut '
+                    'everything down (the exit code does not show this). '
+                    'Its error is in the lines above.</b>',
+                    color=REQUIRED_NODE_DIED_COLOR,
+                )
             flush_disk_log = getattr(tab, 'flush_disk_log', None)
             if callable(flush_disk_log):
                 flush_disk_log()

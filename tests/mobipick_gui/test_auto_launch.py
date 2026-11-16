@@ -1528,6 +1528,50 @@ def test_config_client_exit_checks_container_before_allowing_restart(
         assert stopped == ['gpt_demo']
 
 
+@pytest.mark.parametrize('stopping', [False, True])
+def test_required_node_death_is_reported_as_a_failed_launch(
+    monkeypatch, stopping,
+):
+    html_lines, emitted = [], []
+    monkeypatch.setattr(
+        main_window_module, '_emit_remote_event',
+        lambda _window, name, **data: emitted.append((name, data)),
+    )
+    tab = SimpleNamespace(
+        key='gpt_demo', container_name=None, exec_id=None, run_generation=3,
+        required_node_died='mobipick_pi_robot_runner-4',
+    )
+    harness = SimpleNamespace(
+        _exit_in_progress=False,
+        _terminal_stream_tab_key=None,
+        _config_buttons={'gpt_demo': {'key': 'gpt_demo', 'kind': 'command'}},
+        _stopping_tab_keys={'gpt_demo'} if stopping else set(),
+        _stopping_tab_generations={'gpt_demo': 3},
+        tasks={'gpt_demo': tab},
+        _append_gui_html=lambda key, text, **kw: html_lines.append(
+            (text, kw.get('color'))
+        ),
+        _release_xhost=lambda *args, **kwargs: None,
+        _mark_config_button_stopped=lambda key: None,
+    )
+
+    MainWindow.on_task_finished(
+        harness, 'gpt_demo', 0, QProcess.NormalExit,
+    )
+
+    name, data = emitted[0]
+    assert name == 'process_finished' and data['exit_code'] == 0
+    alerts = [line for line in html_lines if 'Launch failed' in line[0]]
+    if stopping:
+        assert data['required_node_died'] is None
+        assert alerts == []
+    else:
+        assert data['required_node_died'] == 'mobipick_pi_robot_runner-4'
+        assert len(alerts) == 1
+        assert 'mobipick_pi_robot_runner-4' in alerts[0][0]
+        assert alerts[0][1] == main_window_module.REQUIRED_NODE_DIED_COLOR
+
+
 def test_detached_config_container_button_stops_existing_run():
     stopped = []
     tab = SimpleNamespace(
