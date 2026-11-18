@@ -850,7 +850,8 @@ class RemoteShellSession:
 # A client's presence lapses this long after its last activity; when it lapses
 # the GUI stops everything that client started (see
 # MainWindow._sync_remote_clients).  Every request the client sends counts as
-# activity (see RemoteControlServer.touch_presence), and a client is kept while
+# activity (see RemoteControlServer.touch_presence; an anonymous GET is a monitor's
+# read and refreshes nobody), and a client is kept while
 # one of its shells runs a command or it streams events / output, so a client
 # never needs a heartbeat process of its own: a background refresher that
 # outlives its owner is exactly how a stale presence once lingered for hours.
@@ -875,7 +876,7 @@ API_INDEX = [
     ('GET', '/preset', 'The loaded preset and the presets there are.'),
     ('POST', '/preset', 'Load a preset: {"name": "sim-full"} sets every feature and mode of it (careful ones stay off on a remote ROS master); or save the current selection as your preset: {"save": "name", "description": "..."}.'),
     ('GET', '/presence', 'Clients that declared they are using the GUI (lights the window icon), each with `owned`, the buttons, tabs, shells and recordings it started. Any number of differently named agents may be present at once.'),
-    ('POST', '/presence', 'Declare that you are using the GUI. Body: {"name": "<agent>", "ttl_s": 600, "note": ""}. Every later request refreshes it (name yourself with the X-Client-Name header or a "client" field when several agents are present), as does a running shell command or an open stream; ttl_s (max 1800) idle time without any of those lapses it and the GUI stops what you started.'),
+    ('POST', '/presence', 'Declare that you are using the GUI. Body: {"name": "<agent>", "ttl_s": 600, "note": ""}. Every later request refreshes it (name yourself with the X-Client-Name header or a "client" field; an anonymous GET is a monitor read and refreshes nobody, an anonymous POST or DELETE refreshes the client present the longest), as does a running shell command or an open stream; ttl_s (max 1800) idle time without any of those lapses it and the GUI stops what you started.'),
     ('DELETE', '/presence', 'Declare that you are done; stops what you started unless {"keep": true}. Body: {"name": "<agent>", "token": "<token from the first POST /presence reply>"}; a wrong token is refused (409) so two agents with the same name cannot withdraw each other.'),
     ('GET', '/events?since=N&names=a,b&follow=1&timeout=s', 'List or stream (NDJSON) events.'),
     ('POST', '/wait', 'Block until an event. Body: {"events": [names], "since": N, "timeout": s, "key": "sim"}.'),
@@ -1390,10 +1391,10 @@ class RemoteControlServer:
         """
         parts = [unquote(part) for part in path.strip('/').split('/') if part]
         named = client or body.get('client') or query.get('client')
-        # an anonymous status read is a monitor's poll (a watchdog asks every few seconds), not a
-        # client's work: it would keep the longest present client alive forever, also one whose
-        # owner is gone and can no longer say bye
-        monitor_read = method == 'GET' and parts == ['status'] and not named
+        # an anonymous read is a monitor's poll (a watchdog asks /status or /recording every few
+        # seconds), not a client's work: it would keep the longest present client alive forever,
+        # also one whose owner is gone and can no longer say bye; a client's own reads name it
+        monitor_read = method == 'GET' and not named
         if parts and parts != ['presence']:
             if monitor_read:
                 if self._current_client() is None:

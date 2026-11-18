@@ -1717,7 +1717,7 @@ def test_requests_refresh_presence(monkeypatch):
     monkeypatch.setattr('mobipick_gui.remote_control.time.time', lambda: now[0])
     server.declare_presence('claude', ttl_s=10)
     now[0] += 8
-    status, _ = server.handle('GET', '/buttons', {}, {})
+    status, _ = server.handle('GET', '/buttons', {}, {}, client='claude')
     assert status == 200
     now[0] += 8                      # 16 s after declaring, 8 s after the last request
     assert [c['name'] for c in server.clients()] == ['claude']
@@ -1730,8 +1730,8 @@ def test_requests_refresh_presence(monkeypatch):
 
 
 def test_anonymous_status_polls_do_not_keep_a_presence_alive(monkeypatch):
-    """A watchdog polls GET /status anonymously every few seconds: that must not keep the longest
-    present client alive forever (one whose owner lost its token could never leave)."""
+    """A watchdog polls GET /status (or /recording) anonymously every few seconds: that must not keep
+    the longest present client alive forever (one whose owner lost its token could never leave)."""
     server = RemoteControlServer(FakeAdapter(), host='127.0.0.1', port=0)
     now = [1000.0]
     monkeypatch.setattr('mobipick_gui.remote_control.time.time', lambda: now[0])
@@ -1749,11 +1749,31 @@ def test_anonymous_status_polls_do_not_keep_a_presence_alive(monkeypatch):
     server.handle('GET', '/status', {}, {}, client='claude')
     now[0] += 8
     assert [c['name'] for c in server.clients()] == ['claude']
-    # other anonymous requests still refresh the longest present client
+    # anonymous writes still refresh the longest present client
     now[0] += 1
     server.handle('POST', '/status', {}, {})
-    server.handle('GET', '/buttons', {}, {})
     now[0] += 8
+    assert [c['name'] for c in server.clients()] == ['claude']
+
+
+def test_anonymous_reads_do_not_keep_a_presence_alive(monkeypatch):
+    """Every anonymous GET is a monitor's read, not only /status: a watchdog polling GET /recording
+    kept a client whose owner was gone present for hours. Named reads still refresh their client."""
+    server = RemoteControlServer(FakeAdapter(), host='127.0.0.1', port=0)
+    now = [1000.0]
+    monkeypatch.setattr('mobipick_gui.remote_control.time.time', lambda: now[0])
+    server.declare_presence('claude', ttl_s=10)
+    for path in ('/recording', '/buttons', '/tabs', '/args'):
+        now[0] += 4
+        status, _ = server.handle('GET', path, {}, {})
+        assert status == 200, path
+    assert not server.in_use                     # 16 s of anonymous reads only: lapsed
+    assert server.take_unknown_clients() == ['(anonymous)']   # reported once after the lapse
+    server.declare_presence('claude', ttl_s=10)
+    for _ in range(4):
+        now[0] += 4
+        server.handle('GET', '/recording', {}, {}, client='claude')   # the X-Client-Name header
+        server.handle('GET', '/buttons', {'client': 'claude'}, {})    # the client query field
     assert [c['name'] for c in server.clients()] == ['claude']
 
 
@@ -1767,8 +1787,8 @@ def test_named_client_refreshes_only_itself(monkeypatch):
     # the header names the client; a body / query field does the same
     server.handle('GET', '/buttons', {}, {}, client='claude')
     server.handle('GET', '/buttons', {'client': 'claude'}, {})
-    # without a name the request refreshes the client present the longest (codex)
-    server.handle('GET', '/tabs', {}, {})
+    # an anonymous write refreshes the client present the longest (codex); an anonymous read refreshes nobody
+    server.handle('POST', '/status', {}, {})
     now[0] += 4
     assert {c['name'] for c in server.clients()} == {'codex', 'claude'}
     now[0] += 5                      # codex: 9 s idle, claude: 9 s idle -> both still there

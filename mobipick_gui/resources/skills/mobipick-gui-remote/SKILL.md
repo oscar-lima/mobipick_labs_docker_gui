@@ -18,6 +18,7 @@ Only `curl` is needed. No MCP server, no Python client.
 ```bash
 GUI=${MOBIPICK_GUI_REMOTE_URL:-http://127.0.0.1:8765}
 # add -H "Authorization: Bearer $MOBIPICK_GUI_REMOTE_TOKEN" to every curl when a token is set
+# once you declared presence (below), add -H "X-Client-Name: $ME" to every curl: only named reads keep it alive
 curl -s $GUI/            # endpoint list, if you forget anything below
 ```
 
@@ -67,7 +68,8 @@ curl -s -X DELETE $GUI/presence -H 'Content-Type: application/json' -d "{\"name\
 ```
 
 Presence is kept alive by activity: every request you send refreshes it
-(an anonymous `GET /status` excepted: that is a monitor's poll), as
+(send `-H "X-Client-Name: $ME"` on every request: an anonymous `GET` is a
+monitor's poll and refreshes nobody), as
 does a shell command that is still running or a `follow=1` stream you keep
 open, so no separate heartbeat process is needed (one that outlives you keeps
 a dead agent "present"). Only `ttl_s` (default 600 s, at most 1800 s) of
